@@ -57,6 +57,7 @@
     "SESSION_VERSION": "5",
     "PASSKEY_ENABLED": "true",
     "TRASH_RETENTION_MODE": "disabled",
+    "TRASH_CUTOVER_MODE": "maintenance",
     "TRASH_PURGE_EMERGENCY_STOP": "false",
     "TRASH_PURGE_MAX_COUNT": "20",
     "TRASH_PURGE_MAX_BYTES": "104857600",

@@ -30,6 +30,7 @@ manifestは完了後も保持し、キー／Stream UIDの新規参照・再利�
 
 | 設定 | 初期値 | 意味 |
 |---|---|---|
+| TRASH_CUTOVER_MODE | maintenance | 移行中はゴミ箱の移動・復元・一覧・完全削除を503で停止。readyとD1承認の両方が必要 |
 | TRASH_RETENTION_MODE | disabled | disabled／dry-run／enabled。それ以外は停止 |
 | TRASH_PURGE_EMERGENCY_STOP | false | true等、false以外なら手動・自動の完全削除を停止 |
 | TRASH_PURGE_MAX_COUNT | 20 | 自動実行1回のファイル＋フォルダ上限 |
@@ -54,17 +55,27 @@ cloud_audit_logsのtrash_run_started／trash_run_finished、trash_dry_run_candid
 
 ゴミ箱カードに720時間到達日時と無効／試行中／有効を表示する。旧データは自動削除対象外、不可逆状態は復元不可と表示する。日時は「削除実施の確約」ではなく対象になる最早時刻であり、上限・矛盾・停止設定によって後ろにずれる。
 
-## 導入・有効化（今回実施しない）
+## 導入・有効化
 
-1. PRとCIをレビューする。本番データを使った削除試験は行わない。DB／R2を復旧できるバックアップを別途確認し、現行データに実削除予定のないことを確認する。
-2. 既存migration適用状況を確認し、0013_safe_trash_retention.sqlを別途承認された手順で適用する。既存行のoperationはNULLのまま。SQLは追加列・追加テーブル・トリガーのみで、既存R2の変更や旧ゴミ箱の期限付与はない。
-3. disabledのままコードを公開する。schemaの適用とコードの公開を別工程として扱い、手動ゴミ箱操作にも新schemaが必要な点に注意する。
-4. 承認後にdry-runへ変更し、複数回の実行で対象ID・世代・期限・候補急増・混在ツリーを確認する。新機能導入前のゴミ箱が含まれないことを確認する。合成データによる隔離環境でD1／R2障害・競合・lease再開を再検証する。
-5. 実削除は別途明示承認後に、保守的上限のままenabledへ変更する。最初の対象一覧と合成fixtureの検証結果をレビューする。今回のPR作成作業ではマージ、デプロイ、migration、dry-runへの本番変更、enabledへの変更を行わない。
+**0013を旧Workerへ先に適用してはいけない。** 旧WorkerはR2削除後にD1を削除する。0013のDELETE保護は旧方式を拒否するため、R2だけ消えた状態を作り得る。単体・一括の両方で、過去の実コードと合成データから再現済み。旧版へ先にマイグレーションを適用する従来手順は撤回する。
+
+1. PRと対象CIを確認する。本番データを使った削除試験は行わない。旧Workerのバージョンを記録し、進行中の手動削除・一括削除・復元がある場合は完了を待つ。
+2. **マイグレーション前に**新WorkerをTRASH_CUTOVER_MODE=maintenance、TRASH_RETENTION_MODE=disabledで100%公開する。schema未適用でも通常ファイルの読み取り等は維持し、ゴミ箱の移動・復元・一覧・完全削除・削除承認は503で停止する。新旧方式を併用するfallbackはない。
+3. Cloudflare deploymentが新version 100%であること、公開build一致、GET /cloud/api/trash-transition-statusのmode=maintenance、operationsAvailable=falseを読み取りで確認する。停止前から旧版で始まった削除・復元要求の終了も確認する。**新versionの公開完了だけで既存要求の終了を保証したことにはしない。終了を確認できなければ0013を適用せず、停止状態を維持する。** 一定秒数待つだけで終了と決めない。
+4. 本番マイグレーションの明示承認がある場合だけ、既存の適用履歴を確認して0013を専用手順で適用する。既存行を更新・backfillしない。control.cutover_readyは初期値0であり、schemaが揃ってもゴミ箱操作は再開しない。部分適用・DB照会失敗・必須トリガー欠落でも503を維持する。
+5. schemaReady=true、cutoverReady=falseを読み取り確認する。移行対応版以外へrollbackしない。必要ならTRASH_CUTOVER_MODE=readyの版を100%公開し、build/versionを確認する。この時点でもcutover_ready=0なので停止したままとする。
+6. 旧版の要求が終了し、新版だけが処理することを確認した移行担当者が、最後にcontrolのid=1へcutover_ready=1を条件付きで設定する。GET状態確認のoperationsAvailable=trueとretentionMode=disabledを確認する。これで既存の手動ゴミ箱機能のみ再開する。自動削除の承認とは別の操作である。
+7. 将来の自動削除は別途承認後にdry-runへ変更し、複数回の監査と対象ID・世代・期限・旧データ除外を確認する。隔離環境の合成データで障害・競合・再開試験を行い、さらに別途明示承認後だけenabledへ変更する。
+
+停止制御は新schemaへの書込より前、かつR2のHEAD・削除やStream操作より前に評価する。modeが未指定・不正の場合も停止する。DBのcutover_ready=1と完全なschema確認だけではmode=maintenanceを解除しない。D1側の切替承認を0へ戻せば、既に開始した新方式の削除も次の外部操作直前に停止する。ただし開始済み外部I/Oの取消はできない。
+
+状態確認APIはbuild、移行mode、schema／切替承認の成否、自動削除modeのみを返し、ファイルID・件数・キー・認証情報は返さない。本番の停止確認にDELETE／復元APIを使わず、GETとdeploymentの読取を使う。
+
+本番DB操作の承認がない場合は、コードのmaintenanceでの先行公開と停止維持までにとどめる。本番0013の適用と切替承認を、通常のコード公開から自動的に実行しない。
 
 緊急停止はcontrolのemergency_stop=1を管理者のDB管理経路で設定する。各オブジェクト削除直前に照会するため、Workerの再公開を待たず停止できる。環境変数の停止設定とdisabledも併用する。停止済み外部I/Oは取り消せず、既に消したデータは戻らない。対処後の再開ではmanifestを保持し、同じ対象だけを再試行する。原因を調べずemergency_stopを解除しない。
 
-rollbackはまず実行停止、次に安全なコードをforward fixする。旧コードへ単純に戻すと復元競合保護を失うため、claim済み行・トリガー・manifestを残す。失敗行のpurge_id、operation.purge_started、manifestを消して「復元できる」状態に戻さない。D1 Time Travelだけでは削除済みR2は回復しない。
+rollbackはまずcutover_ready=0／maintenanceでゴミ箱操作を停止し、次に安全なコードをforward fixする。旧コードへ単純に戻すと復元競合保護を失うため、claim済み行・トリガー・manifestを残す。失敗行のpurge_id、operation.purge_started、manifestを消して「復元できる」状態に戻さない。D1 Time Travelだけでは削除済みR2は回復しない。
 
 旧データは自動backfillしない。利用者が内容を確認して復元し、改めてゴミ箱へ移動したものだけ、その新しい操作時点から720時間を数える。大量の旧データを移行する必要があれば、対象一覧・完全バックアップ・所有者確認・新しい猶予期間を伴う独立した移行を別途設計する。
 

@@ -15,6 +15,7 @@ CREATE TABLE cloud_trash_control (
   emergency_stop INTEGER NOT NULL DEFAULT 0 CHECK(emergency_stop IN (0,1)),
   lease_owner TEXT,
   lease_until INTEGER NOT NULL DEFAULT 0,
+  cutover_ready INTEGER NOT NULL DEFAULT 0 CHECK(cutover_ready IN (0,1)),
   last_candidate_count INTEGER
 );
 INSERT INTO cloud_trash_control(id) VALUES(1);

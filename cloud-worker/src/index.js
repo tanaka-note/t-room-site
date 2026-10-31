@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-99e8ec50def5";
+const APP_BUILD_ID = "cloud-3920837386f2";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -178,6 +178,13 @@ export default {
 async function handleApi(request, env, url, path, context) {
   requireSessionSecret(env.SESSION_SECRET, HttpError);
   if (path === "/api/password-login-audit" && request.method === "POST") return handlePasswordLoginClientAudit(env, request, "cloud");
+  if (path === "/api/trash-transition-status" && request.method === "GET") {
+    const schema = await trashSchemaReadiness(env);
+    return json({ buildId: APP_BUILD_ID, mode: env.TRASH_CUTOVER_MODE || "maintenance",
+      schemaReady: schema.schemaReady, cutoverReady: schema.cutoverReady,
+      operationsAvailable: env.TRASH_CUTOVER_MODE === "ready" && schema.cutoverReady,
+      reason: env.TRASH_CUTOVER_MODE !== "ready" ? "maintenance_mode" : schema.reason, retentionMode: env.TRASH_RETENTION_MODE || "disabled" });
+  }
   if (path === "/api/app-version" && request.method === "GET") {
     return json({ buildId: APP_BUILD_ID });
   }
@@ -1698,6 +1705,7 @@ async function deleteFolder(id, env, session) {
     }
     await requireFolderAccess(env, id, session);
   }
+  await requireTrashCutoverReady(env);
   const deletedAt = new Date().toISOString();
   const operationId = crypto.randomUUID();
   const summary = await env.DB.prepare(`WITH RECURSIVE folder_tree(id) AS (
@@ -1742,6 +1750,7 @@ async function deleteFolder(id, env, session) {
 
 async function restoreFolder(id, env, session) {
   requireDelete(session);
+  await requireTrashCutoverReady(env);
   const folder = await env.DB.prepare("SELECT * FROM cloud_folders WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
   if (!folder) throw new HttpError(404, "ゴミ箱にフォルダが見つかりません。");
   const tree = `WITH RECURSIVE folder_tree(id) AS (
@@ -2069,6 +2078,7 @@ async function moveFileToTrash(id, env, session) {
     const protectedFolderUnlocked = await requireFolderAccess(env, file.folder_id, session);
     if (!protectedFolderUnlocked) throw new HttpError(403, "PWで解除したフォルダ内のファイルだけ削除できます。");
   }
+  await requireTrashCutoverReady(env);
   const deletedAt = new Date().toISOString(), operationId = crypto.randomUUID();
   const result = await env.DB.batch([
     trashOperationStatement(env, operationId, deletedAt, "file", id),
@@ -2082,6 +2092,7 @@ async function moveFileToTrash(id, env, session) {
 
 async function restoreFile(id, env, session) {
   requireDelete(session);
+  await requireTrashCutoverReady(env);
   const file = await env.DB.prepare("SELECT * FROM cloud_files WHERE id = ? AND deleted_at IS NOT NULL").bind(id).first();
   if (!file) throw new HttpError(404, "ゴミ箱にファイルが見つかりません。");
   await requireFolderAccess(env, file.folder_id, session);
@@ -2096,6 +2107,7 @@ async function restoreFile(id, env, session) {
 
 async function permanentlyDeleteFile(id, env, session) {
   requireDelete(session);
+  await requireTrashCutoverReady(env);
   const result = await executeTrashRun(env, "manual", session, id);
   if (result.failed || result.reason) throw trashSafetyError(result.reason || "purge_failed");
   return json({ ok: true });
@@ -2103,6 +2115,7 @@ async function permanentlyDeleteFile(id, env, session) {
 
 async function emptyTrash(env, session) {
   requireDelete(session);
+  await requireTrashCutoverReady(env);
   const result = await executeTrashRun(env, "manual", session);
   const remaining = await env.DB.prepare(`SELECT (SELECT COUNT(*) FROM cloud_files WHERE deleted_at IS NOT NULL)
     + (SELECT COUNT(*) FROM cloud_folders WHERE deleted_at IS NOT NULL) AS count`).first();
@@ -2209,6 +2222,7 @@ async function streamFile(id, disposition, request, env, session) {
 
 async function listTrash(env, session) {
   requireDelete(session);
+  await requireTrashCutoverReady(env);
   const result = await env.DB.prepare(`
     SELECT f.id, f.folder_id AS folderId, f.original_name AS name, f.mime_type AS mimeType, f.media_kind AS mediaKind,
       f.size_bytes AS sizeBytes, f.thumbnail_key IS NOT NULL AS hasThumbnail, f.deleted_at AS deletedAt,
@@ -2514,6 +2528,7 @@ async function listDeletionRequests(env, session) {
 
 async function approveDeletionRequest(id, env, session) {
   requireDeletionReview(session);
+  await requireTrashCutoverReady(env);
   const request = await env.DB.prepare(`SELECT r.id, r.file_id AS fileId, r.file_name AS fileName,
     f.deleted_at AS deletedAt FROM cloud_deletion_requests r
     LEFT JOIN cloud_files f ON f.id = r.file_id
@@ -2531,6 +2546,39 @@ async function approveDeletionRequest(id, env, session) {
   await env.DB.batch(statements);
   await audit(env, "deletion_approved", session, "file", request.fileId, { requestId: id, name: request.fileName });
   return json({ ok: true, movedToTrash: Boolean(request.fileId && !request.deletedAt) });
+}
+
+// Deploy before 0013. Missing/partial schema and every unacknowledged
+// cutover fail closed, including after migration has created the tables.
+async function trashSchemaReadiness(env) {
+  try {
+    const control = await env.DB.prepare("SELECT cutover_ready FROM cloud_trash_control WHERE id=1").first();
+    if (!control) return { schemaReady: false, cutoverReady: false, reason: "control_missing" };
+    const columns = await env.DB.prepare(`SELECT
+      (SELECT COUNT(*) FROM pragma_table_info('cloud_files') WHERE name IN ('trash_operation_id','purge_id')) +
+      (SELECT COUNT(*) FROM pragma_table_info('cloud_folders') WHERE name='trash_operation_id') AS count`).first();
+    const objects = await env.DB.prepare(`SELECT COUNT(*) AS count FROM sqlite_master WHERE name IN (
+      'cloud_trash_operations','cloud_trash_control','cloud_trash_purges',
+      'cloud_trash_folder_purges','cloud_trash_file_frozen','cloud_trash_file_restore_guard',
+      'cloud_trash_folder_restore_guard','cloud_trash_file_delete_guard','cloud_trash_folder_delete_guard',
+      'cloud_trash_folder_claim','cloud_trash_folder_manifest_retain','cloud_trash_folder_manifest_immutable',
+      'cloud_trash_file_parent_insert','cloud_trash_file_parent_update','cloud_trash_folder_parent_insert',
+      'cloud_trash_folder_parent_update','cloud_trash_reserved_insert','cloud_trash_reserved_update',
+      'cloud_trash_claim_guard','cloud_trash_claim_commit','cloud_trash_claim_tree_guard',
+      'cloud_trash_manifest_immutable','cloud_trash_manifest_retain')`).first();
+    const schemaReady = columns?.count === 3 && objects?.count === 23;
+    return { schemaReady, cutoverReady: schemaReady && control.cutover_ready === 1,
+      reason: !schemaReady ? "schema_incomplete" : control.cutover_ready !== 1 ? "cutover_not_acknowledged" : null };
+  } catch {
+    return { schemaReady: false, cutoverReady: false, reason: "schema_unavailable" };
+  }
+}
+
+async function requireTrashCutoverReady(env) {
+  if (env.TRASH_CUTOVER_MODE === "ready" && (await trashSchemaReadiness(env)).cutoverReady) return;
+  const error = new HttpError(503, "ゴミ箱機能は安全な移行作業のため一時停止しています。完全削除・一括削除・復元・ゴミ箱への移動は再開までお待ちください。");
+  error.trashReason = "cutover_maintenance";
+  throw error;
 }
 
 const TRASH_RETENTION_MS = 720 * 60 * 60 * 1000;
@@ -2581,6 +2629,7 @@ async function trashRunAudit(env, run, event, type = null, id = null, extra = {}
 
 async function assertTrashLease(env, run, settings) {
   const control = await env.DB.prepare("SELECT * FROM cloud_trash_control WHERE id=1").first();
+  if (control?.cutover_ready !== 1) throw trashSafetyError("cutover_maintenance");
   if (!control || control.emergency_stop || String(env.TRASH_PURGE_EMERGENCY_STOP || "false") !== "false")
     throw trashSafetyError("emergency_stop");
   if (control.lease_owner !== run.runId || control.lease_until <= Date.now()) throw trashSafetyError("lease_lost");
@@ -2702,6 +2751,7 @@ async function executeTrashRun(env, source, session, onlyFileId = null) {
     const settings = trashSettings(env);
     const automatic = source === "automatic", dryRun = automatic && settings.mode === "dry-run";
     if (automatic && settings.mode === "disabled") return run;
+    await requireTrashCutoverReady(env);
     const lock = await env.DB.prepare(`UPDATE cloud_trash_control SET lease_owner=?,lease_until=?
       WHERE id=1 AND (lease_owner IS NULL OR lease_until<=?)`)
       .bind(run.runId, Date.now() + 600000, Date.now()).run();

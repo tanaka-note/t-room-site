@@ -3,14 +3,16 @@ import { test } from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import vm from "node:vm";
+import { execFileSync } from "node:child_process";
 import { context, env as sessionEnv, api, handoff, db as sessionDb } from "./session-fixture.mjs";
 
 const DAY = 86400000;
 const admin = { role: "admin", canDelete: true };
-function fixture(options = {}) {
+function fixture(options = {}, migrated = true) {
   const db = new DatabaseSync(":memory:");
-  for (const name of readdirSync(new URL("../migrations/", import.meta.url)).filter(n => n.endsWith(".sql")).sort())
+  for (const name of readdirSync(new URL("../migrations/", import.meta.url)).filter(n => n.endsWith(".sql") && (migrated || !n.startsWith("0013"))).sort())
     db.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
+  if (migrated) db.exec("UPDATE cloud_trash_control SET cutover_ready=1 WHERE id=1");
   const hooks = {};
   function statement(sql, args = []) {
     async function execute(kind) {
@@ -26,7 +28,7 @@ function fixture(options = {}) {
   }
   const objects = new Map(), deletes = [], heads = [], streamDeletes = [];
   const env = {
-    TRASH_RETENTION_MODE: "enabled", ...options,
+    TRASH_CUTOVER_MODE: "ready", TRASH_RETENTION_MODE: "enabled", ...options,
     DB: { prepare: statement, async batch(statements) {
       db.exec("BEGIN");
       try { const results = []; for (const s of statements) results.push(await s.run()); db.exec("COMMIT"); return results; }
@@ -70,6 +72,80 @@ function businessState(db) {
   return JSON.stringify(["cloud_files", "cloud_folders", "cloud_trash_operations", "cloud_trash_purges", "cloud_trash_folder_purges"]
     .map(table => db.prepare(`SELECT * FROM ${table} ORDER BY id`).all()));
 }
+
+test("historical Worker + 0013 reproduces R2 loss before D1 delete guard rejects single/bulk deletion", async () => {
+  const historical = execFileSync("git", ["show", "afe13397de4811c621d0b46e562c270caa5583cd:cloud-worker/src/index.js"],
+    { encoding: "utf8", cwd: new URL("../../", import.meta.url) });
+  const sandbox = { ...context };
+  vm.runInNewContext(historical.replace(/^import .*;\r?\n/gm, "").replace("export class SecurityIntegration", "class SecurityIntegration")
+    .replace("export default {", "globalThis.historicalWorker = {"), sandbox);
+  for (const bulk of [false, true]) {
+    const f = fixture(); f.file(1);
+    f.db.exec("UPDATE cloud_files SET deleted_at=CURRENT_TIMESTAMP WHERE id=1");
+    if (bulk) {
+      const result = await (await sandbox.emptyTrash(f.env, admin)).json();
+      assert.equal(result.failed, 1); assert.equal(result.deleted, 0);
+    } else await assert.rejects(sandbox.permanentlyDeleteFile(1, f.env, admin), /trash_purge_not_confirmed/);
+    assert.deepEqual(f.deletes, ["originals/1"]);
+    assert.equal(f.objects.has("originals/1"), false);
+    assert.ok(f.row(1), "old Worker leaves D1 after R2 is already gone");
+  }
+});
+
+test("new Worker safely pauses before and after 0013 until both acknowledgements are ready", async () => {
+  for (const migrated of [false, true]) {
+    for (const mode of [undefined, "maintenance", "ready", "invalid"]) {
+      const f = fixture({ TRASH_CUTOVER_MODE: mode }, migrated); f.folder(1); f.file(1, 1);
+      f.db.exec("UPDATE cloud_files SET deleted_at=CURRENT_TIMESTAMP WHERE id=1");
+      if (migrated) f.db.exec("UPDATE cloud_trash_control SET cutover_ready=0");
+      for (const call of [
+        () => context.permanentlyDeleteFile(1, f.env, admin),
+        () => context.emptyTrash(f.env, admin),
+        () => context.restoreFile(1, f.env, admin),
+        () => context.listTrash(f.env, admin),
+        () => context.deleteFolder(1, f.env, admin)
+      ]) await assert.rejects(call(), error => error.status === 503);
+      assert.deepEqual(f.deletes, []); assert.deepEqual(f.heads, []); assert.ok(f.row(1));
+      const status = await context.trashSchemaReadiness(f.env);
+      assert.equal(status.schemaReady, migrated); assert.equal(status.cutoverReady, false);
+    }
+  }
+});
+
+test("schema damage/query failure and stopping a previously ready cutover fail closed", async () => {
+  const f = fixture(); f.file(1); await f.trash(1);
+  f.db.exec("DROP TRIGGER cloud_trash_claim_guard");
+  await assert.rejects(context.permanentlyDeleteFile(1, f.env, admin), error => error.status === 503);
+  assert.deepEqual(f.deletes, []);
+  const g = fixture(); g.file(1); await g.trash(1);
+  g.hooks.before = sql => { if (sql.includes("SELECT cutover_ready")) throw new Error("D1 unavailable"); };
+  assert.equal((await g.run()).reason, "cutover_maintenance"); assert.deepEqual(g.deletes, []);
+  g.hooks.before = null; g.db.exec("UPDATE cloud_trash_control SET cutover_ready=0");
+  await assert.rejects(g.restore(1), error => error.status === 503);
+  assert.deepEqual(g.deletes, []);
+});
+
+test("real authenticated HTTP pauses trash operations with 503 while normal reads and status remain available", async () => {
+  const login = await handoff("admin");
+  const mode = sessionEnv.TRASH_CUTOVER_MODE;
+  const before = businessState(sessionDb);
+  sessionEnv.TRASH_CUTOVER_MODE = "maintenance";
+  try {
+    for (const [path, method] of [["/trash", "DELETE"], ["/files/1/permanent", "DELETE"],
+      ["/files/1/restore", "POST"], ["/folders/8/restore", "POST"], ["/files/1", "DELETE"],
+      ["/folders/8", "DELETE"], ["/trash", "GET"]]) {
+      const response = await api(login.cookie, path, method, method === "GET" ? undefined : {},
+        { "X-TCloud-Session": login.body.sessionCacheId });
+      assert.equal(response.status, 503, `${method} ${path}`);
+    }
+    assert.equal((await api(login.cookie, "/files/1", "GET", undefined,
+      { "X-TCloud-Session": login.body.sessionCacheId })).status, 200);
+    const status = await api(null, "/trash-transition-status");
+    assert.equal(status.status, 200); assert.equal(status.body.operationsAvailable, false);
+    assert.equal(status.body.mode, "maintenance"); assert.equal(status.body.retentionMode, "disabled");
+    assert.equal(businessState(sessionDb), before);
+  } finally { sessionEnv.TRASH_CUTOVER_MODE = mode; }
+});
 
 test("active, 29-day, restored and legacy files are never purged; exactly 720 hours is eligible", async () => {
   const f = fixture();

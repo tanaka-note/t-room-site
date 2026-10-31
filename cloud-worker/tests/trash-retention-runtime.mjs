@@ -14,13 +14,14 @@ const script = `import { WorkerEntrypoint } from "cloudflare:workers";
     const url = new URL(request.url), admin = { role: "admin", canDelete: true };
     const id = Number(url.searchParams.get("id"));
     try {
+      if (url.pathname === "/status") return Response.json(await trashSchemaReadiness(env));
       if (url.pathname === "/empty") return await emptyTrash(env, admin);
       if (url.pathname === "/trash") return await moveFileToTrash(id, env, admin);
       if (url.pathname === "/restore") return await restoreFile(id, env, admin);
       if (url.pathname === "/trash-folder") return await deleteFolder(id, env, admin);
       if (url.pathname === "/restore-folder") return await restoreFolder(id, env, admin);
       return Response.json(await runTrashRetention(env));
-    } catch { return new Response("conflict", { status: 409 }); }
+    } catch (error) { return new Response("conflict", { status: error.status || 409 }); }
   } };
 `;
 function migrationStatements(sql) {
@@ -37,14 +38,44 @@ function migrationStatements(sql) {
   return statements;
 }
 
+test("workerd: Worker-first cutover preserves R2 on old schema and while migration is unacknowledged", async () => {
+  const mf = new Miniflare((convertV4MiniflareOptions || (options => options))({ workers: [{ modules: true, script,
+    compatibilityDate: "2026-08-01", d1Databases: ["DB"], r2Buckets: ["FILES"],
+    bindings: { TRASH_RETENTION_MODE: "disabled", TRASH_CUTOVER_MODE: "ready" } }] }));
+  try {
+    const db = await mf.getD1Database("DB"), r2 = await mf.getR2Bucket("FILES");
+    const names = readdirSync(new URL("../migrations/", import.meta.url)).filter(n => n.endsWith(".sql")).sort();
+    const apply = async name => { for (const sql of migrationStatements(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"))) await db.prepare(sql).run(); };
+    for (const name of names.filter(n => !n.startsWith("0013"))) await apply(name);
+    await db.prepare(`INSERT INTO cloud_files(id,object_key,original_name,mime_type,media_kind,size_bytes,status,created_by,deleted_at)
+      VALUES(1,'originals/cutover','fixture','image/jpeg','image',4,'ready','admin',CURRENT_TIMESTAMP)`).run();
+    await r2.put("originals/cutover", "test");
+    const call = path => mf.dispatchFetch(`http://fixture.test${path}`);
+    assert.equal((await call("/empty")).status, 503);
+    assert.equal((await (await call("/status")).json()).schemaReady, false);
+    assert.ok(await r2.head("originals/cutover"));
+    await apply(names.find(n => n.startsWith("0013")));
+    assert.equal((await call("/empty")).status, 503);
+    const status = await (await call("/status")).json();
+    assert.equal(status.schemaReady, true); assert.equal(status.cutoverReady, false);
+    assert.ok(await r2.head("originals/cutover"));
+    assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM cloud_trash_purges").first()).n, 0);
+    await db.prepare("UPDATE cloud_trash_control SET cutover_ready=1 WHERE id=1").run();
+    assert.equal((await call("/empty")).status, 200);
+    assert.equal(await r2.head("originals/cutover"), null);
+    assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM cloud_files").first()).n, 0);
+  } finally { await mf.dispose(); }
+});
+
 test("workerd: all migrations, atomic rollback, R2 deletion, persisted partial state and retry", async () => {
   const mf = new Miniflare((convertV4MiniflareOptions || (options => options))({ workers: [{ modules: true, script, compatibilityDate: "2026-08-01",
-    d1Databases: ["DB"], r2Buckets: ["FILES"], bindings: { TRASH_RETENTION_MODE: "enabled" } }] }));
+    d1Databases: ["DB"], r2Buckets: ["FILES"], bindings: { TRASH_RETENTION_MODE: "enabled", TRASH_CUTOVER_MODE: "ready" } }] }));
   try {
     const db = await mf.getD1Database("DB"), r2 = await mf.getR2Bucket("FILES");
     for (const name of readdirSync(new URL("../migrations/", import.meta.url)).filter(n => n.endsWith(".sql")).sort())
       for (const sql of migrationStatements(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8")))
         await db.prepare(sql).run();
+    await db.prepare("UPDATE cloud_trash_control SET cutover_ready=1 WHERE id=1").run();
     await db.prepare("INSERT INTO cloud_folders(id,name,created_by) VALUES(1,'photos','admin')").run();
     for (const id of [1, 2]) {
       await db.prepare(`INSERT INTO cloud_files(id,folder_id,object_key,original_name,mime_type,media_kind,size_bytes,status,created_by)
