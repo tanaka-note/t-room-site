@@ -9,6 +9,7 @@ test('production selects changed services only, never PR/branch/docs/tooling or 
   assert.deepEqual(productionPlan(['tooling', 'cloud', 'auth'], context), ['cloud']);
   assert.deepEqual(productionPlan(['downloader', 'container-unit'], context), ['downloader']);
   assert.deepEqual(productionPlan(['tooling'], context), []);
+  assert.deepEqual(productionPlan(affected(['tcloud-windows/src/TCloud.Sync.Core/SyncPlanner.cs']), context), []);
   assert.deepEqual(affected(['tools/test-password-auth.mjs']), ['auth']);
   assert.deepEqual(productionPlan(affected(['tools/test-password-auth.mjs', 'billing-worker/public/billing.js', 'tools/verify-plan.mjs']), context), ['billing'],
     'Billing and shared authentication test changes must not publish the public site');

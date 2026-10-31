@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 export const root = fileURLToPath(new URL('../', import.meta.url));
 export const services = ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments', 'household', 'calendar'];
 export const android = ['android-tcloud', 'android-tcloud-twa', 'android-diary-twa', 'android-ai-chat', 'android-calendar'];
-export const targets = ['tooling', 'site', ...services, 'backup', 'auth', 'container-unit', ...android];
+export const targets = ['tooling', 'site', ...services, 'backup', 'auth', 'container-unit', 'tcloud-windows', ...android];
 const registry = JSON.parse(readFileSync(new URL('../web-apps.json', import.meta.url), 'utf8'));
 const node = (cwd, ...args) => ({ cwd, args });
 const files = (dir, pattern) => readdirSync(new URL(`../${dir}/`, import.meta.url)).filter(f => pattern.test(f)).sort();
@@ -53,6 +53,7 @@ export function commands(target) {
     inventory: [{ cwd: 'inventory-worker', script: 'test' }],
     health: [{ cwd: 'health-worker', script: 'test' }],
     'container-unit': [node('downloader-worker', 'test/run-python.mjs', '-m', 'unittest', 'discover', '-s', 'container/tests', '-p', 'test_*.py')],
+    'tcloud-windows': [node('.', 'tools/verify-tcloud-windows.mjs')],
     auth: [node('.', '--test', 'tools/test-session-secret.mjs', 'tools/test-password-auth.mjs', 'tools/test-passkey-rolling.mjs'),
       node('security-worker', '--test', 'test/service-passkey-session.test.js', 'test/security-contract.test.js', 'test/primary-admin-setup.test.js'),
       ...tests('cloud-worker', 'tests/passkey-session-resume.mjs', 'tests/password-session-lifetime.mjs', 'tests/permission-guards.mjs'),
@@ -82,6 +83,8 @@ export function affected(paths) {
   for (const raw of paths) {
     const path = raw.replaceAll('\\', '/');
     if (/^(docs\/|README\.md$|AGENTS\.md$)/.test(path) || /\.md$/.test(path)) continue;
+    if (path.startsWith('tcloud-windows/')) { add('tcloud-windows'); continue; }
+    if (path === 'tools/verify-tcloud-windows.mjs') { add('tooling', 'tcloud-windows'); continue; }
     if (['tools/web-app-registry.mjs', 'tools/test-web-app-build-freshness.mjs'].includes(path)) { add('tooling', 'site'); continue; }
     if (/^(tools\/(verify|install-verify|check-cloud-infrastructure|test-cloud-infrastructure|test-development|test-release|test-browser|browser-|local-dev|release|health-production-|worker-logs)|\.github\/|\.node-version$)/.test(path)) { add('tooling'); continue; }
     if (path === '.gitignore' || path === 'tools/test-secret-ignore.mjs') { add('tooling'); continue; }
@@ -101,6 +104,7 @@ export function affected(paths) {
       || /^assets\/(passkey|password-auth|session-policy|session-secret|security-audit|account-display)/.test(path)
       || /^tools\/password-auth/.test(path)) add('auth');
     if (/^cloud-worker\/public\/(crypto-vault|vendor\/argon2)/.test(path)) add('security', 'auth');
+    if (path === 'cloud-worker/public/crypto-vault.js') add('tcloud-windows');
     // Registry build dependencies are the authoritative cross-service asset map.
     for (const app of registry.apps) {
       if ((app.buildFiles || []).includes(path) || (app.buildRoots || []).some(d => path.startsWith(`${d}/`))) {

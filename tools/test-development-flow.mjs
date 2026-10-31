@@ -88,6 +88,17 @@ test('Downloader 2 components select only Downloader 2 while unknown files remai
   assert.equal(downloader2NativeAffected(['docs/downloader2.md']), false);
 });
 
+test('T-Cloud Windows is verified on Windows without selecting a production Worker', () => {
+  assert.deepEqual(affected(['tcloud-windows/src/TCloud.Sync.Core/SyncPlanner.cs']), ['tcloud-windows']);
+  assert.deepEqual(affected(['tools/verify-tcloud-windows.mjs']), ['tooling', 'tcloud-windows']);
+  assert.ok(affected(['cloud-worker/public/crypto-vault.js']).includes('tcloud-windows'));
+  assert.deepEqual(affected(['tcloud-windows/README.md']), []);
+  assert.deepEqual(commands('tcloud-windows'), [{cwd:'.',args:['tools/verify-tcloud-windows.mjs']}]);
+  const workflow = readFileSync(resolve(root, '.github/workflows/verify.yml'), 'utf8');
+  assert.match(workflow, /tcloud-windows:\r?\n\s+needs: plan\r?\n\s+if: needs\.plan\.outputs\.tcloud_windows == 'true'\r?\n\s+runs-on: windows-latest/);
+  assert.match(workflow, /TCLOUD_WINDOWS: \$\{\{ needs\.tcloud-windows\.result \}\}/);
+});
+
 test('Inventory changes have an isolated verify and deployment profile', () => {
   assert.deepEqual(affected(['inventory-worker/src/index.js']), ['inventory']);
   assert.deepEqual(affected(['inventory-worker/README.md']), []);

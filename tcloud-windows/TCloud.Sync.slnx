@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="src/TCloud.Sync.Core/TCloud.Sync.Core.csproj" />
+  <Project Path="src/TCloud.Sync.Windows/TCloud.Sync.Windows.csproj" />
+  <Project Path="src/TCloud.Sync.Host/TCloud.Sync.Host.csproj" />
+  <Project Path="tests/TCloud.Sync.Tests/TCloud.Sync.Tests.csproj" />
+</Solution>
