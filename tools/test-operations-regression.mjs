@@ -15,7 +15,7 @@ test('weekly suite is bounded, verification only, and Household WebKit is requir
  assert.match(workflow,/schedule:/);assert.match(workflow,/contents: read/);assert.doesNotMatch(workflow,/secrets\.|environment: production|release-actions|wrangler deploy/);
  const expected=['auth','backup','household','calendar','security','diary','payments','site','cloud'];
  assert.deepEqual(Object.keys(weeklySuites),expected);
- const matrix=workflow.match(/^\\s*target: \\[([^\\]]+)\\]/m);
+ const matrix=workflow.match(/^\s*target: \[([^\]]+)\]/m);
  assert.ok(matrix,'The GitHub Actions matrix must declare its regression targets');
  assert.deepEqual(matrix[1].split(',').map(x=>x.trim()),expected,'Every weekly suite must have an Actions job');
  for(const target of ['household','calendar','diary','payments','security','backup','site']){
@@ -29,9 +29,9 @@ test('weekly suite is bounded, verification only, and Household WebKit is requir
   assert.match(command,/--browser/,'Missing browser regression: '+target);
   assert.match(command,/--build/,'Missing dry-run build: '+target);
  }
- assert.match(workflow,/pull_request:\\s*\\n\\s*paths:/,'Changes to weekly regression must validate in PR CI');
- assert.match(workflow,/\\bpayments\\b/);
- assert.match(workflow,/\\bsite\\b/);
+ assert.match(workflow,/pull_request:\s*\n\s*paths:/,'Changes to weekly regression must validate in PR CI');
+ assert.match(workflow,/\bpayments\b/);
+ assert.match(workflow,/\bsite\b/);
 
  assert.match(verify,/household-webkit-macos:/);assert.match(verify,/needs\.household-webkit-macos\.result/);assert.match(verify,/\$HOUSEHOLD_MACOS.*success\|skipped/);
 });
