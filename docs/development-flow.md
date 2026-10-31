@@ -165,11 +165,11 @@ gh run view <run-id> --repo tanaka-note/t-room-site --json jobs,url,headSha,conc
 
 初期設定はGitHubの`production` Environmentをbranch `main`だけに限定し、Environment Secret `CLOUDFLARE_API_TOKEN`とEnvironment変数`CLOUDFLARE_ACCOUNT_ID`を登録する。repository変数`CLOUDFLARE_PRODUCTION_ENABLED=true`で有効化する。無効時はCIだけ実行し、Production planに公開対象なしを明記する。失敗時は同じmainコミットのrunを再実行するか、最新mainから`production_target`を指定する。mainが進んだ古いrunは新規公開を拒否するため、失敗した対象を最新mainで明示再実行して公開漏れを解消する。
 
-専用のaccount-owned tokenは既存の本番11 Worker（`t-room-site/cloud/security/diary/billing/downloader/downloader2/ai/inventory/health/payments`）を個別指定した`Individual Workers Editor`と、同アカウント全体の`Workers Scripts Read`を付与する。後者はWranglerがversion upload後に取得する共通`workers.dev`サブドメインの読取に必要で、個別Worker権限だけではHTTP 403/code 10000で失敗する。アップロード前にもこのAPIを検査して早期停止する。`Workers Scripts Read`は対象外Workerのmetadata/sourceの読取も許可するため、その範囲も含む権限である。アカウント管理、token管理、DNS/ルート編集、D1/R2の直接読み書き権限を追加しない。Editorには対象Workerのコード・binding・設定の変更権限があり、コード変更を通した本番データへの間接的なアクセスまで遮断する権限ではない。mainへの変更内容とCIがその境界になる。[Cloudflareの権限仕様](https://developers.cloudflare.com/workers/authorization/workers/)を参照。初期構築の専用トークンはユーザー指定により期限なしとする。漏えいの疑い・権限変更等で交換する場合は、同じ限定権限の新トークンを発行し、Environment Secretだけを差し替える。値をチャット・Git・ログ・スクリーンショットへ出さない。
+専用のaccount-owned tokenは既存の本番13 Worker（`t-room-site/cloud/security/diary/billing/downloader/downloader2/ai/inventory/health/payments/household/calendar`）を個別指定した`Individual Workers Editor`と、同アカウント全体の`Workers Scripts Read`を付与する。後者はWranglerがversion upload後に取得する共通`workers.dev`サブドメインの読取に必要で、個別Worker権限だけではHTTP 403/code 10000で失敗する。アップロード前にもこのAPIを検査して早期停止する。`Workers Scripts Read`は対象外Workerのmetadata/sourceの読取も許可するため、その範囲も含む権限である。アカウント管理、token管理、DNS/ルート編集、D1/R2の直接読み書き権限を追加しない。Editorには対象Workerのコード・binding・設定の変更権限があり、コード変更を通した本番データへの間接的なアクセスまで遮断する権限ではない。mainへの変更内容とCIがその境界になる。[Cloudflareの権限仕様](https://developers.cloudflare.com/workers/authorization/workers/)を参照。初期構築の専用トークンはユーザー指定により期限なしとする。漏えいの疑い・権限変更等で交換する場合は、同じ限定権限の新トークンを発行し、Environment Secretだけを差し替える。値をチャット・Git・ログ・スクリーンショットへ出さない。
 
 既存のCloudflare Buildsによるsiteの独立した自動公開は停止し、CIを迂回する二重公開を避ける。他の10 WorkerにBuilds連携がないことも初期構築時に確認した。`Disable builds`を解除する場合はCIとの公開順序を再設計する。
 
-通常の10 Workerは`tools/release-actions.mjs`がCIとcheckoutのSHA、最新main、clean状態、対象configのWorker名を確認する。CIと同じ`installDirectories()`で依存を準備し、siteだけ公開用assetを生成する。検証済みの同一SHAの試験を繰り返さず、既存のtarget全体のbuild freshness preflight、HealthのSecret名preflight、公開後のWeb build照合を維持する。`versions upload`の構造化出力から対象Workerの一意なversion IDを取得し、そのIDだけを100%へ昇格してAPIで読み戻す。AIはWeb registryを持たないためversionの一致を確認する。手動公開時はアカウント共通サブドメインおよび対象11 Workerのmetadata読取成功と、D1一覧・R2一覧への認可拒否（製品により401/403、success=false）も確認する。これはreadによる権限範囲の確認であり、削除API等の実行試験はしない。
+通常の12 Workerは`tools/release-actions.mjs`がCIとcheckoutのSHA、最新main、clean状態、対象configのWorker名を確認する。CIと同じ`installDirectories()`で依存を準備し、siteだけ公開用assetを生成する。検証済みの同一SHAの試験を繰り返さず、既存のtarget全体のbuild freshness preflight、HealthのSecret名preflight、公開後のWeb build照合を維持する。`versions upload`の構造化出力から対象Workerの一意なversion IDを取得し、そのIDだけを100%へ昇格してAPIで読み戻す。AIはWeb registryを持たないためversionの一致を確認する。手動公開時はアカウント共通サブドメインおよび対象13 Workerのmetadata読取成功と、D1一覧・R2一覧への認可拒否（製品により401/403、success=false）も確認する。これはreadによる権限範囲の確認であり、削除API等の実行試験はしない。
 
 この経路は既存のroutes、Custom Domains、Cron、Queue設定、Containerを変更しない。これらの非version設定やDB migrationを変更する作業は、通常コード公開と別に既存の専用手順で扱う。勝手に権限を増やしたり、未適用の設定変更を適用済みとして報告しない。ローカルの`npm run release`は従来どおり利用できる。
 
@@ -194,3 +194,11 @@ CodeQLはJavaScript/TypeScriptとActionsのみ、PR/main/週次。既存vendor�
 CopilotのSemantic Indexは[リポジトリを指定した会話開始で自動作成される](https://docs.github.com/en/copilot/concepts/context/repository-indexing)。今回、認証済みGitHubでリポジトリを指定して検索を開始したが、Copilot側の検索がアクセス失敗し、Index readyは確認できなかった。Web上では公開repoの閲覧とGit/APIの取得が可能。Copilot Chatでこのrepoを選んで再試行し、継続して失敗する場合はGitHub側を確認する。CodexのGitHub connectorとCopilotのIndex共有は確認していない。Indexのためのアプリ変更・独自Index実装は行わず、最新の正確な確認はローカル `rg` を使う。
 
 Preview仕様: [Cloudflare Preview URLs](https://developers.cloudflare.com/workers/versions-and-deployments/preview-urls/)。
+
+### Household / Calendarと週次回帰
+
+HouseholdとCalendarも変更対象だけを自動公開し、手動 production_target で再公開できる。既存のproduction tokenには、この2 Workerを個別のIndividual Workers Editorとして追加する必要がある。D1/R2の直接権限は追加しない。Secret名（値は取得しない）、DB/SECURITY/監査bindingを検査し、公開中Workerの /api/deployment-status が返す適用済みmigration名とcheckoutの全SQLファイル名を一致させる。migrationをActionsで自動適用しない。未適用・余分なmigration・検査不能はupload前に停止する。CalendarはBUILD_IDに検証済みmain SHAを設定し、公開後 /calendar/api/version のbuildとactive versionを照合する。Householdは既存web registryのcontent buildを照合する。
+
+初回だけ旧Workerにdeployment-statusがないため自動preflightは停止する。専用手順として、対象CI成功・最新main・clean checkoutを確認し、既存Wrangler認証でSecret名/bindingとD1のd1_migrationsを読み取る。Household 0005は追加DDL/indexのみで既存レコードを削除しないことをレビューして適用する。該当target全体のbuild freshness検査後に通常のWrangler公開を行い、公開build、active version、deployment-statusを読み戻す。Calendarの初回公開でもBUILD_IDを最新main SHAに設定する。その後、同一mainの失敗したActions公開jobを再実行し、通常のversion upload→100% promotion→公開後照合を確認する。検査を無効化したりActions環境変数を偽装しない。
+
+Weekly cross-service regressionは月曜06:20 JSTと手動実行で、auth/backup/household/calendar/security、DiaryとCloudの限定smokeを実行する。共通認証、実Security連携、バックアップの隔離復元、主要画面、家計簿の4規模fixtureを変更の有無によらず確認する。production Environment・Secrets・公開jobは使わず、Container/Androidビルド/全CloudメディアE2Eは含めない。結果と失敗traceを14日保管する。通常の変更対象CIは継続する。

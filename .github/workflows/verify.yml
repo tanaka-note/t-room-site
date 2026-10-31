@@ -9,7 +9,7 @@ on:
         description: 'Verify and release one main service (none = verification only)'
         type: choice
         default: none
-        options: [none, site, cloud, security, diary, billing, downloader, downloader2, ai, inventory, health, payments]
+        options: [none, site, cloud, security, diary, billing, downloader, downloader2, ai, inventory, health, payments, household, calendar]
 permissions:
   contents: read
 concurrency:
@@ -159,6 +159,39 @@ jobs:
           path: tmp/verify-artifacts/inventory-webkit-macos/
           if-no-files-found: ignore
           retention-days: 5
+  household-webkit-macos:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.node), 'household')
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: '11.19.0'
+      - name: Install only Household dependencies
+        run: node tools/install-verify-dependencies.mjs household
+      - name: Install Household WebKit
+        run: pnpm --dir diary-worker exec playwright install webkit
+      - name: Household macOS WebKit regression
+        timeout-minutes: 5
+        env:
+          TROOM_BROWSER: webkit
+          TROOM_TRACE_DIR: tmp/verify-artifacts/household-webkit-macos
+          CI: 'true'
+        run: node --require ./tools/browser-trace.cjs household-worker/test/household.browser.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure()
+        with:
+          name: verify-failure-household-webkit-macos
+          path: tmp/verify-artifacts/household-webkit-macos/
+          if-no-files-found: ignore
+          retention-days: 5
   cloud-webkit-macos:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.node), 'cloud')
@@ -294,7 +327,7 @@ jobs:
         run: dotnet build downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj --configuration Release -warnaserror -p:Downloader2Profile=E2E -p:Downloader2PairingEndpoint=https://isolated-preview.example.invalid/downloader2/api/pairing/redeem -p:Downloader2PairingAllowedHosts=isolated-preview.example.invalid --output downloader2-native/artifacts/e2e-host
   verify:
     if: always()
-    needs: [plan, node, inventory-webkit-macos, cloud-webkit-macos, android, downloader2-native]
+    needs: [plan, node, inventory-webkit-macos, household-webkit-macos, cloud-webkit-macos, android, downloader2-native]
     runs-on: ubuntu-latest
     steps:
       - name: Require selected jobs to succeed
@@ -302,10 +335,11 @@ jobs:
           PLAN: ${{ needs.plan.result }}
           NODE: ${{ needs.node.result }}
           MACOS: ${{ needs.cloud-webkit-macos.result }}
+          HOUSEHOLD_MACOS: ${{ needs.household-webkit-macos.result }}
           INVENTORY_MACOS: ${{ needs.inventory-webkit-macos.result }}
           ANDROID: ${{ needs.android.result }}
           DOWNLOADER2_NATIVE: ${{ needs.downloader2-native.result }}
-        run: test "$PLAN" = success && [[ "$NODE" =~ ^(success|skipped)$ ]] && [[ "$INVENTORY_MACOS" =~ ^(success|skipped)$ ]] && [[ "$MACOS" =~ ^(success|skipped)$ ]] && [[ "$ANDROID" =~ ^(success|skipped)$ ]] && [[ "$DOWNLOADER2_NATIVE" =~ ^(success|skipped)$ ]]
+        run: test "$PLAN" = success && [[ "$NODE" =~ ^(success|skipped)$ ]] && [[ "$HOUSEHOLD_MACOS" =~ ^(success|skipped)$ ]] && [[ "$INVENTORY_MACOS" =~ ^(success|skipped)$ ]] && [[ "$MACOS" =~ ^(success|skipped)$ ]] && [[ "$ANDROID" =~ ^(success|skipped)$ ]] && [[ "$DOWNLOADER2_NATIVE" =~ ^(success|skipped)$ ]]
   production:
     needs: [plan, verify]
     if: ${{ !cancelled() && github.repository == 'tanaka-note/t-room-site' && github.ref == 'refs/heads/main' && needs.verify.result == 'success' && needs.plan.outputs.production != '[]' }}

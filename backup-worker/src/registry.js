@@ -4,7 +4,7 @@ export const SERVICES = {
     "label": "家計簿",
     "binding": "HOUSEHOLD_DB",
     "database": "household-db",
-    "migration": "0004_asset_history_start.sql",
+    "migration": "0005_dataset_lifecycle.sql",
     "tables": [
       {
         "name": "household_accounts",
@@ -45,13 +45,25 @@ export const SERVICES = {
           "created_at"
         ],
         "sourceColumns": "request_id,fingerprint,response_json,created_at"
+      },
+      {
+        "name": "household_datasets",
+        "columns": [
+          "id",
+          "created_at",
+          "activated_at",
+          "retired_at",
+          "lease_expires_at"
+        ],
+        "sourceColumns": "id,created_at,activated_at,retired_at,lease_expires_at"
       }
     ],
     "knownTables": [
       "household_accounts",
       "household_state",
       "household_records",
-      "household_requests"
+      "household_requests",
+      "household_datasets"
     ]
   },
   "cloud": {

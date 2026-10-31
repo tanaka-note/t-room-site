@@ -1,12 +1,18 @@
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
-  const money = n => new Intl.NumberFormat('ja-JP', {style:'currency',currency:'JPY',maximumFractionDigits:0}).format(n);
+  const currency = new Intl.NumberFormat('ja-JP', {style:'currency',currency:'JPY',maximumFractionDigits:0});
+  const money = n => currency.format(n);
   const today = () => new Date(Date.now()+9*3600000).toISOString().slice(0,10);
   const previousMonth = () => {const d=new Date(`${today()}T00:00:00Z`);d.setUTCDate(0);return d.toISOString().slice(0,7);};
   const nav = TroomDialogNavigation.create({key:'troomHouseholdDialogs'});
   let data={accounts:[],transactions:[],categories:[],snapshots:[],historical:[]}, revision=0, session=null, busy=false, activity=Date.now(), confirmation=null, restoreFile=null, categoryEditing=null;
   const editors=new Map(), channel=typeof BroadcastChannel==='function'?new BroadcastChannel('household-ledger'):null;
+  let sessionGeneration=0,expiryTimer=null,cleanupPlan=null,visibleEntries=200,entryCriteria='';
+  const pendingRequests=new Set(),downloadUrls=new Set();
+  const discarded=()=>Object.assign(new Error('ログイン状態が変わりました。'),{discarded:true});
+  function currentGeneration(generation){if(generation!==sessionGeneration)throw discarded();}
+  function report(error,id='message',generation=sessionGeneration){if(!error.discarded&&generation===sessionGeneration)$(id).textContent=error.message;}
   let assetPoints=[], assetChart=null, chartPeriod='all';
   let deferredInstallPrompt=null, installPromptOpen=false, installed=false;
   const appDisplay=window.matchMedia('(display-mode: standalone)');
@@ -57,25 +63,51 @@
   function field(form,name){return form.elements.namedItem(name);}
   function markDirty(){for(const [id,e]of editors){e.form.dataset.troomDirty=String($(id).open&&e.initial!==e.serialize());}document.body.dataset.troomUpdateBlock=String(busy||installPromptOpen||[...editors].some(([id,e])=>$(id).open&&e.initial!==e.serialize()));}
   function setBusy(value){busy=value;document.body.dataset.troomUpdateBlock=String(value);for(const b of document.querySelectorAll('button'))b.disabled=value;for(const form of document.querySelectorAll('dialog form'))form.inert=value;$('restore').disabled=value||!restoreFile;assetChart?.setBusy(value);updateItemControls();markDirty();updateInstallState();}
-  async function api(path,body){
-    let response;try{response=await fetch(`/household/api${path}`,{method:body===undefined?'GET':'POST',credentials:'same-origin',headers:{...(body===undefined?{}:{'Content-Type':'application/json'}),...(!document.hidden&&Date.now()-activity<60000?{'X-Troom-Activity':'foreground'}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})});}catch{throw new Error('通信できませんでした。入力は保持されています。もう一度お試しください。');}
-    const result=await response.json().catch(()=>{throw new Error('応答を読み取れませんでした。もう一度お試しください。');});
-    if(response.status===401){session=null;$('app-view').hidden=true;$('login-view').hidden=false;$('login').hidden=false;$('boot-message').textContent='パスキーでログインしてください。';}
-    if(!response.ok){const error=new Error(result.error||'処理を完了できませんでした。');error.status=response.status;throw error;}return result;
+  function resetSession(broadcast=false){
+    sessionGeneration++;clearTimeout(expiryTimer);expiryTimer=null;
+    for(const controller of pendingRequests)controller.abort();pendingRequests.clear();
+    for(const url of downloadUrls)URL.revokeObjectURL(url);downloadUrls.clear();
+    session=null;revision=0;visibleEntries=200;entryCriteria='';data={accounts:[],transactions:[],categories:[],snapshots:[],historical:[]};assetPoints=[];chartPeriod='all';
+    confirmation=restoreFile=categoryEditing=editingAccount=cleanupPlan=null;$('maintenance-summary').textContent='';$('maintenance-apply').hidden=true;
+    nav.reset();for(const dialog of document.querySelectorAll('dialog[open]'))dialog.close();
+    for(const form of document.querySelectorAll('#app-view form,dialog form'))form.reset();
+    for(const input of document.querySelectorAll('#app-view input:not([type=checkbox]),#app-view textarea,dialog input:not([type=checkbox]),dialog textarea')){input.value='';input.setCustomValidity('');}
+    for(const e of editors.values()){e.initial='';e.id=e.requestId=null;e.expectedRevision=0;e.form.dataset.troomDirty='false';}
+    $('account-items').replaceChildren();$('balance-history').replaceChildren();$('search').value='';$('period').value=today().slice(0,7);$('period-mode').value='month';
+    $('restore-file').value='';$('restore-preview').textContent='';
+    for(const id of ['confirm-title','confirm-copy','confirm-error','entry-error','account-error','message'])$(id).textContent='';
+    resetCategory();render();$('account-name').textContent='';$('access-mode').textContent='';document.body.classList.remove('is-viewer');
+    $('app-view').hidden=true;$('login-view').hidden=false;$('login').hidden=false;$('boot-message').textContent='パスキーでログインしてください。';$('login').removeAttribute('aria-busy');$('passkey-login-label').textContent='パスキーでログイン';setBusy(false);
+    if(broadcast)channel?.postMessage('session-changed');
   }
-  function showSession(value){session=value;document.body.classList.toggle('is-viewer',value.role!=='owner');$('account-name').textContent=value.displayName;$('access-mode').textContent=value.role==='owner'?'編集可能':'閲覧専用';$('login-view').hidden=true;$('app-view').hidden=false;}
-  async function load(){const result=await api('/data');data=result.data;assetPoints=result.assetHistory||[];revision=result.revision;render();$('message').textContent='';}
+  function observeExpiry(expiresAt){clearTimeout(expiryTimer);if(session&&Number.isFinite(expiresAt)){session.expiresAt=expiresAt;expiryTimer=setTimeout(async()=>{if(session?.expiresAt*1000<=Date.now()){resetSession();return;}const generation=sessionGeneration;try{const value=await api('/session');currentGeneration(generation);showSession(value);}catch{if(generation===sessionGeneration)resetSession();}},Math.min(86400000,Math.max(0,expiresAt*1000-Date.now())));}}
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&session?.expiresAt*1000<=Date.now())resetSession();});
+  async function api(path,body,asBlob=false){
+    const generation=sessionGeneration,controller=new AbortController();pendingRequests.add(controller);
+    try{
+      let response;try{response=await fetch(`/household/api${path}`,{method:body===undefined?'GET':'POST',credentials:'same-origin',signal:controller.signal,headers:{...(body===undefined?{}:{'Content-Type':'application/json'}),...(!document.hidden&&Date.now()-activity<60000?{'X-Troom-Activity':'foreground'}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})});}catch{currentGeneration(generation);throw new Error('通信できませんでした。入力は保持されています。もう一度お試しください。');}
+      currentGeneration(generation);
+      if([401,403].includes(response.status)){resetSession();throw Object.assign(new Error('パスキーでログインしてください。'),{status:response.status});}
+      if(asBlob&&response.ok){const blob=await response.blob();currentGeneration(generation);return blob;}
+      const result=await response.json().catch(()=>{throw new Error('応答を読み取れませんでした。もう一度お試しください。');});currentGeneration(generation);
+      if(!response.ok)throw Object.assign(new Error(result.error||'処理を完了できませんでした。'),{status:response.status});
+      const expires=Number(response.headers.get('X-Troom-Session-Expires'));if(expires){observeExpiry(expires);if(path==='/session'||path==='/passkey/handoff')result.expiresAt=expires;}
+      return result;
+    }finally{pendingRequests.delete(controller);}
+  }
+  function showSession(value){session=value;observeExpiry(value.expiresAt);document.body.classList.toggle('is-viewer',value.role!=='owner');$('account-name').textContent=value.displayName;$('access-mode').textContent=value.role==='owner'?'編集可能':'閲覧専用';$('login-view').hidden=true;$('app-view').hidden=false;}
+  async function load(){const generation=sessionGeneration,result=await api('/data');currentGeneration(generation);data=result.data;assetPoints=result.assetHistory||[];revision=result.revision;render();$('message').textContent='';}
   async function mutate(operation,value,expectedRevision=revision,requestId=crypto.randomUUID()){await api('/mutate',{operation,value,expectedRevision,requestId});await load();channel?.postMessage('changed');}
   const formValues=form=>Object.fromEntries(new FormData(form));
   function ask(title,copy,action){$('confirm-title').textContent=title;$('confirm-copy').textContent=copy;$('confirm-error').textContent='';confirmation=action;nav.open('confirm-dialog');}
   nav.register('confirm-dialog',{blocked:()=>busy,guard:()=>!busy,onClose:()=>{confirmation=null;}});
   $('confirm-cancel').onclick=()=>nav.close('confirm-dialog');
-  $('confirm-ok').onclick=async()=>{if(busy||!confirmation)return;const action=confirmation;setBusy(true);try{await action();setBusy(false);if($('confirm-dialog').open)await nav.close('confirm-dialog',{force:true});}catch(error){$('confirm-error').textContent=error.message;if(error.status===409)confirmation=null;}finally{setBusy(false);}};
+  $('confirm-ok').onclick=async()=>{if(busy||!confirmation)return;const action=confirmation,generation=sessionGeneration;setBusy(true);try{await action();currentGeneration(generation);setBusy(false);if($('confirm-dialog').open)await nav.close('confirm-dialog',{force:true});}catch(error){report(error,'confirm-error',generation);if(error.status===409)confirmation=null;}finally{if(generation===sessionGeneration)setBusy(false);}};
   function editor(id,formId,serialize,save){
     const form=$(formId),e={form,serialize,initial:'',id:null,expectedRevision:0,requestId:null};editors.set(id,e);
     nav.register(id,{blocked:()=>busy,guard:()=>{if(busy)return false;if(e.initial===serialize())return true;ask('入力内容を破棄しますか？','保存していない入力内容があります。',async()=>{await nav.close('confirm-dialog',{force:true});await nav.close(id,{force:true});});return false;},onClose:()=>{form.reset();e.initial=serialize();e.id=null;e.requestId=null;markDirty();}});
     for(const event of ['input','change'])form.addEventListener(event,()=>{e.requestId=null;markDirty();});
-    form.onsubmit=async event=>{event.preventDefault();if(busy||!form.reportValidity())return;e.requestId||=crypto.randomUUID();$(formId.replace('-form','-error')).textContent='';setBusy(true);try{await save(e);setBusy(false);await nav.close(id,{force:true});}catch(error){$(formId.replace('-form','-error')).textContent=error.message;}finally{setBusy(false);}};
+    form.onsubmit=async event=>{event.preventDefault();if(busy||!form.reportValidity())return;const generation=sessionGeneration;e.requestId||=crypto.randomUUID();$(formId.replace('-form','-error')).textContent='';setBusy(true);try{await save(e);currentGeneration(generation);setBusy(false);await nav.close(id,{force:true});}catch(error){report(error,formId.replace('-form','-error'),generation);}finally{if(generation===sessionGeneration)setBusy(false);}};
     return e;
   }
   function open(id,e,recordId){e.id=recordId||crypto.randomUUID();e.expectedRevision=revision;e.requestId=null;e.initial=e.serialize();$(id.replace('-dialog','-error')).textContent='';nav.open(id);markDirty();}
@@ -117,14 +149,16 @@
   function cell(row,value,cls=''){const td=el('td',value,cls);row.append(td);return td;}
   function renderTransactions(){
     const period=$('period').value,year=$('period-mode').value==='year',prefix=year?period.slice(0,4):period,query=$('search').value.normalize('NFKC').toLocaleLowerCase();
-    const rows=data.transactions.filter(t=>{const c=categoryFor(t);return t.date.startsWith(prefix)&&(!$('category-filter').value||c?.parent===$('category-filter').value)&&      (t.description+' '+t.notes+' '+(c?.parent||'')+' '+(c?.name||'')).normalize('NFKC').toLocaleLowerCase().includes(query);}).sort((a,b)=>b.date.localeCompare(a.date)||a.id.localeCompare(b.id));
-    let income=0,expense=0;const groups=new Map(),root=$('entries');root.replaceChildren();
+    const rows=data.transactions.filter(t=>{const c=categoryFor(t);return t.date.startsWith(prefix)&&(!$('category-filter').value||c?.parent===$('category-filter').value)&&      (!query||(t.description+' '+t.notes+' '+(c?.parent||'')+' '+(c?.name||'')).normalize('NFKC').toLocaleLowerCase().includes(query));}).sort((a,b)=>b.date.localeCompare(a.date)||a.id.localeCompare(b.id));
+    const criteria=JSON.stringify([prefix,query,$('category-filter').value]);if(criteria!==entryCriteria){visibleEntries=200;entryCriteria=criteria;}
+    let index=0,income=0,expense=0;const groups=new Map(),root=$('entries'),fragment=document.createDocumentFragment();
     for(const t of rows){const c=categoryFor(t),legacy=t.type==='transfer';if(!legacy){if(t.type==='income')income+=t.amount;else expense+=t.amount;const key=(t.type==='income'?'収入':'支出')+' / '+(c?.parent||'その他');groups.set(key,(groups.get(key)||0)+t.amount);}
+      if(index++>=visibleEntries)continue;
       const tr=el('tr');tr.dataset.id=t.id;cell(tr,t.date);cell(tr,t.description||'（内容なし）','description');cell(tr,legacy?'過去の振替（集計外）':(c?.parent||'その他')+' / '+(c?.name||'その他'));cell(tr,(t.type==='income'?'＋':t.type==='expense'?'−':'')+money(t.amount),'numeric');cell(tr,t.notes,'notes');
       if(session?.role==='owner'){const actions=cell(tr,undefined,'row-actions');if(!legacy)actions.append(button('編集',()=>openEntry(t)));actions.append(button('削除',()=>{const expected=revision,id=crypto.randomUUID();ask('この明細を削除しますか？',t.date+'\n'+t.description+'\n'+money(t.amount),()=>mutate('transaction.delete',{id:t.id},expected,id));},'danger'));}
-      ['日付','内容','分類','金額','メモ','操作'].forEach((label,i)=>{if(tr.cells[i])tr.cells[i].dataset.label=label;});root.append(tr);
+      ['日付','内容','分類','金額','メモ','操作'].forEach((label,i)=>{if(tr.cells[i])tr.cells[i].dataset.label=label;});fragment.append(tr);
     }
-    $('income').textContent=money(income);$('expense').textContent=money(expense);$('net').textContent=money(income-expense);$('empty-entries').hidden=rows.length>0;$('entry-count').textContent=rows.length+'件';$('category-summary').replaceChildren();for(const [name,value]of [...groups].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],'ja'))){const div=el('div',undefined,'category-stat');div.append(el('span',name),el('strong',money(value)));$('category-summary').append(div);}
+    root.replaceChildren(fragment);$('more-entries').hidden=rows.length<=visibleEntries;$('entry-display').textContent=rows.length?`${Math.min(rows.length,visibleEntries)} / ${rows.length}件を表示`:'';$('income').textContent=money(income);$('expense').textContent=money(expense);$('net').textContent=money(income-expense);$('empty-entries').hidden=rows.length>0;$('entry-count').textContent=rows.length+'件';$('category-summary').replaceChildren();for(const [name,value]of [...groups].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],'ja'))){const div=el('div',undefined,'category-stat');div.append(el('span',name),el('strong',money(value)));$('category-summary').append(div);}
   }
   function renderAccounts(){const root=$('accounts');root.replaceChildren();let total=0;for(const a of data.accounts){if(!a.archived)total+=totals(a);const card=el('article',undefined,'panel account-card'),header=el('header'),title=el('div');title.append(el('h3',a.name),el('span',`${a.type}${a.archived?'・保管済み':''}`,'muted small'));header.append(title);if(session?.role==='owner')header.append(button('編集',()=>openAccount(a)));card.append(header,el('p',money(totals(a)),'total'),el('p',a.balances?.length?`${a.balances.at(-1).date} 時点`:'基準日未入力','muted small'));for(const i of a.items){const row=el('div',undefined,'item');row.append(el('span',i.name),el('strong',money(i.amount)));card.append(row);}root.append(card);}$('current-assets').textContent=money(total);$('empty-accounts').hidden=data.accounts.length>0;}
   function points(){return assetPoints;}
@@ -150,18 +184,23 @@
   function render(){options($('category-filter'),[...new Set(visibleCategories().map(c=>c.parent))].map(p=>[p,p]),'すべて');renderTransactions();renderAccounts();renderAssets();renderCategories();showView();}
   function showView(){const view=['transactions','accounts','assets','settings'].includes(location.hash.slice(1))?location.hash.slice(1):'transactions';for(const page of document.querySelectorAll('.page'))page.hidden=page.id!==`view-${view}`;for(const b of document.querySelectorAll('[data-view]')){if(b.dataset.view===view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');}if(view==='assets')assetChart.resize();}
   for(const b of document.querySelectorAll('[data-view]'))b.onclick=()=>{if(location.hash!==`#${b.dataset.view}`)history.pushState({...history.state,householdView:b.dataset.view},'',`#${b.dataset.view}`);showView();};window.addEventListener('popstate',showView);
+  $('more-entries').onclick=()=>{visibleEntries+=200;renderTransactions();};
   $('period').value=today().slice(0,7);for(const id of ['period','period-mode','category-filter'])$(id).onchange=renderTransactions;$('search').oninput=renderTransactions;
   function resetCategory(){categoryEditing=null;$('category-form').reset();$('category-form').querySelector('[type=submit]').textContent='中項目を追加';$('category-cancel').hidden=true;}
-  $('category-cancel').onclick=resetCategory;$('category-form').onsubmit=async event=>{event.preventDefault();if(busy||session?.role!=='owner')return;const value={id:categoryEditing?.id||crypto.randomUUID(),...formValues($('category-form'))};setBusy(true);try{await mutate('category.save',value);resetCategory();}catch(error){$('message').textContent=error.message;}finally{setBusy(false);}};
-  async function download(path,filename){if(busy)return;setBusy(true);try{const response=await fetch(`/household/api${path}`,{credentials:'same-origin'});if(!response.ok)throw new Error('保存できませんでした。ログイン状態と通信を確認してください。');const blob=await response.blob(),url=URL.createObjectURL(blob),a=el('a');a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);}catch(error){$('message').textContent=error.message;}finally{setBusy(false);}}
+  $('category-cancel').onclick=resetCategory;$('category-form').onsubmit=async event=>{event.preventDefault();if(busy||session?.role!=='owner')return;const generation=sessionGeneration,value={id:categoryEditing?.id||crypto.randomUUID(),...formValues($('category-form'))};setBusy(true);try{await mutate('category.save',value);currentGeneration(generation);resetCategory();}catch(error){report(error,'message',generation);}finally{if(generation===sessionGeneration)setBusy(false);}};
+  async function download(path,filename){if(busy)return;const generation=sessionGeneration;setBusy(true);try{const blob=await api(path,undefined,true);currentGeneration(generation);const url=URL.createObjectURL(blob),a=el('a');downloadUrls.add(url);a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>{URL.revokeObjectURL(url);downloadUrls.delete(url);},10000);}catch(error){report(error,'message',generation);}finally{if(generation===sessionGeneration)setBusy(false);}};
   $('export-csv').onclick=()=>download('/export.csv',`家計簿-明細-${today()}.csv`);$('export-backup').onclick=()=>download('/backup',`家計簿-バックアップ-${today()}.json`);
-  $('restore-file').onchange=async()=>{restoreFile=null;$('restore').disabled=true;$('restore-preview').textContent='';const file=$('restore-file').files[0];if(!file)return;try{if(file.size>12*1024*1024)throw new Error('12MB以下のバックアップを選んでください。');const value=JSON.parse(await file.text());if(value.format!=='troom-household'||![1,2].includes(value.version)||!value.data)throw new Error('家計簿のバックアップファイルを選んでください。');for(const key of ['accounts','transactions','snapshots','historical','categories'])if(!Array.isArray(value.data[key]))throw new Error('バックアップの形式を確認してください。');restoreFile=value;$('restore-preview').textContent=`口座 ${value.data.accounts.length}件・明細 ${value.data.transactions.length}件・月末記録 ${value.data.snapshots.length+value.data.historical.length}件`;$('restore').disabled=false;}catch(error){$('restore-preview').textContent=error.message;}};
+  $('restore-file').onchange=async()=>{const generation=sessionGeneration;restoreFile=null;$('restore').disabled=true;$('restore-preview').textContent='';const file=$('restore-file').files[0];if(!file)return;try{if(file.size>12*1024*1024)throw new Error('12MB以下のバックアップを選んでください。');const value=JSON.parse(await file.text());currentGeneration(generation);if(value.format!=='troom-household'||![1,2].includes(value.version)||!value.data)throw new Error('家計簿のバックアップファイルを選んでください。');for(const key of ['accounts','transactions','snapshots','historical','categories'])if(!Array.isArray(value.data[key]))throw new Error('バックアップの形式を確認してください。');restoreFile=value;$('restore-preview').textContent=`口座 ${value.data.accounts.length}件・明細 ${value.data.transactions.length}件・月末記録 ${value.data.snapshots.length+value.data.historical.length}件`;$('restore').disabled=false;}catch(error){report(error,'restore-preview',generation);}};
+  $('maintenance-preview').onclick=async()=>{if(busy)return;const generation=sessionGeneration;setBusy(true);try{const plan=await api('/maintenance/preview');currentGeneration(generation);cleanupPlan=plan;$('maintenance-summary').textContent=`90日以上前の再送履歴: ${plan.requestCount}件、30日以上前の未使用世代: ${plan.datasetCount}世代（${plan.recordCount}件）。1回の上限は履歴1,000件・10世代です。`;$('maintenance-apply').hidden=!plan.requestCount&&!plan.datasetCount;}catch(error){report(error,'message',generation);}finally{if(generation===sessionGeneration)setBusy(false);}};
+  $('maintenance-apply').onclick=()=>{if(!cleanupPlan||busy)return;const plan=cleanupPlan,requestId=crypto.randomUUID();ask('古い履歴を整理しますか？',$('maintenance-summary').textContent+' 整理した履歴と未使用世代は元に戻せません。',async()=>{await api('/maintenance',{requestId,expectedRevision:plan.revision,planFingerprint:plan.planFingerprint,confirmCleanup:true});cleanupPlan=null;$('maintenance-apply').hidden=true;$('maintenance-summary').textContent='整理しました。';await load();channel?.postMessage('changed');});};
   $('restore').onclick=()=>{if(!restoreFile||busy)return;const saved=restoreFile,expected=revision,id=crypto.randomUUID();ask('バックアップを復元しますか？',`${$('restore-preview').textContent}\n現在の家計データを、このバックアップの内容へ切り替えます。`,async()=>{await api('/restore',{requestId:id,expectedRevision:expected,backup:saved});restoreFile=null;$('restore-file').value='';$('restore-preview').textContent='';await load();channel?.postMessage('changed');});};
-  $('login').onclick=async()=>{if(busy)return;$('login-error').textContent='';$('passkey-login-label').textContent='確認中…';setBusy(true);try{const auth=await TRoomPasskeys.authenticate('household');showSession(await api('/passkey/handoff',{handoffToken:auth.handoff.handoffToken}));await load();}catch(error){$('login-error').textContent=error.message;}finally{$('passkey-login-label').textContent='パスキーでログイン';setBusy(false);}};
-  $('logout').onclick=async()=>{if(busy)return;setBusy(true);try{await api('/logout',{});session=null;data={accounts:[],transactions:[],categories:[],snapshots:[],historical:[]};assetPoints=[];render();nav.reset();restoreFile=null;$('restore-file').value='';$('app-view').hidden=true;$('login-view').hidden=false;$('login').hidden=false;$('boot-message').textContent='パスキーでログインしてください。';channel?.postMessage('session-changed');}catch(error){$('message').textContent=error.message;}finally{setBusy(false);}};
-  $('refresh').onclick=async()=>{setBusy(true);try{await load();}catch(error){$('message').textContent=error.message;}finally{setBusy(false);}};
+  $('login').onclick=async()=>{if(busy)return;const generation=sessionGeneration;$('login-error').textContent='';$('passkey-login-label').textContent='確認中…';setBusy(true);try{const auth=await TRoomPasskeys.authenticate('household');currentGeneration(generation);showSession(await api('/passkey/handoff',{handoffToken:auth.handoff.handoffToken}));await load();}catch(error){report(error,'login-error',generation);}finally{if(generation===sessionGeneration){$('passkey-login-label').textContent='パスキーでログイン';setBusy(false);}}};
+  $('logout').onclick=async()=>{if(busy)return;setBusy(true);try{await api('/logout',{});}catch(error){if(!error.discarded)$('login-error').textContent=error.message;}finally{resetSession(true);}};
+  $('refresh').onclick=async()=>{const generation=sessionGeneration;setBusy(true);try{await load();}catch(error){report(error,'message',generation);}finally{if(generation===sessionGeneration)setBusy(false);}};
   for(const type of ['pointerdown','keydown','touchstart','wheel'])window.addEventListener(type,event=>{if(event.isTrusted)activity=Date.now();},{passive:true,capture:true});
-  channel&&(channel.onmessage=()=>{if(session)$('message').textContent='別の画面で状態が変わりました。「最新の状態に更新」で確認してください。';});
+  channel&&(channel.onmessage=event=>{if(event.data==='session-changed'){resetSession();return;}if(session)$('message').textContent='別の画面で状態が変わりました。「最新の状態に更新」で確認してください。';});
+  window.addEventListener('troom-session-expired',()=>resetSession());
+  window.addEventListener('troom-session-renewed',event=>observeExpiry(event.detail.expiresAt));
   document.addEventListener('troom:before-auto-update',event=>{if(busy||$('date-wheel-dialog').open||$('troom-calendar-dialog').open)event.preventDefault();});
   window.addEventListener('beforeunload',event=>{if(busy||[...editors].some(([id,e])=>$(id).open&&e.initial!==e.serialize())){event.preventDefault();event.returnValue='';}});
   (async()=>{try{showSession(await api('/session'));await load();}catch(error){$('boot-message').textContent=error.status===401?'パスキーでログインしてください。':error.message;$('login').hidden=false;}})();

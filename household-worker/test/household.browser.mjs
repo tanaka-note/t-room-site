@@ -6,7 +6,8 @@ import {createRequire} from 'node:module';
 import {fixture} from './fixture.js';
 import {verifyChartTouch} from './chart-touch.browser.mjs';
 import {verifyWebApp} from './web-app.browser.mjs';
-const require=createRequire(import.meta.url),{chromium}=require('../../diary-worker/node_modules/playwright');
+import {verifySessionClearing} from './session-clearing.browser.mjs';
+const require=createRequire(import.meta.url),engines=require('../../diary-worker/node_modules/playwright'),engine=process.env.TROOM_BROWSER||'chromium';
 const owner=fixture(),viewer=fixture('viewer');await owner.login();const initial=(await owner.state()).data.accounts[0];await owner.mutate('account.save',{...initial,asOf:'2026-09-01'});viewer.env.DB=owner.env.DB;await viewer.login();
 const publicDir=new URL('../public/',import.meta.url),root=new URL('../../',import.meta.url);
 const server=createServer(async(req,res)=>{try{
@@ -14,7 +15,7 @@ const server=createServer(async(req,res)=>{try{
  const file=u.pathname.startsWith('/household/')?new URL(u.pathname.slice('/household/'.length)||'index.html',publicDir):u.pathname==='/security/passkey-client.js'?new URL('security-worker/public/passkey-client.js',root):u.pathname==='/assets/pwa-auto-update.js'?new URL('assets/pwa-auto-update.js',root):null;if(!file){res.writeHead(404);res.end();return;}res.setHeader('Content-Type',file.pathname.endsWith('.css')?'text/css':file.pathname.endsWith('.js')?'text/javascript':file.pathname.endsWith('.webmanifest')?'application/manifest+json':file.pathname.endsWith('.png')?'image/png':'text/html');res.end(readFileSync(file));
 }catch{res.writeHead(500);res.end('fixture error');}});
 await new Promise(done=>server.listen(0,'127.0.0.1',done));const url=`http://127.0.0.1:${server.address().port}/household/`;
-const browser=await chromium.launch({headless:true}),screens=resolve('tmp/household-preview');mkdirSync(screens,{recursive:true});
+const browser=await engines[engine].launch({headless:true}),screens=resolve('tmp/household-preview');mkdirSync(screens,{recursive:true});
 async function moveMouse(page,...args){await page.mouse.move(...args);await page.evaluate(()=>new Promise(done=>requestAnimationFrame(done)));}
 async function chooseDate(page,id,value){
  const dialog=page.locator('#troom-calendar-dialog');
@@ -26,8 +27,10 @@ async function chooseDate(page,id,value){
 }
 
 try{
- await verifyWebApp(browser,url);
- await verifyChartTouch(browser);
+ await verifySessionClearing(browser,url);
+ if(engine==='chromium')await verifyWebApp(browser,url);
+ else console.log('SKIP Chromium installability protocol on WebKit; UI/manifest contracts run independently.');
+ await verifyChartTouch(browser,engine);
  // Summary order follows aggregated amounts, independently of the newest entry.
  for(const role of ['owner','viewer']){
  const state=await owner.state(),category=parent=>state.data.categories.find(c=>c.parent===parent).id;

@@ -22,13 +22,24 @@
     for (const el of document.querySelectorAll('button')) el.disabled = value || el.dataset.unavailable === 'true';
     for (const el of form.querySelectorAll('input,textarea')) el.readOnly = value || el.hasAttribute('data-date-wheel-mode');
   }
-  async function api(path, body, method = 'POST') {
-    const response = await fetch(`/payments/api${path}`, { method: body === undefined ? 'GET' : method, credentials: 'same-origin', headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(!document.hidden && Date.now() - activity < 60000 ? { 'X-Troom-Activity': 'foreground' } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }).catch(() => { throw new Error('通信を完了できませんでした。入力内容は保持されています。もう一度お試しください。'); });
-    const result = await response.json().catch(() => ({}));
-    if (response.status === 401) {
-      $('app-view').hidden = true; $('login-view').hidden = false; $('login').hidden = false; $('boot-message').textContent = 'パスキーでログインしてください。';
-      // Keep an open editor and its inputs in memory until the user chooses to close it.
-    }
+  let sessionGeneration=0;const controllers=new Set();
+  function clearSession(broadcast=false){
+    sessionGeneration++;for(const c of controllers)c.abort();controllers.clear();dialogs.reset();for(const d of document.querySelectorAll('dialog[open]'))d.close();
+    entries=[];summary={};currentMonth='';editing=detail=detailEntry=confirmAction=null;initial='';requestId=confirmRequestId=null;monthPage=0;pendingMarks.clear();needsRefresh=false;
+    form.reset();for(const input of document.querySelectorAll('dialog input,dialog textarea'))input.value='';form.dataset.troomDirty='false';render();
+    for(const id of ['months-title','month-items','month-pagination','operation-history','months-error','confirm-title','confirm-copy','confirm-error','calculation','form-error','message','account-name'])$(id)?.replaceChildren();
+    $('app-view').hidden=true;$('login-view').hidden=false;$('login').hidden=false;$('boot-message').textContent='パスキーでログインしてください。';setBusy(false);
+    if(broadcast)channel?.postMessage('session-changed');
+  }
+  async function api(path,body,method='POST'){
+    const generation=sessionGeneration,controller=new AbortController();controllers.add(controller);
+    try{return await requestApi(path,body,method,generation,controller.signal);}finally{controllers.delete(controller);}
+  }
+  async function requestApi(path, body, method, generation, signal) {
+    const response = await fetch(`/payments/api${path}`, { signal, method: body === undefined ? 'GET' : method, credentials: 'same-origin', headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(!document.hidden && Date.now() - activity < 60000 ? { 'X-Troom-Activity': 'foreground' } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }).catch(() => { throw new Error('通信を完了できませんでした。入力内容は保持されています。もう一度お試しください。'); });
+    if(generation!==sessionGeneration)throw new Error('ログイン状態が変わりました。');
+    if(response.status===401){clearSession();throw Object.assign(new Error('パスキーでログインしてください。'),{status:401});}
+    const result=await response.json().catch(()=>({}));if(generation!==sessionGeneration)throw new Error('ログイン状態が変わりました。');
     if (!response.ok) { const error = new Error(result.error || '処理を完了できませんでした。時間を置いて再試行してください。'); error.status = response.status; throw error; }
     return result;
   }
@@ -149,8 +160,7 @@
   };
   $('logout').onclick = async () => {
     setBusy(true); $('message').textContent = '';
-    try { await api('/logout', {}); entries = []; render(); dialogs.reset(); $('app-view').hidden = true; $('login-view').hidden = false; $('login').hidden = false; $('boot-message').textContent = 'パスキーでログインしてください。'; }
-    catch (error) { $('message').textContent = error.message; } finally { setBusy(false); }
+    try { await api('/logout', {}); }catch(error){$('login-error').textContent=error.message;}finally{clearSession(true);}
   };
 
   function button(label, action, unavailable = false) {
@@ -239,7 +249,8 @@
       try { await load(); } catch {} finally { setBusy(false); }
     }
   }
-  if (channel) channel.onmessage = () => { needsRefresh=true; refreshIfSafe(); };
+  if(channel)channel.onmessage=event=>{if(event.data==='session-changed')clearSession();else{needsRefresh=true;refreshIfSafe();}};
+  window.addEventListener('troom-session-expired',()=>clearSession());
   document.addEventListener('visibilitychange', refreshIfSafe); window.addEventListener('focus', refreshIfSafe);
   setInterval(refreshIfSafe, 60000);
 

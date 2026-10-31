@@ -268,7 +268,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         import(new URL(`diary-photo-processing.js${scriptUrl.search}`, scriptUrl).href),
         import(new URL(`diary-photo-upload.js${scriptUrl.search}`, scriptUrl).href)
       ]).then(([processing, upload]) => {
-        photoUploadManager = upload.createPhotoUploadManager({ state, api, basePath: BASE_PATH,
+        photoUploadManager = upload.createPhotoUploadManager({ state, api, basePath: BASE_PATH, onSessionExpired:()=>{resetState();showLogin("ログインの有効期限が切れました。");},
           getTargetEntryId: () => Number(elements.entryId.value || 0) || null });
         return processing;
       }).catch(error => { photoToolsPromise = null; throw error; });
@@ -2475,6 +2475,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function clearEditorPhotos() {
     for (const photo of state.editorPhotos) {
       if (photo.previewUrl) URL.revokeObjectURL(photo.previewUrl);
+      photo.removed=true;photo.originalFile=photo.displayBlob=photo.thumbnailBlob=null;photo.fileName="";
     }
     state.editorPhotos = [];
     state.editorDeletedPhotoIds.clear();
@@ -3617,16 +3618,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       }
       if (!response.ok) {
         if (response.status === 401 && generation === sessionGeneration && path !== "/login" && path !== "/passkey/handoff"
-            && !options.preserveEditor && !elements.editorDialog.open) {
+            ) {
           resetState();
           showLogin("ログインの有効期限が切れました。");
         }
-        const error = new Error(response.status === 401 && elements.editorDialog.open
-          ? "ログインの有効期限が切れました。編集内容を保持しています。別のタブで再ログインしてから再試行してください。"
-          : result.error || "処理を完了できませんでした。");
+        const error = new Error(result.error || "処理を完了できませんでした。");
         error.status = response.status;
         throw error;
       }
+      if (generation !== sessionGeneration) throw new Error("ログイン状態が変わりました。");
       return result;
     } finally {
       if (timing || options.onTiming) {
@@ -3913,6 +3913,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     setBusy(document.querySelector("#passkey-login"), false, "パスキーでログイン");
     sessionGeneration += 1;
     activeSessionContext = "";
+    elements.entryForm.reset();elements.entryContent.replaceChildren();
+    for(const input of document.querySelectorAll('dialog input,dialog textarea'))input.value='';
+    for(const key of ['detailDate','detailPublishedAt','detailTitle','detailAuthor','detailDeletion','detailTags','detailContent','deleteConfirmMessage','editorMessage','entryTagSuggestions'])elements[key]?.replaceChildren();
     elements.entryList.replaceChildren();
     elements.archiveList.replaceChildren();
     elements.tagList.replaceChildren();
