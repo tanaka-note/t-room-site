@@ -160,7 +160,7 @@
       h.id=`category-${type}-title`;section.setAttribute('aria-labelledby',h.id);section.dataset.type=type;
       heading.append(h,el('strong',money(total)));section.append(heading);
       const values=[...groups.values()].filter(g=>g.type===type).sort(byAmount);
-      if(!values.length)section.append(el('p',`この条件の${title}はありません。`,'category-empty muted small'));
+      if(!values.length)section.append(el('p','記録なし。','category-empty muted small'));
       for(const group of values){
         const details=el('details',undefined,'category-stat'),summary=el('summary');details.dataset.type=type;details.dataset.category=group.name;
         details.open=openGroups.has(JSON.stringify([type,group.name]));summary.append(categoryLabel(group.name),el('strong',money(group.total)));details.append(summary);
