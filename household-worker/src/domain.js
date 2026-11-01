@@ -124,9 +124,11 @@ export function transactionInput(input, data) {
   if (input.type === 'transfer' && (!input.accountId || !input.toAccountId || input.accountId === input.toAccountId)) throw new HttpError(400, '振替元と振替先には異なる口座を選んでください。');
   const category = data.categories.find(c => c.id === input.categoryId);
   if (input.type !== 'transfer' && (!category || category.type !== input.type)) throw new HttpError(400, '分類を確認してください。');
+  if (input.registrationOrder !== undefined && (!Number.isSafeInteger(input.registrationOrder) || input.registrationOrder < 0)) throw new HttpError(400, '明細の登録順を確認してください。');
   return { id: uuid(input.id), date: date(input.date), type: input.type, amount: amount(input.amount), description: text(input.description || '', 300, '内容', false),
     notes: text(input.notes || '', 1000, 'メモ', false), categoryId: input.type === 'transfer' ? null : category.id,
-    accountId: input.accountId || null, toAccountId: input.type === 'transfer' ? input.toAccountId : null, included: input.included !== false };
+    accountId: input.accountId || null, toAccountId: input.type === 'transfer' ? input.toAccountId : null, included: input.included !== false,
+    ...(input.registrationOrder === undefined ? {} : {registrationOrder: input.registrationOrder}) };
 }
 export function snapshotInput(input, historical = false) {
   const end = monthEnd(input?.month);
@@ -151,7 +153,11 @@ export function mutateData(data, operation, value) {
     if (!['income','expense'].includes(value?.type)) throw new HttpError(400,'収入または支出を選んでください。');
     const category = next.categories.find(c=>c.id===value.categoryId);
     const categoryId = category?.parent==='未分類' ? next.categories.find(c=>c.parent==='その他'&&c.name==='その他')?.id : value.categoryId;
-    const parsed=transactionInput({...value,categoryId},next);
+    const existing = next.transactions.find(t=>t.id===value?.id);
+    // Zero represents unknown legacy order. Keep its former ID order before new registrations.
+    // Assign on the server; the revision CAS makes simultaneous registrations atomic.
+    const registrationOrder = existing ? existing.registrationOrder ?? 0 : next.transactions.reduce((max,t)=>Math.max(max,t.registrationOrder ?? 0),0)+1;
+    const parsed=transactionInput({...value,categoryId,registrationOrder},next);
     upsert(next.transactions, {...parsed,accountId:null,toAccountId:null,included:true});
   }
   else if (operation === 'transaction.delete') next.transactions = next.transactions.filter(t => t.id !== uuid(value?.id));
@@ -219,6 +225,11 @@ export function restoreInput(input) {
       data[key].push(parsed);
     }
   }
+  const registrationOrders = new Set();
+  for (const t of data.transactions) if (t.registrationOrder > 0) {
+    if (registrationOrders.has(t.registrationOrder)) throw new HttpError(400, '明細の登録順が重複しています。');
+    registrationOrders.add(t.registrationOrder);
+  }
   const links = new Set();
   for (const account of data.accounts) if (account.historyId) {
     if (links.has(account.historyId) || ![...data.historical,...data.snapshots].some(s=>s.accounts.some(a=>a.id===account.historyId))) throw new HttpError(400, '過去チャートの対応付けを確認してください。');
@@ -229,7 +240,7 @@ export function restoreInput(input) {
 export function csv(data) {
   const escape = value => { let s = String(value ?? ''); if (typeof value === 'string' && /^[=+\-@\t\r]/.test(s)) s = `'${s}`; return `"${s.replaceAll('"', '""')}"`; };
   const rows = [['計算対象','日付','内容','金額（円）','口座','大項目','中項目','メモ','振替','振替先','ID']];
-  for (const t of [...data.transactions].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))) {
+  for (const t of [...data.transactions].sort((a, b) => a.date.localeCompare(b.date) || (a.registrationOrder ?? 0)-(b.registrationOrder ?? 0) || a.id.localeCompare(b.id))) {
     const c = data.categories.find(c => c.id === t.categoryId);
     rows.push([t.type==='transfer' ? 0 : 1,t.date,t.description,t.type === 'income' ? t.amount : -t.amount,data.accounts.find(a => a.id === t.accountId)?.name || '',c?.parent==='未分類'?'その他':c?.parent || '',c?.parent==='未分類'?'その他':c?.name || '',t.notes,t.type === 'transfer' ? 1 : 0,data.accounts.find(a => a.id === t.toAccountId)?.name || '',t.id]);
   }

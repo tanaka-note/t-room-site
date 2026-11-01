@@ -147,18 +147,49 @@
   field(accountForm,'asOf').addEventListener('change',()=>{const selected=editingAccount?.balances?.find(b=>b.date===field(accountForm,'asOf').value);if(selected){fillBalance(selected.items);$('balance-history').value=selected.date;}else $('balance-history').value='';markDirty();});
   $('add-account').onclick=()=>openAccount();$('add-item').onclick=()=>{itemRow();accountEditor.requestId=null;markDirty();};
   function cell(row,value,cls=''){const td=el('td',value,cls);row.append(td);return td;}
+  function categoryLabel(name){
+    const label=el('span',undefined,'category-label'),mark=el('span',undefined,'category-mark');
+    mark.setAttribute('aria-hidden','true');label.append(mark,el('span',name));return label;
+  }
+  function renderCategorySummary(groups,income,expense){
+    const root=$('category-summary'),openGroups=new Set([...root.querySelectorAll('details[open]')].map(n=>JSON.stringify([n.dataset.type,n.dataset.category])));
+    const byAmount=(a,b)=>b.total-a.total||a.name.localeCompare(b.name,'ja');
+    root.replaceChildren();
+    for(const [type,title,total]of [['income','収入',income],['expense','支出',expense]]){
+      const section=el('section',undefined,'panel category-summary-group'),heading=el('div',undefined,'category-summary-heading'),h=el('h4',title);
+      h.id=`category-${type}-title`;section.setAttribute('aria-labelledby',h.id);section.dataset.type=type;
+      heading.append(h,el('strong',money(total)));section.append(heading);
+      const values=[...groups.values()].filter(g=>g.type===type).sort(byAmount);
+      if(!values.length)section.append(el('p',`この条件の${title}はありません。`,'category-empty muted small'));
+      for(const group of values){
+        const details=el('details',undefined,'category-stat'),summary=el('summary');details.dataset.type=type;details.dataset.category=group.name;
+        details.open=openGroups.has(JSON.stringify([type,group.name]));summary.append(categoryLabel(group.name),el('strong',money(group.total)));details.append(summary);
+        const list=el('ul',undefined,'category-breakdown');list.setAttribute('aria-label',`${group.name}の内訳`);
+        for(const child of [...group.children.values()].sort(byAmount)){const row=el('li');row.append(categoryLabel(child.name),el('span',money(child.total),'numeric'));list.append(row);}
+        details.append(list);section.append(details);
+      }
+      root.append(section);
+    }
+  }
   function renderTransactions(){
     const period=$('period').value,year=$('period-mode').value==='year',prefix=year?period.slice(0,4):period,query=$('search').value.normalize('NFKC').toLocaleLowerCase();
-    const rows=data.transactions.filter(t=>{const c=categoryFor(t);return t.date.startsWith(prefix)&&(!$('category-filter').value||c?.parent===$('category-filter').value)&&      (!query||(t.description+' '+t.notes+' '+(c?.parent||'')+' '+(c?.name||'')).normalize('NFKC').toLocaleLowerCase().includes(query));}).sort((a,b)=>b.date.localeCompare(a.date)||a.id.localeCompare(b.id));
+    const rows=data.transactions.filter(t=>{const c=categoryFor(t);return t.date.startsWith(prefix)&&(!$('category-filter').value||c?.parent===$('category-filter').value)&&      (!query||(t.description+' '+t.notes+' '+(c?.parent||'')+' '+(c?.name||'')).normalize('NFKC').toLocaleLowerCase().includes(query));}).sort((a,b)=>b.date.localeCompare(a.date)||(a.registrationOrder??0)-(b.registrationOrder??0)||a.id.localeCompare(b.id));
     const criteria=JSON.stringify([prefix,query,$('category-filter').value]);if(criteria!==entryCriteria){visibleEntries=200;entryCriteria=criteria;}
     let index=0,income=0,expense=0;const groups=new Map(),root=$('entries'),fragment=document.createDocumentFragment();
-    for(const t of rows){const c=categoryFor(t),legacy=t.type==='transfer';if(!legacy){if(t.type==='income')income+=t.amount;else expense+=t.amount;const key=(t.type==='income'?'収入':'支出')+' / '+(c?.parent||'その他');groups.set(key,(groups.get(key)||0)+t.amount);}
+    for(const t of rows){const c=categoryFor(t),legacy=t.type==='transfer';if(!legacy){
+        if(t.type==='income')income+=t.amount;else expense+=t.amount;
+        const name=c?.parent||'その他',key=JSON.stringify([t.type,name]);
+        if(!groups.has(key))groups.set(key,{name,type:t.type,total:0,children:new Map()});
+        const group=groups.get(key),childKey=c?.id||'other';group.total+=t.amount;
+        if(!group.children.has(childKey))group.children.set(childKey,{name:c?.name||'その他',total:0});
+        group.children.get(childKey).total+=t.amount;
+      }
       if(index++>=visibleEntries)continue;
       const tr=el('tr');tr.dataset.id=t.id;cell(tr,t.date);cell(tr,t.description||'（内容なし）','description');cell(tr,legacy?'過去の振替（集計外）':(c?.parent||'その他')+' / '+(c?.name||'その他'));cell(tr,(t.type==='income'?'＋':t.type==='expense'?'−':'')+money(t.amount),'numeric');cell(tr,t.notes,'notes');
       if(session?.role==='owner'){const actions=cell(tr,undefined,'row-actions');if(!legacy)actions.append(button('編集',()=>openEntry(t)));actions.append(button('削除',()=>{const expected=revision,id=crypto.randomUUID();ask('この明細を削除しますか？',t.date+'\n'+t.description+'\n'+money(t.amount),()=>mutate('transaction.delete',{id:t.id},expected,id));},'danger'));}
       ['日付','内容','分類','金額','メモ','操作'].forEach((label,i)=>{if(tr.cells[i])tr.cells[i].dataset.label=label;});fragment.append(tr);
     }
-    root.replaceChildren(fragment);$('more-entries').hidden=rows.length<=visibleEntries;$('entry-display').textContent=rows.length?`${Math.min(rows.length,visibleEntries)} / ${rows.length}件を表示`:'';$('income').textContent=money(income);$('expense').textContent=money(expense);$('net').textContent=money(income-expense);$('empty-entries').hidden=rows.length>0;$('entry-count').textContent=rows.length+'件';$('category-summary').replaceChildren();for(const [name,value]of [...groups].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0],'ja'))){const div=el('div',undefined,'category-stat');div.append(el('span',name),el('strong',money(value)));$('category-summary').append(div);}
+    root.replaceChildren(fragment);$('more-entries').hidden=rows.length<=visibleEntries;$('entry-display').textContent=rows.length?`${Math.min(rows.length,visibleEntries)} / ${rows.length}件を表示`:'';$('income').textContent=money(income);$('expense').textContent=money(expense);$('net').textContent=money(income-expense);$('empty-entries').hidden=rows.length>0;$('entry-count').textContent=rows.length+'件';renderCategorySummary(groups,income,expense);
   }
   function renderAccounts(){const root=$('accounts');root.replaceChildren();let total=0;for(const a of data.accounts){if(!a.archived)total+=totals(a);const card=el('article',undefined,'panel account-card'),header=el('header'),title=el('div');title.append(el('h3',a.name),el('span',`${a.type}${a.archived?'・保管済み':''}`,'muted small'));header.append(title);if(session?.role==='owner')header.append(button('編集',()=>openAccount(a)));card.append(header,el('p',money(totals(a)),'total'),el('p',a.balances?.length?`${a.balances.at(-1).date} 時点`:'基準日未入力','muted small'));for(const i of a.items){const row=el('div',undefined,'item');row.append(el('span',i.name),el('strong',money(i.amount)));card.append(row);}root.append(card);}$('current-assets').textContent=money(total);$('empty-accounts').hidden=data.accounts.length>0;}
   function points(){return assetPoints;}
