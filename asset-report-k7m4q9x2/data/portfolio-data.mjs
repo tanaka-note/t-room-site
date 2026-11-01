@@ -1,6 +1,6 @@
 export default {
   "schemaVersion": 1,
-  "period": "2026-10-23",
+  "period": "2026-10-24",
   "basePrincipal": 6000000,
   "realizedProfit": {
     "name": "投資信託売却益",
@@ -371,6 +371,11 @@ export default {
       "period": "2026-10-23",
       "basePrincipal": 6000000,
       "rawMarketValue": 6513782
+    },
+    {
+      "period": "2026-10-24",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6485839
     }
   ],
   "assets": [
@@ -459,7 +464,7 @@ export default {
       "name": "ビットコイン",
       "category": "ビットコイン",
       "costBasis": 2500000,
-      "marketValue": 2073562,
+      "marketValue": 2045619,
       "color": "#a98cff"
     }
   ]
