@@ -473,6 +473,30 @@
       "deployTarget": "t-room-household",
       "deployCwd": "household-worker",
       "deployCommand": "pnpm run deploy"
+    },
+    {
+      "id": "portfolio",
+      "name": "資産運用報告（編集対応）",
+      "publicUrls": [
+        "https://tanaka-note.com/asset-report/"
+      ],
+      "entrypoints": [
+        "portfolio-worker/public/index.html"
+      ],
+      "buildRoots": [
+        "portfolio-worker/public"
+      ],
+      "buildFiles": [
+        "security-worker/public/passkey-client.js"
+      ],
+      "buildMode": "content-hash",
+      "serviceWorker": null,
+      "serviceWorkerUrl": null,
+      "manifest": "portfolio-worker/public/manifest.webmanifest",
+      "twa": null,
+      "deployTarget": "t-room-portfolio",
+      "deployCwd": "portfolio-worker",
+      "deployCommand": "pnpm run deploy"
     }
   ],
   "excludedHtml": [

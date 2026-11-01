@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export const root = fileURLToPath(new URL('../', import.meta.url));
-export const services = ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments', 'household', 'calendar'];
+export const services = ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments', 'household', 'calendar', 'portfolio'];
 export const android = ['android-tcloud', 'android-tcloud-twa', 'android-diary-twa', 'android-ai-chat', 'android-calendar'];
 export const targets = ['tooling', 'site', ...services, 'backup', 'auth', 'container-unit', ...android];
 const registry = JSON.parse(readFileSync(new URL('../web-apps.json', import.meta.url), 'utf8'));
@@ -51,6 +51,7 @@ export function commands(target) {
     ],
     ai: [{ cwd: 'ai-worker', script: 'test' }],
     household: [{ cwd: 'household-worker', script: 'test' }],
+    portfolio: [{ cwd: 'portfolio-worker', script: 'test' }],
     payments: [{ cwd: 'payments-worker', script: 'test' }],
     inventory: [{ cwd: 'inventory-worker', script: 'test' }],
     health: [{ cwd: 'health-worker', script: 'test' }],
@@ -64,6 +65,7 @@ export function commands(target) {
 }
 
 export function browserTests(target) {
+  if (target === 'portfolio') return ['portfolio-worker/test/portfolio.browser.mjs'];
   if (target === 'household') return ['household-worker/test/household.browser.mjs', 'diary-worker/tests/browser/passkey-account-dialog.mjs'];
   if (target === 'payments') return ['payments-worker/test/payments.browser.mjs'];
   if (target === 'health') return ['health-worker/test/health.browser.mjs'];
@@ -159,7 +161,7 @@ export function installDirectories(selected) {
   for (const target of selected) {
     if (['site', 'diary', 'calendar'].includes(target)) dirs.add('security-worker');
     if (services.includes(target) || target === 'backup') dirs.add(`${target}-worker`);
-    if (['tooling', 'site', 'cloud', 'security', 'diary', 'billing', 'health', 'payments', 'household', 'auth'].includes(target)) dirs.add('diary-worker');
+    if (['tooling', 'site', 'cloud', 'security', 'diary', 'billing', 'health', 'payments', 'household', 'portfolio', 'auth'].includes(target)) dirs.add('diary-worker');
     if (target === 'auth') for (const s of ['security', 'cloud', 'billing', 'ai']) dirs.add(`${s}-worker`);
   }
   return [...dirs];

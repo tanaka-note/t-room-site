@@ -59,7 +59,8 @@ const SERVICE_REGISTRY = Object.freeze({
   payments: Object.freeze({ displayName: "支払明細", binding: "PAYMENTS_AUTH" }),
   household: Object.freeze({ displayName: "家計簿", binding: "HOUSEHOLD_AUTH" }),
   health: Object.freeze({ displayName: "体調管理", binding: "HEALTH_AUTH" }),
-  calendar: Object.freeze({ displayName: "カレンダー", binding: "CALENDAR_AUTH" })
+  calendar: Object.freeze({ displayName: "カレンダー", binding: "CALENDAR_AUTH" }),
+  portfolio: Object.freeze({ displayName: "資産運用報告", binding: "PORTFOLIO_AUTH" })
 });
 const PRIMARY_ADMIN_CORE_LINKS = new Set([
   "cloud\u0000admin\u0000",
@@ -78,7 +79,7 @@ const REGISTERED_IDENTITY_AUDIT_EVENTS = Object.freeze([
   "session_resume"
 ]);
 const ACTIVE_SESSION_START_EVENTS = new Set(["password_login_success", "passkey_login_success"]);
-const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "health", "payments", "household", "calendar"]);
+const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "health", "payments", "household", "calendar", "portfolio"]);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -1809,10 +1810,10 @@ async function validateServiceLinks(env, input, { identityId = null, admin = nul
       }
       requireFreshSecurityAdmin(admin);
     }
-    if (service === "household") {
+    if (["household", "portfolio"].includes(service)) {
       if (admin?.identityId !== PRIMARY_ADMIN_ID
         || (accountId === "owner" && (invitation || identityId !== PRIMARY_ADMIN_ID))) {
-        throw new HttpError(403, "家計簿の連携は第一管理者が設定し、田中宏知の編集用は本人だけが利用できます。");
+        throw new HttpError(403, `${SERVICE_REGISTRY[service].displayName}の連携は第一管理者が設定し、元の編集用は本人だけが利用できます。`);
       }
       requireFreshSecurityAdmin(admin);
     }
@@ -2317,7 +2318,7 @@ function endActiveSessionsStatement(env, reason, filter) {
 }
 
 function normalizeAuditEvent(input) {
-  const service = ["security", "cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "health", "payments", "household", "calendar"].includes(input?.service) ? input.service : "security";
+  const service = ["security", "cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "health", "payments", "household", "calendar", "portfolio"].includes(input?.service) ? input.service : "security";
   const outcome = ["success", "failure", "blocked", "cancelled", "info"].includes(input?.outcome) ? input.outcome : "info";
   const authMethod = ["password", "passkey", "system"].includes(input?.authMethod) ? input.authMethod : null;
   return {

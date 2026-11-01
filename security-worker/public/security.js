@@ -862,7 +862,7 @@
       .map((item) => ({
         ...item,
         targets: (item.targets || [])
-          .filter((target) => item.id !== "household" || target.accountId !== "owner" || (containerSelector !== "#link-rows" && state.selectedIdentity?.identity.id === "primary-admin"))
+          .filter((target) => !["household", "portfolio"].includes(item.id) || target.accountId !== "owner" || (containerSelector !== "#link-rows" && state.selectedIdentity?.identity.id === "primary-admin"))
           .filter((target) => !excludedKeys.has(serviceLinkKey(target.service, target.accountId, target.rootFolderId)))
       })).filter((item) => item.targets.length);
     if (!availableServices.length) return false;

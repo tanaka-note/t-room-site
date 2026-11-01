@@ -83,7 +83,7 @@ jobs:
           VERIFY_TARGET: ${{ matrix.target }}
         run: node tools/install-verify-dependencies.mjs "$VERIFY_TARGET"
       - name: Keep Ubuntu browser dependency downloads bounded
-        if: contains(fromJSON('["tooling","site","cloud","security","diary","billing","health","payments","household","inventory"]'), matrix.target)
+        if: contains(fromJSON('["tooling","site","cloud","security","diary","billing","health","payments","household","portfolio","inventory"]'), matrix.target)
         run: |
           # The Azure mirror stalled installs past the job limit. Preserve suites,
           # components and Signed-By; use the official archive over HTTPS.
@@ -93,7 +93,7 @@ jobs:
           done
           printf '%s\n' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' 'Acquire::Retries "1";' | sudo tee /etc/apt/apt.conf.d/99troom-network >/dev/null
       - name: Install Chromium only when used
-        if: contains(fromJSON('["tooling","site","cloud","security","diary","billing","health","payments","household"]'), matrix.target)
+        if: contains(fromJSON('["tooling","site","cloud","security","diary","billing","health","payments","household","portfolio"]'), matrix.target)
         run: pnpm --dir diary-worker exec playwright install --with-deps chromium
       - name: Install Inventory Chromium
         if: matrix.target == 'inventory'

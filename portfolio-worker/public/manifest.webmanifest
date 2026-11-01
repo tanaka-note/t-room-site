@@ -1,0 +1,36 @@
+{
+  "name": "資産運用報告ページ",
+  "short_name": "資産報告",
+  "description": "最新の資産状況と資産推移を確認するページ",
+  "id": "/asset-report/",
+  "start_url": "/asset-report/",
+  "scope": "/asset-report/",
+  "display": "standalone",
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
+  "orientation": "any",
+  "background_color": "#07090d",
+  "theme_color": "#07090d",
+  "icons": [
+    {
+      "src": "/asset-report/icons/icon-192.png?v=20260812-2",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/asset-report/icons/icon-512.png?v=20260812-2",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/asset-report/icons/icon-maskable-512.png?v=20260812-2",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

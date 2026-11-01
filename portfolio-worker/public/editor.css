@@ -1,0 +1,12 @@
+[hidden]{display:none!important}
+.login-panel{width:min(520px,calc(100% - 32px));margin:12vh auto;padding:32px;border:1px solid #253044;border-radius:20px;background:#11151e;line-height:1.8}
+button,input,select{font:inherit;color:inherit;border:1px solid #364256;border-radius:9px;background:#151c28;padding:10px 14px}
+button{cursor:pointer}button:hover{border-color:#52e6aa}button:disabled{opacity:.55;cursor:wait}a{color:#52e6aa}
+.account-toolbar,.editor-actions,.date-fields{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.account-toolbar{margin:0 0 20px}.account-toolbar span{margin-right:auto;color:#a8b2c4}
+.view-date{display:flex;align-items:center;gap:12px;margin-bottom:20px}.view-date select{max-width:100%}
+#app-message:not(:empty){padding:12px;border-left:3px solid #52e6aa;white-space:pre-line}
+#editor-panel{margin-bottom:24px}#editor-panel h2{margin-top:0}.date-fields label{display:grid;gap:6px;flex:1;min-width:190px}
+#editor-form p{color:#a8b2c4;line-height:1.7}.asset-editor{display:grid;grid-template-columns:minmax(120px,2fr) minmax(100px,1fr) minmax(110px,1fr) auto;gap:10px;padding:14px 0;border-bottom:1px solid #253044}.asset-editor label{display:grid;gap:5px;color:#a8b2c4;font-size:.85rem}.asset-editor input,.asset-editor select{width:100%;min-width:0;color:#f3f6fb}.asset-editor button{align-self:end}.editor-actions{margin-top:20px}#save-button{background:#144633;border-color:#52e6aa}
+.holdings-panel .column-name{width:65%}.holdings-panel .column-market-value{width:35%}
+#legacy-total-label{display:grid;gap:8px;max-width:350px}
+@media(max-width:600px){.asset-editor{grid-template-columns:1fr 1fr}.asset-editor label:first-child{grid-column:1/-1}.asset-editor button{grid-column:1/-1}.account-toolbar button{font-size:.82rem;padding:9px}.view-date{flex-wrap:wrap}}
