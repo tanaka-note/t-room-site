@@ -106,7 +106,7 @@ test('status detects missed schedules, stale running jobs and recovery without e
 test('backup Worker has no public route, file bodies, restored sessions or production deploy script', () => {
   const config = JSON.parse(readFileSync(new URL('../wrangler.jsonc', import.meta.url)));
   assert.equal(config.workers_dev, false); assert.equal(config.preview_urls, false); assert.equal(config.routes, undefined);
-  assert.deepEqual(config.r2_buckets.map(b => b.bucket_name), ['t-room-service-backups']);
+  assert.deepEqual(config.r2_buckets.map(b => b.bucket_name), ['t-room-service-backups','t-room-diary-backups']);
   assert.equal(SERVICES.downloader.tables.length, 1);
   assert.equal(SERVICES.downloader.tables[0].name, 'downloader_usage_daily');
 });

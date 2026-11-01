@@ -1,8 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { productionPlan, manualVerification, assertActionsRelease, uploadedVersion, assertDeployedVersion, assertVersionSettings, assertDenied, checkTokenScope } from './release-actions.mjs';
+import { productionPlan, manualVerification, assertActionsRelease, uploadedVersion, assertDeployedVersion, assertVersionSettings, assertDenied, checkTokenScope, assertD1ExportReadiness } from './release-actions.mjs';
 import { affected } from './verify-plan.mjs';
+
+test('Diary cannot switch to D1 exports before the central Workflow and Secret are provisioned',()=>{
+  const settings={bindings:[{type:'workflow',name:'D1_BACKUPS',workflow_name:'t-room-d1-backup'},
+    {type:'secret_text',name:'D1_EXPORT_API_TOKEN'}, {type:'plain_text',name:'D1_EXPORT_ACCOUNT_ID',text:'0'.repeat(32)},
+    {type:'d1',name:'DIARY_DB',id:'e4677259-db4b-4562-ad82-fe542a1edb75'},
+    {type:'r2_bucket',name:'DIARY_BACKUP',bucket_name:'t-room-diary-backups'}]};
+  assert.doesNotThrow(()=>assertD1ExportReadiness(settings));
+  for(const binding of settings.bindings)assert.throws(()=>assertD1ExportReadiness({bindings:settings.bindings.filter(b=>b!==binding)}),/Prepare t-room-backup/);
+  assert.throws(()=>assertD1ExportReadiness({bindings:settings.bindings.map(b=>b.type==='workflow'?{...b,workflow_name:'wrong'}:b)}));
+});
 
 test('production selects changed services only, never PR/branch/docs/tooling or disabled runs', () => {
   const context = { event: 'push', ref: 'refs/heads/main', enabled: true };

@@ -55,12 +55,21 @@
       "binding": "HOUSEHOLD_DB",
       "database_name": "household-db",
       "database_id": "cb41cbc5-53c8-4868-95e1-94d92b7b5289"
+    },
+    {
+      "binding": "DIARY_DB",
+      "database_name": "diary-db",
+      "database_id": "e4677259-db4b-4562-ad82-fe542a1edb75"
     }
   ],
   "r2_buckets": [
     {
       "binding": "BACKUP",
       "bucket_name": "t-room-service-backups"
+    },
+    {
+      "binding": "DIARY_BACKUP",
+      "bucket_name": "t-room-diary-backups"
     }
   ],
   "services": [
@@ -81,5 +90,18 @@
         "queue": "t-room-security-audit"
       }
     ]
+  },
+  "vars": {
+    "D1_EXPORT_ACCOUNT_ID": "277e86de986181599ce0db2b3ca1f186"
+  },
+  "workflows": [
+    {
+      "binding": "D1_BACKUPS",
+      "name": "t-room-d1-backup",
+      "class_name": "D1BackupWorkflow"
+    }
+  ],
+  "limits": {
+    "cpu_ms": 300000
   }
 }

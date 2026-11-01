@@ -1,27 +1,27 @@
-const CACHE_NAME = "troom-diary-shell-diary-a06a369b0077";
+const CACHE_NAME = "troom-diary-shell-diary-c48f9ac11890";
 const STATIC_ASSETS = [
-  "/diary/diary-photo-processing.js?v=diary-a06a369b0077",
-  "/diary/diary-photo-upload.js?v=diary-a06a369b0077",
-  "/diary/diary-photo-viewer.js?v=diary-a06a369b0077",
-  "/diary/diary-rich-text.js?v=diary-a06a369b0077",
-  "/diary/diary-weather.js?v=diary-a06a369b0077",
+  "/diary/diary-photo-processing.js?v=diary-c48f9ac11890",
+  "/diary/diary-photo-upload.js?v=diary-c48f9ac11890",
+  "/diary/diary-photo-viewer.js?v=diary-c48f9ac11890",
+  "/diary/diary-rich-text.js?v=diary-c48f9ac11890",
+  "/diary/diary-weather.js?v=diary-c48f9ac11890",
   "/diary/icons/icon-192-v4.png?v=5",
   "/diary/icons/icon-512-v4.png?v=5",
   "/diary/icons/icon-maskable-512-v4.png?v=5",
   "/diary/icons/apple-touch-icon-v3.png?v=4",
   "/diary/icons/favicon-64-v4.png?v=5",
-  "/diary/diary-search.js?v=diary-a06a369b0077",
-  "/diary/dialog-navigation.js?v=diary-a06a369b0077",
-  "/diary/diary.js?v=diary-a06a369b0077",
-  "/diary/troom-date-picker.js?v=diary-a06a369b0077",
-  "/assets/pwa-auto-update.js?v=diary-a06a369b0077",
-  "/diary/diary-bootstrap.js?v=diary-a06a369b0077",
-  "/diary/diary.css?v=diary-a06a369b0077",
-  "/diary/investment.css?v=diary-a06a369b0077",
-  "/diary/investment.js?v=diary-a06a369b0077",
-  "/diary/manifest.webmanifest?v=diary-a06a369b0077",
-  "/diary/troom-date-picker.css?v=diary-a06a369b0077",
-  "/security/passkey-client.js?v=diary-a06a369b0077"
+  "/diary/diary-search.js?v=diary-c48f9ac11890",
+  "/diary/dialog-navigation.js?v=diary-c48f9ac11890",
+  "/diary/diary.js?v=diary-c48f9ac11890",
+  "/diary/troom-date-picker.js?v=diary-c48f9ac11890",
+  "/assets/pwa-auto-update.js?v=diary-c48f9ac11890",
+  "/diary/diary-bootstrap.js?v=diary-c48f9ac11890",
+  "/diary/diary.css?v=diary-c48f9ac11890",
+  "/diary/investment.css?v=diary-c48f9ac11890",
+  "/diary/investment.js?v=diary-c48f9ac11890",
+  "/diary/manifest.webmanifest?v=diary-c48f9ac11890",
+  "/diary/troom-date-picker.css?v=diary-c48f9ac11890",
+  "/security/passkey-client.js?v=diary-c48f9ac11890"
 ];
 // Only exact build URLs for public code/styles/icons may bypass the network.
 // Investment assets remain behind their server-side authorization checks.

@@ -35,7 +35,7 @@ test('Household joins the existing private daily/monthly backup and restores act
     assert.ok(audit.events.some(e=>e.service==='household'&&e.eventType==='backup_succeeded'));
     const snapshot=await getBackupSnapshot({...env,SECURITY_DB:{prepare(){return{bind(){return{async all(){return{results:[]};}};}};}}},false,null);
     const item=snapshot.services.find(s=>s.id==='household');assert.equal(item.label,'家計簿');assert.equal(item.daily.length,1);assert.equal(item.monthly.length,1);
-    const config=JSON.parse(readFileSync(new URL('../wrangler.jsonc',import.meta.url),'utf8'));assert.equal(config.d1_databases.find(d=>d.binding==='HOUSEHOLD_DB').database_name,'household-db');assert.deepEqual(config.r2_buckets,[{binding:'BACKUP',bucket_name:'t-room-service-backups'}]);
+    const config=JSON.parse(readFileSync(new URL('../wrangler.jsonc',import.meta.url),'utf8'));assert.equal(config.d1_databases.find(d=>d.binding==='HOUSEHOLD_DB').database_name,'household-db');assert.deepEqual(config.r2_buckets,[{binding:'BACKUP',bucket_name:'t-room-service-backups'},{binding:'DIARY_BACKUP',bucket_name:'t-room-diary-backups'}]);
   }finally{restored?.db.close();db.close();}
 });
 

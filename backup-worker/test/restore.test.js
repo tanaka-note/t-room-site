@@ -4,12 +4,14 @@ import { database,d1,Bucket,recorder } from './fixtures.mjs';
 import { backupService } from '../src/backup.js';
 import { SERVICES } from '../src/registry.js';
 import { restoreIsolated } from '../tools/restore-isolated.mjs';
+import { saveExport } from '../src/export-backup.js';
+import { exportEnv, exportFetcher } from './export-fixtures.mjs';
 
 const insert=(db,t,row)=>db.prepare(`INSERT INTO ${t} (${Object.keys(row).join(',')}) VALUES (${Object.keys(row).map(()=>'?').join(',')})`).run(...Object.values(row));
 const b64=b=>Buffer.from(b).toString('base64');
 const un64=s=>Buffer.from(s,'base64');
 
-test('stored R2 generations of all configured services restore nonempty business data, keys and totals in isolation',async()=>{
+for(const mode of ['legacy','export'])test(`stored R2 ${mode} generations restore nonempty business data, keys and totals in isolation`,async()=>{
   // Synthetic keys exist only in this process. This proves preservation of the
   // encryption relationships, not production PRF/physical-device recovery.
   const aes=await crypto.subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);
@@ -76,9 +78,15 @@ test('stored R2 generations of all configured services restore nonempty business
             insert(source,'calendar_entities',{account_id:'main',owner_identity:kind==='settings'?'primary-admin':'',kind,id,payload:JSON.stringify(payload),version:3});
           }
         }
-        const state=await backupService({[SERVICES[service].binding]:d1(source),BACKUP:bucket,...recorder()},service,Date.parse('2026-10-25T00:00:00Z'),async()=>{});
-        assert.equal(state.state,'ok',service);
-        restored[service]=(await restoreIsolated(bucket,`d1/${service}/v2/daily/2026-10-25.json.gz`,service)).db;
+        let key;
+        if(mode==='legacy') {
+          const state=await backupService({[SERVICES[service].binding]:d1(source),BACKUP:bucket,...recorder()},service,Date.parse('2026-10-25T00:00:00Z'),async()=>{});
+          assert.equal(state.state,'ok',service);key=`d1/${service}/v2/daily/2026-10-25.json.gz`;
+        }else{
+          const mock=exportFetcher(source,service);
+          key=(await saveExport(exportEnv(service,d1(source),bucket),service,Date.parse('2026-10-25T00:00:00Z'),{fetcher:mock.fetcher,sleep:async()=>{}})).daily;
+        }
+        restored[service]=(await restoreIsolated(bucket,key,service)).db;
       } finally {source.close();}
     }
     assert.equal(restored.inventory.prepare('SELECT stock FROM inventory_items').get().stock,7,'no trigger replay doubles stock');

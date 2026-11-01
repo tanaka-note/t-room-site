@@ -4,6 +4,7 @@ import { backupPhotos, restorePhotos } from './photo-backup.js';
 import { prune as pruneVerified } from '../../backup-worker/src/backup.js';
 import { reportRun } from '../../backup-worker/src/monitor.js';
 import { assertSchema } from '../../backup-worker/src/schema-guard.js';
+import { dispatchBackup } from '../../backup-worker/src/dispatch.js';
 const BACKUP_FORMAT_VERSION = 8;
 const LEGACY_BACKUP_FORMAT_VERSION = 2;
 const DAILY_RETENTION = 30;
@@ -175,6 +176,12 @@ async function runDiaryBackupUnlocked(env, nowMs) {
 }
 
 async function runScheduledDiaryBackup(env, nowMs = Date.now(), { sleep = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
+  if (env.D1_BACKUPS) {
+    await dispatchBackup(env, 'diary', nowMs);
+    // Only dispatch completed here. The Workflow owns the actual success/failure
+    // audit; photo jobs remain entirely independent and unchanged.
+    return { complete: true, scheduled: true };
+  }
   const runId = crypto.randomUUID();
   await reportRun(env, 'diary', runId, 'started', {}, nowMs);
   for (let attempt = 1; attempt <= 3; attempt++) {
