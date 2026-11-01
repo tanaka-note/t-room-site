@@ -33,12 +33,14 @@ export async function verifyCategorySummary(browser,url,initial,chooseDate,scree
    await page.locator('#search').fill('No matching sample');assert.deepEqual(await names(),[]);assert.equal(await page.locator('#category-summary .category-empty').count(),2);
    await page.locator('#search').fill('');await page.locator('#category-filter').selectOption('');
 
-   // Order follows dates first, registration second, and only unknown legacy records use IDs.
-   state.data.transactions=[{...entry('a-new','2026-09-01','食費',10),registrationOrder:3},{...entry('z-first','2026-09-01','食費',10),registrationOrder:1},{...entry('middle','2026-09-03','食費',10),registrationOrder:2},entry('old-z','2026-09-01','食費',10),entry('old-a','2026-09-01','食費',10)];
-   await page.locator('#refresh').click();await page.waitForFunction(()=>document.querySelector('#entry-count').textContent==='5件');
-   assert.deepEqual(await page.locator('#entries tr').evaluateAll(nodes=>nodes.map(n=>n.dataset.id)),['middle','old-a','old-z','z-first','a-new']);
+   // Dates ascend (1 -> 2 -> 3 -> 5); backdated registrations append within their date.
+   // Only unknown legacy records use their former ID order.
+   state.data.transactions=[{...entry('a-new','2026-09-01','食費',10),registrationOrder:3},{...entry('z-first','2026-09-01','食費',10),registrationOrder:1},{...entry('middle','2026-09-03','食費',10),registrationOrder:2},entry('old-z','2026-09-01','食費',10),entry('old-a','2026-09-01','食費',10),{...entry('y-two-first','2026-09-02','食費',10),registrationOrder:4},{...entry('b-two-second','2026-09-02','食費',10),registrationOrder:5},{...entry('c-two-backdated','2026-09-02','食費',10),registrationOrder:6},{...entry('five','2026-09-05','食費',10),registrationOrder:7}];
+   const expectedOrder=['old-a','old-z','z-first','a-new','y-two-first','b-two-second','c-two-backdated','middle','five'];
+   await page.locator('#refresh').click();await page.waitForFunction(()=>document.querySelector('#entry-count').textContent==='9件');
+   assert.deepEqual(await page.locator('#entries tr').evaluateAll(nodes=>nodes.map(n=>n.dataset.id)),expectedOrder);
    await page.reload();await page.locator('#app-view').waitFor({state:'visible'});await chooseDate(page,'period','2026-09');
-   assert.deepEqual(await page.locator('#entries tr').evaluateAll(nodes=>nodes.map(n=>n.dataset.id)),['middle','old-a','old-z','z-first','a-new']);
+   assert.deepEqual(await page.locator('#entries tr').evaluateAll(nodes=>nodes.map(n=>n.dataset.id)),expectedOrder);
 
    // Every matching entry contributes even before pagination, including custom subcategories.
    state.data.categories.push({id:'sample-custom',parent:'食費',name:'検証用の長い独自カテゴリ名と外食の内訳',type:'expense',builtin:false});

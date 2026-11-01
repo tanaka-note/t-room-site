@@ -173,7 +173,7 @@
   }
   function renderTransactions(){
     const period=$('period').value,year=$('period-mode').value==='year',prefix=year?period.slice(0,4):period,query=$('search').value.normalize('NFKC').toLocaleLowerCase();
-    const rows=data.transactions.filter(t=>{const c=categoryFor(t);return t.date.startsWith(prefix)&&(!$('category-filter').value||c?.parent===$('category-filter').value)&&      (!query||(t.description+' '+t.notes+' '+(c?.parent||'')+' '+(c?.name||'')).normalize('NFKC').toLocaleLowerCase().includes(query));}).sort((a,b)=>b.date.localeCompare(a.date)||(a.registrationOrder??0)-(b.registrationOrder??0)||a.id.localeCompare(b.id));
+    const rows=data.transactions.filter(t=>{const c=categoryFor(t);return t.date.startsWith(prefix)&&(!$('category-filter').value||c?.parent===$('category-filter').value)&&      (!query||(t.description+' '+t.notes+' '+(c?.parent||'')+' '+(c?.name||'')).normalize('NFKC').toLocaleLowerCase().includes(query));}).sort((a,b)=>a.date.localeCompare(b.date)||(a.registrationOrder??0)-(b.registrationOrder??0)||a.id.localeCompare(b.id));
     const criteria=JSON.stringify([prefix,query,$('category-filter').value]);if(criteria!==entryCriteria){visibleEntries=200;entryCriteria=criteria;}
     let index=0,income=0,expense=0;const groups=new Map(),root=$('entries'),fragment=document.createDocumentFragment();
     for(const t of rows){const c=categoryFor(t),legacy=t.type==='transfer';if(!legacy){
