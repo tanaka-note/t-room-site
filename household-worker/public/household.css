@@ -6,6 +6,8 @@
 
 .balance-fields{margin:20px 0}
 
+#entry-display{padding-inline:.5em;overflow-wrap:anywhere}
+
 /* ME colors: supplied screenshot, plus the remaining expense category images at
    https://support.me.moneyforward.com/hc/ja/articles/900004380703. */
 .category-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
