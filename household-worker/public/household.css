@@ -6,8 +6,8 @@
 
 .balance-fields{margin:20px 0}
 
-/* Same passkey account selection and login action as Billing. */
-.troom-passkey-account-dialog{--ink:#252620;--muted:#6c6d64;--line:#dcded3;--paper:#fbfcf7;--surface:#fff;--accent:#577263}
+/* Same account selection layout and typography as Diary; retain Household colors. */
+.troom-passkey-account-dialog{--ink:#252620;--muted:#6c6d64;--line:#dcded3;--paper:#fbfcf7;--surface:#fff;--teal:#577263;font-family:"Noto Sans JP",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.7}
 .troom-passkey-account-dialog {
   --account-safe-inline: calc(1rem + max(env(safe-area-inset-left, 0px), env(safe-area-inset-right, 0px)));
   --account-safe-block: calc(1rem + max(env(safe-area-inset-top, 0px), env(safe-area-inset-bottom, 0px)));
@@ -59,9 +59,9 @@
 .troom-passkey-account-option strong { line-height: 1.4; }
 .troom-passkey-account-option small { color: var(--muted); line-height: 1.45; }
 .troom-passkey-account-option:hover,
-.troom-passkey-account-cancel:hover { background: var(--paper); border-color: var(--accent); }
+.troom-passkey-account-cancel:hover { background: var(--paper); border-color: var(--teal); }
 .troom-passkey-account-option:focus-visible,
-.troom-passkey-account-cancel:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+.troom-passkey-account-cancel:focus-visible { outline: 3px solid var(--teal); outline-offset: -3px; }
 .troom-passkey-account-cancel {
   width: 100%;
   min-height: 44px;

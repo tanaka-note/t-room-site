@@ -227,7 +227,7 @@ export const SERVICES = {
     "label": "Security Center",
     "binding": "SECURITY_DB",
     "database": "security-db",
-    "migration": "0028_independent_household_accounts.sql",
+    "migration": "0029_household_shared_accounts.sql",
     "tables": [
       {
         "name": "security_identities",

@@ -48,13 +48,13 @@
 
 表示月・明細日・残高基準日は、支払明細と同一の`TRoomDatePicker`と`TRoomDateWheel`で選ぶ。入力欄は下部ホイール、カレンダーアイコンは年・月・日の共通カレンダーへ接続する。戻る・Esc・背景・キャンセル・完了は既存のdialog navigationへ接続し、親の入力と未保存保護を維持する。コピー元と公開コピーは`web-apps.json`の`assetCopies`で管理する。日付の許容範囲は既存APIで検証する。
 
-パスキーは既存の`/security/passkey-client.js`を使用し、ログインボタンとアカウント選択dialogを請求書管理と同じCSS・アイコンで表示する。認証中はボタン内の文言だけを切り替え、キャンセル・失敗時もアイコンを維持する。認証方式、権限、handoff、セッションは変更しない。
+パスキーは既存の`/security/passkey-client.js`を使用する。アカウント選択は日記と同じ`chooseLinkDialog`、カード配置・文字組み・初期フォーカス・キーボード操作・キャンセル／Escを使用し、家計簿のブランドカラーを維持する。連携先が1件なら選択を省略し、複数なら利用可能な連携先だけを表示して、選択したlink IDのhandoffを引き換える。キャンセル時はhandoffとサービスsessionを発行しない。ログインボタンは請求書管理と同じCSS・アイコンで表示する。認証中はボタン内の文言だけを切り替え、キャンセル・失敗時もアイコンを維持する。
 
 ## 認証と共有
 
 既存Security Centerのパスキー、60秒・一回限りhandoff、サービス専用Secret、12時間rolling session、毎回のIdentity／credential／link失効確認、監査を使用する。新しい認証方式・暗号鍵管理・Passwordログインは追加しない。
 
-サービスアカウントは `owner`（田中宏知、編集可能）と `viewer`（田中宏知の共有閲覧用）、`chiharu-admin`（田中千晴、独立家計の管理用）。`owner`だけは既存 `primary-admin` Identityに限定する。追加の管理用は、そのアカウントに明示的に連携されたIdentityが利用し、同じ管理用アカウントを複数Identityへ重複割当しない。千晴の閲覧用アカウントは作成しない。既存の共有アカウントは複数Identityへ割り当てられるが、千晴のデータは参照しない。氏名は権限の根拠にしない。
+サービスアカウントは `owner`（田中宏知、編集可能）と `viewer`（田中宏知の共有閲覧用）、`chiharu-admin`（田中千晴、独立家計の管理用）。`owner`だけは既存 `primary-admin` Identityに限定する。追加の管理用と共有閲覧用は、同じアカウントを複数Identityへ明示的に連携できる。同じIdentityに登録した複数パスキーも同じ有効な連携先を利用できる。1つのIdentityとアカウントの組には有効／承認待ちの連携を1件だけ許し、解除後の再連携には新しいlink IDを発行する。Identity・パスキー・連携の停止はそれぞれに紐付くsessionへ適用し、他の利用者の連携を停止しない。千晴の閲覧用アカウントは作成しない。既存の共有閲覧用は千晴のデータを参照しない。氏名は権限の根拠にしない。
 
 サービス連携は第一管理者が直近5分以内の再認証後、既存の招待・承認・サービス連携手順で明示的に設定する。migrationはIdentity・credential・service linkを作成しない。千晴の既存Identityを使う場合も、家計簿の連携はユーザーがSecurity Centerで設定する。
 
@@ -112,6 +112,8 @@ CSVはUTF-8 BOM付き、金額は収入が正・支出が負。内容・メモ�
 ## 検証と初回公開
 
 独立家計への更新では、家計簿 `0006_independent_households.sql` とSecurity `0028_independent_household_accounts.sql` を対象D1へ適用してから対応コードを公開する。バックアップのschema許可リストも同じPRで更新するため、Backup Worker、およびバックアップ処理を組み込むSecurity・Diaryの対応版も公開する。migration前後の版が混在する間のschema不一致は従来どおり保存を停止し、許可リストの検査を迂回しない。
+
+複数Identityでの管理用共有はSecurity `0029_household_shared_accounts.sql`で、アカウント単位の排他indexをIdentity＋アカウント単位の一意indexへ置き換える。既存データ・連携状態・credential・監査履歴は変更しない。Householdとバックアップ処理を含むSecurity・Diary・Backupの対応版を揃え、共有連携の追加前にmigrationを適用する。本番migrationの適用と連携設定はPR作成には含めない。元のindexへ戻す場合は先に複数Identityへの現在の割り当てを確認する。重複がある状態で旧indexを再作成したり、連携を自動解除したりしない。
 
 ```sh
 pnpm run check

@@ -9,9 +9,10 @@ test('household date selectors use the same calendar and wheel assets as Payment
   }
 });
 
-test('passkey login and account chooser styling matches Billing',()=>{
+test('passkey account chooser matches Diary and the login button matches Billing',()=>{
   const css=readFileSync(new URL('../public/household.css',import.meta.url),'utf8'),billing=readFileSync(new URL('../../billing-worker/public/billing.css',import.meta.url),'utf8');
-  const chooser=billing.slice(billing.indexOf('.troom-passkey-account-dialog {'),billing.indexOf('/* Keep the login action'));
+  const diary=readFileSync(new URL('../../diary-worker/public/diary.css',import.meta.url),'utf8');
+  const chooser=diary.slice(diary.indexOf('.troom-passkey-account-dialog {'),diary.indexOf('mark.diary-search-match'));
   assert.ok(css.includes(chooser));
   for(const rule of billing.matchAll(/button\.passkey-login-button[^{}]*\{[^{}]*\}/g))assert.ok(css.includes(rule[0]));
 });
