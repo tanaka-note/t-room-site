@@ -161,9 +161,9 @@ export default class SecurityWorker extends WorkerEntrypoint {
   }
 
   async getBackupStatus(service) {
-    if (!['diary', 'security-audit'].includes(service)) throw new Error('UnknownBackup');
+    if (!['diary', 'diary-photos', 'diary-photo-verification', 'security-audit'].includes(service)) throw new Error('UnknownBackup');
     const result = await this.env.DB.prepare("SELECT event_id, occurred_at, event_type, details_json FROM security_audit_events WHERE target_type = 'backup' AND target_id = ? AND event_type LIKE 'backup_%' ORDER BY occurred_at DESC, event_id DESC LIMIT 40").bind(service).all();
-    return runState(result.results || [], { minute: service === 'diary' ? 25 : 41 });
+    return runState(result.results || [], { hour: service === 'diary-photo-verification' ? 11 : 3, minute: service === 'diary' ? 25 : service === 'diary-photos' ? 55 : service === 'diary-photo-verification' ? 45 : 41 });
   }
 
   async getHealthKeyBundle(input) {

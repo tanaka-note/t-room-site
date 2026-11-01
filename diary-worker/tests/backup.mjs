@@ -18,6 +18,8 @@ import {
   scheduleIndependentTasks
 } from "../src/backup.js";
 
+import { backupPhotos, resolvePhotoManifest, bindPhotoIdentity } from '../src/photo-backup.js';
+
 const projectDirectory = fileURLToPath(new URL("../", import.meta.url));
 
 const tableRows = {
@@ -65,7 +67,8 @@ const tableRows = {
     height: 800,
     created_by_id: "main-user",
     created_by_name: "利用者",
-    created_at: "2026-08-20 00:00:00"
+    created_at: "2026-08-20 00:00:00",
+    backup_identity: null
   }],
   diary_trash_scopes: [{
     id: 1,
@@ -112,14 +115,14 @@ function createDb({fail=false}={}) {
   const db=database('diary');
   db.exec('PRAGMA foreign_keys=OFF');
   for(const t of [...BACKUP_TABLES].reverse()) db.exec('DELETE FROM '+t.name);
-  for(const t of BACKUP_TABLES) for(const row of tableRows[t.name]) db.prepare('INSERT INTO '+t.name+' ('+[...t.columns,...(t.name==='diary_accounts'?['login_id']:[])].join(',')+') VALUES ('+[...t.columns,...(t.name==='diary_accounts'?['login_id']:[])].map(()=>'?').join(',')+')').run(...t.columns.map(c=>row[c]),...(t.name==='diary_accounts'?['synthetic@invalid.local']:[]));
+  for(const t of BACKUP_TABLES) for(const row of tableRows[t.name]) db.prepare('INSERT INTO '+t.name+' ('+[...t.columns,...(t.name==='diary_accounts'?['login_id']:[])].join(',')+') VALUES ('+[...t.columns,...(t.name==='diary_accounts'?['login_id']:[])].map(()=>'?').join(',')+')').run(...t.columns.map(c=>row[c] ?? null),...(t.name==='diary_accounts'?['synthetic@invalid.local']:[]));
   const api=d1(db); return api;
 }
 class MemoryBucket extends Bucket {
   putCalls=this.writes;
   failMonthlyOnce=false;
   async put(key,value,options={}) {
-    if(this.failMonthlyOnce && key.startsWith('v7/monthly/')) {this.failMonthlyOnce=false;throw new Error('temporary monthly write failure');}
+    if(this.failMonthlyOnce && key.startsWith('v8/monthly/')) {this.failMonthlyOnce=false;throw new Error('temporary monthly write failure');}
     const result=await super.put(key,value,options);
     if(result) result.options=options;
     return result;
@@ -192,7 +195,7 @@ async function migratedEmptyDatabase() {
     "0009_main_user.sql", "0010_entry_rich_text.sql", "0011_trash_scopes.sql", "0012_entry_drafts.sql",
     "0013_main_user_trash_and_media_retry.sql", "0014_diary_favorites.sql", "0015_photo_upload_staging.sql",
     "0016_entry_write_integrity.sql", "0017_diary_tag_order.sql", "0018_diary_weather.sql",
-    "0019_password_auth_policy.sql", "0020_diary_entry_time.sql", "0021_diary_last_published_at.sql"
+    "0019_password_auth_policy.sql", "0020_diary_entry_time.sql", "0021_diary_last_published_at.sql", "0022_photo_backup_identity.sql"
   ];
   for (const migration of migrations) database.exec(await readFile(new URL(migration, migrationDirectory), "utf8"));
   database.exec(`
@@ -216,8 +219,8 @@ const nearUtcMidnight = Date.parse("2026-08-19T15:30:00.000Z");
 assert.deepEqual(backupKeys(nearUtcMidnight), {
   date: "2026-08-20",
   month: "2026-08",
-  daily: "v7/daily/2026-08-20.json.gz",
-  monthly: "v7/monthly/2026-08.json.gz"
+  daily: "v8/daily/2026-08-20.json.gz",
+  monthly: "v8/monthly/2026-08.json.gz"
 });
 
 const payload = await createDiaryBackupPayload(createDb(), nearUtcMidnight);
@@ -247,23 +250,17 @@ const media = await createMediaFixture();
 const first = await runDiaryBackup({ DB: createDb(), BACKUP: bucket, MEDIA: media }, { nowMs: nearUtcMidnight });
 assert.equal(first.complete, true);
 assert.equal(first.monthlyCreated, true);
-assert.equal(first.mediaBackup.copied, 3, "only the three formal photo variants must be copied once");
-assert.equal(bucket.objects.size, 8);
-assert.equal(bucket.objects.get(first.dailyKey).options.httpMetadata.contentEncoding, "gzip");
+assert.equal(bucket.objects.size, 2);
 assert.equal(readBackup(bucket, first.dailyKey).tables.diary_photos.rowCount, 1);
-assert.equal(readBackup(bucket, first.dailyKey).mediaBackup.complete, true);
-assert.equal(bucket.objects.has(`${PHOTO_BACKUP_PREFIX}not-formal/original`), false, "staging objects outside the formal D1 ledger must not be copied");
-for (const [variant] of [["original"], ["display"], ["thumbnail"]]) {
-  assert.ok(bucket.objects.has(readBackup(bucket, first.dailyKey).mediaBackup.objects.find(o=>o.variant===variant).backupKey));
-}
+assert.equal(readBackup(bucket, first.dailyKey).backupScope, 'd1-only');
+assert.equal(readBackup(bucket, first.dailyKey).mediaBackup, undefined);
+assert.equal(bucket.writes.some(k=>k.startsWith('media/')), false);
 
 const second = await runDiaryBackup({ DB: createDb(), BACKUP: bucket, MEDIA: media }, { nowMs: nearUtcMidnight + 60_000 });
 assert.equal(second.monthlyCreated, false);
-assert.equal(second.mediaBackup.copied, 0, "differential backup must not recopy existing formal media");
-assert.equal(second.mediaBackup.existing, 3);
-assert.equal(bucket.objects.size, 8, "same-day rerun must preserve the successful generation without duplicating media objects");
-assert.equal(bucket.putCalls.filter((key) => key.startsWith("v7/daily/")).length, 1);
-assert.equal(bucket.putCalls.filter((key) => key.startsWith("v7/monthly/")).length, 1);
+assert.equal(bucket.objects.size, 2, "same-day rerun must preserve the successful generation without duplicating media objects");
+assert.equal(bucket.putCalls.filter((key) => key.startsWith("v8/daily/")).length, 1);
+assert.equal(bucket.putCalls.filter((key) => key.startsWith("v8/monthly/")).length, 1);
 
 const legacyMonthlyBucket = new MemoryBucket();
 await legacyMonthlyBucket.put("monthly/2026-08.json.gz", new Uint8Array([1]), {
@@ -361,37 +358,65 @@ assert.deepEqual(
   "v2 backups must restore every tag and assign stable order values from their stored row order"
 );
 
+const photoBackup = await backupPhotos({ BACKUP: bucket, MEDIA: media }, tableRows.diary_photos, { now: nearUtcMidnight });
+const oldV8 = structuredClone(payload);
+oldV8.tables.diary_photos.columns = oldV8.tables.diary_photos.columns.filter(c=>c!=='backup_identity');
+oldV8.tables.diary_photos.rows = oldV8.tables.diary_photos.rows.map(({backup_identity,...row})=>row);
+const oldV8Db = await migratedEmptyDatabase();
+assert.equal((await restoreDiaryBackup(new SqliteD1(oldV8Db),oldV8)).complete,true);
+assert.equal(oldV8Db.prepare('SELECT backup_identity FROM diary_photos').get().backup_identity,null);
+await assert.rejects(resolvePhotoManifest(bucket,oldV8),/MediaIdentityUnproven/);
+assert.equal(photoBackup.copied, 3);
+await assert.rejects(resolvePhotoManifest(bucket, readBackup(bucket, first.dailyKey)), /MediaIdentityUnproven/);
+const identityDb = createDb();
+const identityRow = {...tableRows.diary_photos[0]};
+for (const item of photoBackup.objects) await bindPhotoIdentity(identityDb, identityRow, item);
+const boundPayload = await createDiaryBackupPayload(identityDb, nearUtcMidnight + 86400000);
+const paired = await resolvePhotoManifest(bucket, boundPayload);
 const restoredMedia = new MemoryBucket();
-const photoRestore = await restoreFormalPhotoObjects({ BACKUP: bucket, MEDIA: restoredMedia }, readBackup(bucket, first.dailyKey));
+const photoRestore = await restoreFormalPhotoObjects({ BACKUP: bucket, MEDIA: restoredMedia }, paired);
 assert.deepEqual(photoRestore, { complete: true, restored: 3, existing: 0, missing: 0, failed: 0 });
-for (const [variant, sourceColumn] of [["original", "original_key"], ["display", "display_key"], ["thumbnail", "thumbnail_key"]]) {
-  const restoredObject = restoredMedia.objects.get(tableRows.diary_photos[0][sourceColumn]);
-  const backupObject = bucket.objects.get(readBackup(bucket, first.dailyKey).mediaBackup.objects.find(o=>o.variant===variant).backupKey);
-  assert.deepEqual(restoredObject.bytes, backupObject.bytes, `restored ${variant} must match the backup object`);
-}
-const idempotentPhotoRestore = await restoreFormalPhotoObjects({ BACKUP: bucket, MEDIA: restoredMedia }, readBackup(bucket, first.dailyKey));
-assert.equal(idempotentPhotoRestore.restored, 0);
-assert.equal(idempotentPhotoRestore.existing, 3);
+for (const item of paired.mediaBackup.objects) assert.deepEqual(restoredMedia.objects.get(item.sourceKey).bytes, bucket.objects.get(item.backupKey).bytes);
+assert.equal((await restoreFormalPhotoObjects({ BACKUP: bucket, MEDIA: restoredMedia }, paired)).existing, 3);
+const legacyV7 = { ...paired, formatVersion: 7 };
+assert.equal((await restoreFormalPhotoObjects({ BACKUP: bucket, MEDIA: new MemoryBucket() }, legacyV7)).complete, true);
+const legacyV7Db = await migratedEmptyDatabase();
+assert.equal((await restoreDiaryBackup(new SqliteD1(legacyV7Db), legacyV7)).complete, true);
 
 const retryBucket = new MemoryBucket();
 retryBucket.failMonthlyOnce = true;
 const retryMedia = await createMediaFixture();
 await assert.rejects(() => runDiaryBackup({ DB: createDb(), BACKUP: retryBucket, MEDIA: retryMedia }, { nowMs: nearUtcMidnight }), /monthly write failure/);
-assert.equal([...retryBucket.objects.keys()].filter((key) => key.startsWith("v7/monthly/")).length, 0);
+assert.equal([...retryBucket.objects.keys()].filter((key) => key.startsWith("v8/monthly/")).length, 0);
 const retry = await runDiaryBackup({ DB: createDb(), BACKUP: retryBucket, MEDIA: retryMedia }, { nowMs: nearUtcMidnight + 86_400_000 });
 assert.equal(retry.monthlyCreated, true, "a later successful run in the same month must create the missing monthly backup");
-assert.equal([...retryBucket.objects.keys()].filter((key) => key.startsWith("v7/monthly/")).length, 1);
+assert.equal([...retryBucket.objects.keys()].filter((key) => key.startsWith("v8/monthly/")).length, 1);
 
-// Incomplete photo sets must not publish generations or prune good ones.
-const incompleteMedia = await createMediaFixture();
-await incompleteMedia.delete(tableRows.diary_photos[0].original_key);
-const incompleteBucket = new MemoryBucket();
-await incompleteBucket.put('daily/2026-07-31.json.gz', new Uint8Array([7]));
-const incompleteRun = await runDiaryBackup({ DB: createDb(), BACKUP: incompleteBucket, MEDIA: incompleteMedia }, { nowMs: nearUtcMidnight });
-assert.equal(incompleteRun.complete, false);
-assert.equal(incompleteBucket.objects.has('daily/2026-07-31.json.gz'), true);
-assert.equal(incompleteBucket.objects.has(incompleteRun.dailyKey), false);
-assert.equal(incompleteBucket.objects.has(incompleteRun.monthlyKey), false);
+// Photo storage, inventory volume and failures cannot gate D1 or its retention.
+for (const mode of ['absent','unavailable','many','empty']) {
+  const db = createDb();
+  if (mode === 'many') for (let i=0;i<1000;i++) await db.prepare('INSERT INTO diary_photos SELECT ?,entry_id,file_name,content_type,original_size,original_key || ?,display_key || ?,thumbnail_key || ?,width,height,created_by_id,created_by_name,created_at,NULL FROM diary_photos LIMIT 1').bind('many-'+i,'/'+i,'/'+i,'/'+i).run();
+  if (mode === 'empty') await db.prepare('DELETE FROM diary_photos').run();
+  const isolated = new MemoryBucket();
+  await isolated.put('v7/daily/2026-07-31.json.gz', new Uint8Array([7]));
+  const put = isolated.put.bind(isolated), get=isolated.get.bind(isolated), list=isolated.list.bind(isolated);
+  isolated.get = key => { assert.ok(!key.startsWith('media/')); return get(key); };
+  isolated.put = (key,...args) => { assert.ok(!key.startsWith('media/')); return put(key,...args); };
+  isolated.list = options => { assert.ok(!options.prefix.startsWith('media/')); return list(options); };
+  const forbidden = new Proxy({}, { get() { throw new Error('Photo access forbidden'); } });
+  const result = await runDiaryBackup({ DB: db, BACKUP: isolated, MEDIA: forbidden }, { nowMs: nearUtcMidnight });
+  assert.equal(result.complete, true, mode);
+  assert.equal(isolated.objects.has('v7/daily/2026-07-31.json.gz'), true);
+}
+const retained = new MemoryBucket();
+await retained.put('daily/2020-01-01.json.gz',new Uint8Array([1]));
+await retained.put('v7/monthly/2020-01.json.gz',new Uint8Array([2]));
+for (let i=0;i<32;i++) await runDiaryBackup({ DB:createDb(), BACKUP:retained }, {nowMs:nearUtcMidnight+i*86400000});
+assert.equal([...retained.objects.keys()].filter(k=>k.startsWith('v8/daily/')).length,30);
+for(let i=0;i<13;i++) await runDiaryBackup({ DB:createDb(), BACKUP:retained }, {nowMs:Date.UTC(2024, i, 15)});
+assert.equal([...retained.objects.keys()].filter(k=>k.startsWith('v8/monthly/')).length,12);
+assert.ok(retained.objects.has('daily/2020-01-01.json.gz'));
+assert.ok(retained.objects.has('v7/monthly/2020-01.json.gz'));
 
 const originalConsoleError = console.error;
 const backupFailureLogs = [];
@@ -440,7 +465,7 @@ assert.equal(reverseSettled[1].status, "rejected");
 
 const workerSource = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
 const wrangler = JSON.parse(await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
-assert.deepEqual(wrangler.triggers.crons, ["25 18 * * *"], "the existing daily Cron must be reused");
+assert.deepEqual(wrangler.triggers.crons, ["25 18 * * *", "55 18 * * *", "45 0-2,19-23 * * *", "5,15,25,35,55 19,20 * * *"]);
 assert.ok(wrangler.r2_buckets.some((binding) => binding.binding === "MEDIA" && binding.bucket_name === "t-room-diary-media"));
 assert.ok(wrangler.r2_buckets.some((binding) => binding.binding === "BACKUP" && binding.bucket_name === "t-room-diary-backups"));
 assert.match(workerSource, /runScheduledDiaryBackup/);
