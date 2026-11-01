@@ -13,7 +13,11 @@ export async function verifyPasskeyLogin(browser,url,state){
    const page=await context.newPage(),handoffs=[],sessions=[],errors=[];
    page.on('pageerror',error=>errors.push(error.message));
    await page.addInitScript(()=>{
-    navigator.credentials.get=async()=>({id:'AQI',rawId:new Uint8Array([1,2]).buffer,type:'public-key',response:{clientDataJSON:new Uint8Array([1]).buffer,authenticatorData:new Uint8Array([2]).buffer,signature:new Uint8Array([3]).buffer},getClientExtensionResults:()=>({})});
+    Object.defineProperty(window,'PublicKeyCredential',{configurable:true,value:class {}});
+    Object.defineProperty(navigator,'credentials',{configurable:true,value:{
+     get:async()=>({id:'AQI',rawId:new Uint8Array([1,2]).buffer,type:'public-key',response:{clientDataJSON:new Uint8Array([1]).buffer,authenticatorData:new Uint8Array([2]).buffer,signature:new Uint8Array([3]).buffer},getClientExtensionResults:()=>({})}),
+     create:async()=>{throw new Error('Login must never register a credential');}
+    }});
    });
    await page.route('**/security/api/**',async route=>{
     const path=new URL(route.request().url()).pathname;
