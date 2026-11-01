@@ -1,6 +1,6 @@
 export default {
   "schemaVersion": 1,
-  "period": "2026-10-20",
+  "period": "2026-10-21",
   "basePrincipal": 6000000,
   "realizedProfit": {
     "name": "投資信託売却益",
@@ -356,6 +356,11 @@ export default {
       "period": "2026-10-20",
       "basePrincipal": 6000000,
       "rawMarketValue": 6596978
+    },
+    {
+      "period": "2026-10-21",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6698563
     }
   ],
   "assets": [
@@ -364,7 +369,7 @@ export default {
       "name": "iFナス100H無",
       "category": "米株",
       "costBasis": 2002329,
-      "marketValue": 2085137,
+      "marketValue": 2098677,
       "color": "#ff8a61"
     },
     {
@@ -372,7 +377,7 @@ export default {
       "name": "iSNIFTY50",
       "category": "インド株",
       "costBasis": 866320,
-      "marketValue": 823004,
+      "marketValue": 820148,
       "color": "#f4ca64"
     },
     {
@@ -380,7 +385,7 @@ export default {
       "name": "三菱電",
       "category": "日本株",
       "costBasis": 553200,
-      "marketValue": 485200,
+      "marketValue": 494700,
       "color": "#52e6aa"
     },
     {
@@ -388,7 +393,7 @@ export default {
       "name": "三菱HCキャピタル",
       "category": "日本株",
       "costBasis": 430200,
-      "marketValue": 390300,
+      "marketValue": 394050,
       "color": "#52e6aa"
     },
     {
@@ -396,7 +401,7 @@ export default {
       "name": "伊藤忠",
       "category": "日本株",
       "costBasis": 198100,
-      "marketValue": 229800,
+      "marketValue": 230400,
       "color": "#52e6aa"
     },
     {
@@ -404,7 +409,7 @@ export default {
       "name": "アコム",
       "category": "日本株",
       "costBasis": 142500,
-      "marketValue": 134070,
+      "marketValue": 135000,
       "color": "#52e6aa"
     },
     {
@@ -412,7 +417,7 @@ export default {
       "name": "イオン",
       "category": "日本株",
       "costBasis": 135100,
-      "marketValue": 115950,
+      "marketValue": 113400,
       "color": "#52e6aa"
     },
     {
@@ -420,7 +425,7 @@ export default {
       "name": "ソフトバンク",
       "category": "日本株",
       "costBasis": 111500,
-      "marketValue": 123600,
+      "marketValue": 123300,
       "color": "#52e6aa"
     },
     {
@@ -428,7 +433,7 @@ export default {
       "name": "NTT",
       "category": "日本株",
       "costBasis": 75500,
-      "marketValue": 88550,
+      "marketValue": 88100,
       "color": "#52e6aa"
     },
     {
@@ -444,7 +449,7 @@ export default {
       "name": "ビットコイン",
       "category": "ビットコイン",
       "costBasis": 2500000,
-      "marketValue": 2081467,
+      "marketValue": 2160888,
       "color": "#a98cff"
     }
   ]
