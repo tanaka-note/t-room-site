@@ -5,7 +5,7 @@ import { passkeyTtlSecondsForService } from "../../assets/passkey-calendar-polic
 export async function trackedPasskeySession(env, input, validate, loadSession = null) {
   const now = Math.floor(Date.now() / 1000);
   const ttlSeconds = passkeyTtlSecondsForService(input?.service);
-  if (!["security", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "payments", "household", "calendar"].includes(input?.service)
+  if (!["security", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "payments", "household", "calendar", "portfolio"].includes(input?.service)
     || !/^[A-Za-z0-9_-]{43}$/.test(input.sessionIdHash || "")
     || !["register", "read", "touch", "end"].includes(input.action)
     || !input.identityId || !input.credentialId || !input.role || !input.serviceAccountId || !input.sessionVersion

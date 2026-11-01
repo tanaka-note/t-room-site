@@ -1,5 +1,9 @@
 # T-lain 共通Identity・パスキー仕様
 
+## 資産運用報告のサービス連携
+
+`portfolio` は `/asset-report/` の管理者 `owner` と閲覧者 `viewer` を提供する。既存の共通パスキー・handoff・12時間rolling session・監査を使用し、認可はPortfolio側のサービスアカウントを正本とする。`owner` は `primary-admin` に限定し、閲覧用は第一管理者が複数Identityへ明示的に連携できる。同じIdentityの複数credentialも同じ有効な連携を利用できる。追加・承認・連携は第一管理者がSecurity Centerで実施し、初期化から利用者への権限を付与しない。サービス追加の `0030_portfolio_service.sql` は既存の行・外部キー・監査集計・家計簿の複数Identity共有を保持する。詳細は [Portfolio Worker](../../portfolio-worker/README.md)。
+
 ## 招待登録の完了表示
 
 一般利用者の招待登録では、`/security/api/setup/status` が有効な登録状態（`active` / `completed` / `resumable` / `needsTCloudSetup`）、`credentialStatus=pending`、`pendingApproval=true`、`tcloudReady=true`、`needsTCloudSetup=false` を返すと、専用の完了画面へ切り替える。T-Cloud連携がない場合も、サーバーの `tcloudReady` は準備不要としてtrueになる。表示は「パスキーの登録が完了しました。」「管理者の確認後、利用できるようになります。しばらくお待ちください。」のみで、サービスへの移動ボタンは設けない。再読み込み・BFCacheから戻った際も同APIを読み直し、ブラウザ保存領域の成功フラグには依存しない。setup cookieの期限や権限は延長しない。

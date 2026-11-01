@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <script data-tlain-browser-guard>(function lineBrowserPolicy(scope) {
+  function isLine(userAgent) {
+    return /(?:^|[\s;(])Line\/\d+(?:\.|\b)/i.test(String(userAgent || ""));
+  }
+  function isApp() {
+    return Boolean(scope?.navigator?.standalone === true || ["standalone", "fullscreen", "minimal-ui"]
+      .some((mode) => scope?.matchMedia?.(`(display-mode: ${mode})`).matches));
+  }
+  function safeUrl(value) {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "https:" || url.hostname !== "tanaka-note.com" || url.port || url.username || url.password) return null;
+      return url;
+    } catch { return null; }
+  }
+  function externalUrl(value) {
+    const url = safeUrl(value);
+    if (!url) return null;
+    url.searchParams.delete("openInAppBrowser");
+    url.searchParams.set("openExternalBrowser", "1");
+    return url.href;
+  }
+  function appUrl(value, userAgent) {
+    const url = safeUrl(value);
+    if (!url || !/Android/i.test(userAgent || "")) return null;
+    const packageName = url.pathname.startsWith("/diary/") ? "jp.tanaka.troom.diary.twa"
+      : url.pathname.startsWith("/cloud/") ? "jp.tanaka.tcloud.twa" : null;
+    if (!packageName) return null;
+    url.searchParams.delete("openExternalBrowser");
+    url.searchParams.delete("openInAppBrowser");
+    // HTTPS data + a fixed existing package, not a new application URL scheme.
+    // Android parses the last #Intent block; URL fragments stay in the data URI.
+    return `intent://${url.host}${url.pathname}${url.search}${url.hash}#Intent;scheme=https;package=${packageName};S.browser_fallback_url=${encodeURIComponent(externalUrl(value))};end`;
+  }
+  const css = `:root{color-scheme:light dark;font-family:system-ui,-apple-system,sans-serif;background:#f5f6f4;color:#293831}*{box-sizing:border-box}body{margin:0;padding:24px 20px;min-height:100svh;display:grid;place-items:center}main{width:min(100%,460px);padding:32px 24px;border:1px solid #dce3dd;border-radius:18px;background:#fff}p{line-height:1.8}h1{font-size:1.25rem;line-height:1.6;margin:24px 0 16px}.brand{font-size:1.4rem;font-weight:700;letter-spacing:.06em}.actions{display:grid;gap:12px;margin:28px 0}a{display:block;padding:15px 18px;min-height:52px;border-radius:10px;text-align:center;font-weight:600;text-decoration:none;border:1px solid #587061;color:inherit;overflow-wrap:anywhere}a.primary{background:#506b59;color:#fff}a:focus-visible{outline:3px solid #8ca895;outline-offset:3px}.help{font-size:.9rem;color:#536158}.help strong{display:block}#app-note{font-size:.85rem}[hidden]{display:none!important}@media(prefers-color-scheme:dark){:root{background:#161c19;color:#e4eae5}main{background:#202923;border-color:#3b4b40}.help{color:#becbbf}a.primary{background:#536f5c}}@media(max-width:360px){main{padding:24px 18px}body{padding:16px}}`;
+  function escape(value) {
+    return String(value).replace(/[&\u003c>"']/g, (char) => ({ "&": "&amp;", "\u003c": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
+  }
+  function contents(value, userAgent) {
+    const external = externalUrl(value), app = appUrl(value, userAgent);
+    return `\u003chead>\u003cmeta charset="utf-8">\u003cmeta name="viewport" content="width=device-width,initial-scale=1">\u003cmeta name="robots" content="noindex,nofollow">\u003ctitle>T-lain | ブラウザのご案内\u003c/title>\u003cstyle>${css}\u003c/style>\u003c/head>\u003cbody>\u003cmain aria-labelledby="browser-title">\u003cdiv class="brand">T-lain\u003c/div>\u003ch1 id="browser-title">このブラウザでは\u003cbr>T-lainを利用できません。\u003c/h1>\u003cp>安全なログイン・パスキー認証のため、T-lainアプリまたは通常のブラウザで開いてください。\u003c/p>\u003cdiv class="actions">${app ? `\u003ca id="open-app" class="primary" href="${escape(app)}" rel="noreferrer">T-lainアプリで開く\u003c/a>` : ""}${external ? `\u003ca id="open-browser" class="${app ? "" : "primary"}" href="${escape(external)}" rel="noreferrer">既定のブラウザで開く\u003c/a>` : ""}\u003c/div>${app ? '\u003cp id="app-note">このページに対応する日記／T-Cloudアプリを開きます。開かない場合は、既定のブラウザをご利用ください。\u003c/p>' : ""}\u003cp class="help">\u003cstrong>うまく開かない場合\u003c/strong>LINEのメニュー「…」から「デフォルトのブラウザで開く」を選択してください。\u003cbr>ホーム画面に追加したアプリは、ホーム画面からも開けます。\u003c/p>\u003c/main>\u003c/body>`;
+  }
+  function enforce() {
+    if (!scope || isApp() || !isLine(scope.navigator.userAgent)) return false;
+    scope.stop();
+    scope.document.documentElement.lang = "ja";
+    scope.document.documentElement.innerHTML = contents(scope.location.href, scope.navigator.userAgent);
+    // Restoring this document must keep the gate, never resume the old UI.
+    scope.addEventListener("pageshow", () => {
+      if (!scope.document.getElementById("browser-title")) enforce();
+    }, { once: true });
+    return true;
+  }
+  return { isLine, isApp, externalUrl, appUrl, contents, css, enforce };
+})(window).enforce();</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#07090d">
+  <meta name="troom-app-build" content="portfolio-96108f3960e0">
+    <meta name="application-name" content="資産運用報告">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="資産報告">
+  <title>資産運用報告ページ</title>
+  <meta name="description" content="資産運用状況と不定期のレポートを記録する報告ページです。">
+  <link rel="manifest" href="./manifest.webmanifest?v=portfolio-96108f3960e0">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png?v=20260812-2">
+  <link rel="icon" href="./icons/favicon-32.png?v=20260812-2" sizes="32x32" type="image/png">
+  <link rel="stylesheet" href="./report.css?v=portfolio-96108f3960e0">
+  <meta name="troom-auto-update" content="enabled">
+  <link rel="stylesheet" href="./editor.css?v=portfolio-96108f3960e0">
+</head>
+<body>
+  <section id="login-panel" class="login-panel"><h1>資産運用報告</h1><p>閲覧・編集にはパスキーでログインしてください。</p><button id="login-button" type="button">パスキーでログイン</button><p id="login-message" role="status"></p><p>初回はSecurity Centerで「資産運用報告」のサービス連携を設定してください。</p><a href="/security/">Security Centerを開く</a></section>
+  <main id="report-app" class="report-shell" hidden>
+  <nav class="account-toolbar"><span id="account-label"></span><button type="button" id="edit-toggle" hidden>編集</button><button type="button" id="backup-button">データを書き出す</button><button type="button" id="logout-button">ログアウト</button></nav>
+  <p id="app-message" role="status" aria-live="polite"></p>
+  <label class="view-date">表示する記録 <select id="view-date"></select></label>
+  <section id="editor-panel" class="report-panel" hidden aria-labelledby="editor-title"><h2 id="editor-title">資産データの編集</h2><form id="editor-form"><div class="date-fields"><label>更新日（基準日）<input id="record-date" type="date" required></label><label>更新時刻（日本時間・任意）<input id="record-time" type="time"></label></div><p id="editor-note"></p><div id="asset-editors"></div><button type="button" id="add-asset">銘柄を追加</button><label id="legacy-total-label" hidden>銘柄合計（控除前・円）<input id="legacy-total" type="text" inputmode="numeric"></label><p>合計（控除前）：<strong id="editor-total"></strong></p><p>同じ日付への保存は、その日の記録の訂正になります。過去日を保存しても後日の記録は変更しません。</p><div class="editor-actions"><button type="submit" id="save-button">保存してチャートを更新</button><button type="button" id="cancel-edit">編集を閉じる</button></div></form></section>
+    <header class="report-header">
+      <div>
+        <p class="eyebrow">MONTHLY PORTFOLIO REPORT</p>
+        <h1><span>資産運用</span><span>報告ページ</span></h1>
+      </div>
+      <div class="report-period" aria-label="更新日">
+        <span>更新日</span>
+        <time id="report-updated" datetime="2026-10-31">2026.10.31</time>
+        <button id="install-app-button" class="install-app-button" type="button">ホームへ追加</button>
+      </div>
+    </header>
+
+    <section class="summary-section" aria-labelledby="summary-title">
+      <h2 id="summary-title" class="visually-hidden">資産運用状況の概要</h2>
+      <div class="summary-grid">
+        <article class="summary-card">
+          <span>元本</span>
+          <strong id="principal-value">—</strong>
+        </article>
+        <article class="summary-card summary-card-primary">
+          <span>時価総額（売却損反映後）</span>
+          <strong id="market-value">—</strong>
+        </article>
+        <article class="summary-card">
+          <span>損益</span>
+          <strong id="profit-value">—</strong>
+        </article>
+        <article class="summary-card">
+          <span>損益率</span>
+          <strong id="return-value">—</strong>
+        </article>
+      </div>
+    </section>
+
+    <section id="history-section" class="report-panel history-panel" aria-labelledby="history-title" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="section-kicker">PORTFOLIO TREND</p>
+          <h2 id="history-title">資産推移</h2>
+        </div>
+        <p id="history-period">集計期間を読み込み中</p>
+      </div>
+      <div id="history-range-controls" class="range-controls" aria-label="資産推移の表示期間">
+        <button type="button" data-history-range="7d" aria-pressed="false">1週間</button>
+        <button type="button" data-history-range="1m" aria-pressed="false">1ヶ月</button>
+        <button type="button" data-history-range="all" class="is-active" aria-pressed="true">すべて</button>
+      </div>
+      <div class="chart-frame chart-frame-history">
+        <canvas id="history-chart" role="img" aria-label="時価総額（売却損反映後）の日次推移"></canvas>
+        <div id="history-tooltip" class="chart-tooltip" role="status" hidden></div>
+      </div>
+      <p id="history-summary" class="visually-hidden"></p>
+      <div class="history-legend" aria-label="チャートの凡例">
+        <span><i class="history-dot history-dot-market" aria-hidden="true"></i>時価総額（売却損反映後）</span>
+      </div>
+    </section>
+
+    <section class="report-panel allocation-panel" aria-labelledby="allocation-title">
+      <div class="section-heading">
+        <div>
+          <p class="section-number" id="allocation-number">01</p>
+          <h2 id="allocation-title">資産構成</h2>
+        </div>
+        <p>控除後の時価総額に占める割合</p>
+      </div>
+
+      <div class="allocation-layout">
+        <div class="donut-wrap">
+          <canvas id="allocation-chart" role="img" aria-label="米株・インド株・ビットコイン・日本株の調整後資産構成比" aria-describedby="allocation-note allocation-rules"></canvas>
+          <div class="donut-center" aria-hidden="true">
+            <span>MARKET VALUE</span>
+            <strong id="donut-total">—</strong>
+          </div>
+        </div>
+        <ol id="allocation-legend" class="allocation-legend" aria-label="控除後の資産構成比の内訳"></ol>
+      </div>
+      <p id="allocation-note" class="allocation-note">米株は米国株ETF、インド株はインド株ETF、日本株は国内個別株をまとめています。各分類の評価額から累計控除額を4等分して差し引いた、調整後の構成です。</p>
+      <p id="allocation-rules" class="allocation-note">計算ルール：各分類の金額＝当日の分類別評価額−累計控除額÷4。構成比＝各分類の控除後金額÷控除後の全体合計。日々の評価額と、当日以前で最新の累計控除額だけを使って再計算し、過去の控除額・実現益は加算しません。1円未満の端数は米株→インド株→ビットコイン→日本株の順に1円ずつ配分します。個別銘柄一覧は控除前の実際の評価額です。</p>
+    </section>
+
+    <section class="report-panel holdings-panel" aria-labelledby="holdings-title">
+      <div class="section-heading">
+        <div>
+          <p class="section-number" id="holdings-number">02</p>
+          <h2 id="holdings-title">保有資産</h2>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <colgroup>
+            <col class="column-name">
+            <col class="column-market-value">
+          </colgroup>
+          <thead>
+            <tr>
+              <th scope="col">銘柄名</th>
+              <th scope="col">時価総額</th>
+            </tr>
+          </thead>
+          <tbody id="holdings-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="comment-section" class="report-panel comment-panel" aria-labelledby="comment-title" hidden>
+      <div class="section-heading">
+        <div>
+          <p class="section-number" id="comment-number">03</p>
+          <h2 id="comment-title">レポート（不定期）</h2>
+        </div>
+      </div>
+      <article class="monthly-report">
+        <div id="monthly-report-entries" class="monthly-report-entries"></div>
+      </article>
+    </section>
+  </main>
+
+  <script type="module" src="./editor.js?v=portfolio-96108f3960e0"></script>
+  <script src="/assets/pwa-auto-update.js?v=portfolio-96108f3960e0" defer></script>
+  <script src="/security/passkey-client.js?v=portfolio-96108f3960e0" defer></script>
+</body>
+</html>
