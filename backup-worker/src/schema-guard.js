@@ -3,7 +3,7 @@ import { digest } from './integrity.js';
 const EXPECTED = {
   "household": "87c3caeb5b1bd4363759e93de4fe377f03064dc96e226fc531546a16146a2ede",
   "cloud": "c319c54132d640262b215ffdac570407df82f54e07a1f2395ea3b68291a7625c",
-  "security": "f4f8b476fbc4cd9e8cd5cb601342a22ca22e500063088cc965acc8eb39530305",
+  "security": "31794c37dea9a1bdcb6139ba19f7845253671fcfd3def4e72813cd939d5e6ce4",
   "billing": "e3d7d3288312675f4635221c89d6dde4a9a5cdccd4d53848feaa308b1b7c725f",
   "payments": "a74f9ffcabf4a59f3ae58f552de94adc14738883ea1f07baf670c9c6fc3c740f",
   "health": "5d74bfd7ac54779545e86f1e0bd948b29ce3f578c68c309e445f1542d47f98ac",

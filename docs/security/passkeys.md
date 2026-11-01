@@ -134,6 +134,10 @@ T-Cloudの各タブは選択済みsessionの公開識別子をsessionStorageに�
 
 member vaultの登録はcredential単位のINSERTのみとし、競合時は保存済み公開鍵・指紋・暗号文・IVを照合する。同じ内容の再送は許し、異なる内容への置換は409で拒否する。既存委譲鍵の再生成は行わない。パスキーで解除したadmin／memberのRSA秘密鍵はextractable=false・decrypt専用のCryptoKeyとして、既存tcloud-device-vault／crypto-keysへ保存できる。memberは承認済みの複数folderScopesに対応するRSA暗号化folder envelopeの集合（folder_keys_rsa）を併せて保存し、raw folder keyは復元時のメモリー内だけに保持する。cache bindingにはsessionCacheId・credential ID・Identity ID・auth method・role・service account／link・cloudScopeId・root／folderScopes・Cloud session version・passkey epoch・crypto version／作成時刻／公開鍵を含める。cacheにはserver sessionのexpiresAtを保存し、同じsession IDの正常なrolling応答で単調に更新する。起動時はserver session検証後だけ復元し、Cookie消滅・12時間超過・credential／Identity／link／scope／version／epoch等の失効が判明した現在sessionのcacheと、期限切れのpasskey cacheだけを削除する。期限は必ず署名検証済みserver sessionで判断し、cache自身から延長しない。CryptoKeyは復元時に型・非抽出性・algorithm／usagesと実際の復号を検証する。raw PRF、秘密鍵のJWK／PEM／raw、extractable秘密鍵、raw folder key、PW、SESSION_SECRETは保存しない。明示的logoutはserver session終了・Cookie削除・tab context破棄・現在sessionのcache削除を行い、他sessionのcacheは削除しない。API失効時にもメモリーを解除して現在sessionのcacheを削除する。過去に`passkey:<identityId>:<config作成時刻>`で保存された管理者秘密鍵レコードだけを起動時に削除し、PW用鍵キャッシュ・folder-sessionレコード・暗号化済みオフラインデータを削除しない。
 
+## 家計簿の複数Identity連携
+
+家計簿の追加管理用と共有閲覧用は、第一管理者の明示的な設定で同じサービスアカウントを複数Identityへ連携できる。同じIdentityの複数credentialも有効な連携を利用できる。田中宏知の既定`owner`だけは`primary-admin`に限定する。既存の5分以内の再認証・招待・credential承認・Identity／credential／link単位の失効確認を維持する。`0029_household_shared_accounts.sql`は現在の連携をIdentity＋アカウント単位で一意にし、既存の無効なlinkを復活させず、自動で権限を付与しない。詳細は[家計簿README](../../household-worker/README.md)を参照する。
+
 ## Downloaderの利用許可
 
 初期連携はprimary-adminのみ。一般Identityへの許可は、オーナーが利用者詳細の「サービス連携を追加」でDownloaderを選び、既存の再認証を通したときだけ作成する。新規招待には含めず、パスキー登録・承認・再招待では新規付与しない。追加・解除は対象link IDと操作元を監査へ記録する。既存連携は追加経路を調査して扱いを決め、判断不能を一律解除しない。過去の本番データ調査は[2026-09-09調査記録](../history/security/downloader-grants-review-20260909.md)を参照。

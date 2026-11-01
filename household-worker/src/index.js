@@ -45,7 +45,7 @@ export class SecurityIntegration extends WorkerEntrypoint {
   }
 }
 function linkTarget(account) {
-  return { accountId: account.id, displayLabel: account.display_name, role: account.role, roleLabel: account.role === 'owner' ? 'オーナー' : '閲覧専用', privileged: account.role === 'owner', exclusive: account.role === 'owner', shared: account.role === 'viewer', rootFolderId: null };
+  return { accountId: account.id, displayLabel: account.display_name, role: account.role, roleLabel: account.role === 'owner' ? 'オーナー' : '閲覧専用', privileged: account.role === 'owner', exclusive: account.id === 'owner', shared: account.id !== 'owner', rootFolderId: null };
 }
 
 export async function handleRequest(request, env, context) {

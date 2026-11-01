@@ -48,7 +48,7 @@ test('independent data, standard categories, revisions, summaries, exports and b
     assert.equal(initial.revision,0);assert.deepEqual(initial.data,emptyData());assert.deepEqual(initial.assetHistory,[]);
     const provider=new household.SecurityIntegration({},f.owner.env),targets=(await provider.listLinkTargets()).targets;
     const target=targets.find(t=>t.accountId==='chiharu-admin');
-    assert.equal(target.displayLabel,'田中千晴');assert.equal(target.role,'owner');assert.equal(target.exclusive,true);assert.equal(target.privileged,true);assert.equal(target.shared,false);
+    assert.equal(target.displayLabel,'田中千晴');assert.equal(target.role,'owner');assert.equal(target.exclusive,false);assert.equal(target.privileged,true);assert.equal(target.shared,true);
     assert.deepEqual(targets.filter(t=>t.accountId.includes('chiharu')).map(t=>t.accountId),['chiharu-admin']);
     for(const [client,label]of [[f.owner,'Original private'],[f.chiharu,'Chiharu private']]){
       assert.equal((await client.mutate('transaction.save',entry(label))).status,200);
