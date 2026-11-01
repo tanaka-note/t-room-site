@@ -1,5 +1,4 @@
-// The reference principal is a reporting policy, independent of asset acquisition costs.
-export const BASE_PRINCIPAL = 6000000;
+// Portfolio values are supplied only by the authenticated report API.
 
 export const ALLOCATION_GROUPS = Object.freeze([
   { id: "us-stocks", name: "米株", color: "#ff8a61" },
@@ -97,7 +96,7 @@ export function createPortfolioModel(data) {
   };
 }
 
-export function validatePortfolioData(data, { expectedBasePrincipal = BASE_PRINCIPAL } = {}) {
+export function validatePortfolioData(data, { expectedBasePrincipal = data.basePrincipal } = {}) {
   record(data, ["schemaVersion", "period", "basePrincipal", "realizedProfit", "performanceAdjustmentName", "performanceAdjustmentSnapshots", "monthlyReport", "history", "assets"], "portfolio");
   requireValue(data.schemaVersion === 1, "unsupported schemaVersion");
   requireValue(isReportDate(data.period), "period: invalid calendar date");
