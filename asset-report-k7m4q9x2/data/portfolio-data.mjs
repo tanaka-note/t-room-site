@@ -1,6 +1,6 @@
 export default {
   "schemaVersion": 1,
-  "period": "2026-10-24",
+  "period": "2026-10-31",
   "basePrincipal": 6000000,
   "realizedProfit": {
     "name": "投資信託売却益",
@@ -376,6 +376,41 @@ export default {
       "period": "2026-10-24",
       "basePrincipal": 6000000,
       "rawMarketValue": 6485839
+    },
+    {
+      "period": "2026-10-25",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6458885
+    },
+    {
+      "period": "2026-10-26",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6478975
+    },
+    {
+      "period": "2026-10-27",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6503105
+    },
+    {
+      "period": "2026-10-28",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6561024
+    },
+    {
+      "period": "2026-10-29",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6548260
+    },
+    {
+      "period": "2026-10-30",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6411901
+    },
+    {
+      "period": "2026-10-31",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6418416
     }
   ],
   "assets": [
@@ -384,7 +419,7 @@ export default {
       "name": "iFナス100H無",
       "category": "米株",
       "costBasis": 2002329,
-      "marketValue": 2040402,
+      "marketValue": 2037294,
       "color": "#ff8a61"
     },
     {
@@ -392,7 +427,7 @@ export default {
       "name": "iSNIFTY50",
       "category": "インド株",
       "costBasis": 866320,
-      "marketValue": 801108,
+      "marketValue": 825384,
       "color": "#f4ca64"
     },
     {
@@ -400,7 +435,7 @@ export default {
       "name": "三菱電",
       "category": "日本株",
       "costBasis": 553200,
-      "marketValue": 477000,
+      "marketValue": 464000,
       "color": "#52e6aa"
     },
     {
@@ -408,7 +443,7 @@ export default {
       "name": "三菱HCキャピタル",
       "category": "日本株",
       "costBasis": 430200,
-      "marketValue": 394200,
+      "marketValue": 393000,
       "color": "#52e6aa"
     },
     {
@@ -416,7 +451,7 @@ export default {
       "name": "伊藤忠",
       "category": "日本株",
       "costBasis": 198100,
-      "marketValue": 230100,
+      "marketValue": 232650,
       "color": "#52e6aa"
     },
     {
@@ -424,7 +459,7 @@ export default {
       "name": "アコム",
       "category": "日本株",
       "costBasis": 142500,
-      "marketValue": 133710,
+      "marketValue": 132960,
       "color": "#52e6aa"
     },
     {
@@ -432,7 +467,7 @@ export default {
       "name": "イオン",
       "category": "日本株",
       "costBasis": 135100,
-      "marketValue": 118100,
+      "marketValue": 120050,
       "color": "#52e6aa"
     },
     {
@@ -440,7 +475,7 @@ export default {
       "name": "ソフトバンク",
       "category": "日本株",
       "costBasis": 111500,
-      "marketValue": 118700,
+      "marketValue": 117100,
       "color": "#52e6aa"
     },
     {
@@ -448,7 +483,7 @@ export default {
       "name": "NTT",
       "category": "日本株",
       "costBasis": 75500,
-      "marketValue": 87400,
+      "marketValue": 86650,
       "color": "#52e6aa"
     },
     {
@@ -456,7 +491,7 @@ export default {
       "name": "ムニノバHD",
       "category": "日本株",
       "costBasis": 43900,
-      "marketValue": 39500,
+      "marketValue": 39400,
       "color": "#52e6aa"
     },
     {
@@ -464,7 +499,7 @@ export default {
       "name": "ビットコイン",
       "category": "ビットコイン",
       "costBasis": 2500000,
-      "marketValue": 2045619,
+      "marketValue": 1969928,
       "color": "#a98cff"
     }
   ]
