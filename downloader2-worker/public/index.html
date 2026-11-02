@@ -61,14 +61,16 @@
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#090c18">
-  <meta name="troom-app-build" content="downloader2-900e39e56da8">
+  <meta name="troom-app-build" content="downloader2-8896298c1aa0">
   <meta name="troom-auto-update" content="enabled">
   <title>T-lain Downloader 2</title>
-  <link rel="stylesheet" href="/downloader2/downloader.css?v=downloader2-900e39e56da8">
+  <link rel="stylesheet" href="/downloader2/downloader.css?v=downloader2-8896298c1aa0">
+  <link rel="stylesheet" href="/downloader2/tlain-login.css?v=downloader2-8896298c1aa0">
+  <script src="/downloader2/tlain-login.js?v=downloader2-8896298c1aa0" defer></script>
 </head>
 <body>
   <main class="shell">
-    <header class="masthead">
+    <header data-login-app-header class="masthead">
       <p class="eyebrow">T-lain · PRIVATE LOCAL TOOL</p>
       <div class="title-row">
         <div><h1>Downloader 2</h1><p>ブラウザで再生できる非DRMメディアを、このPCへ直接保存します。</p></div>
@@ -78,12 +80,12 @@
 
     <section id="message" class="message" role="status" aria-live="polite" hidden></section>
 
-    <section id="login-view" class="login-panel" hidden>
+    <div class="tlain-login-view" data-login-status="message"><section id="login-view" class="login-panel tlain-login-card" hidden><p class="tlain-login-brand">T-lain</p>
       <p class="step-label">PRIVATE ACCESS</p>
-      <h2>パスキーで本人確認</h2>
+      <h1>Downloader 2</h1>
       <p>第一管理者のT-lain Identityだけが利用できます。</p>
       <button id="passkey-login" class="primary passkey-login-button" type="button"><svg class="passkey-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg><span id="passkey-login-label" class="passkey-login-label">パスキーでログイン</span></button>
-    </section>
+    </section></div>
 
     <section id="app-view" hidden>
       <section class="status-grid" aria-label="ローカル接続状態">
@@ -128,8 +130,8 @@
       <p class="privacy-note">動画本体、Cookie、Authorization、signed URLはCloudflare・D1・R2へ送信または保存しません。</p>
     </section>
   </main>
-  <script src="/downloader2/passkey-client.js?v=downloader2-900e39e56da8"></script>
-  <script src="/downloader2/downloader2.js?v=downloader2-900e39e56da8"></script>
-  <script src="/assets/pwa-auto-update.js?v=downloader2-900e39e56da8" defer></script>
+  <script src="/downloader2/passkey-client.js?v=downloader2-8896298c1aa0"></script>
+  <script src="/downloader2/downloader2.js?v=downloader2-8896298c1aa0"></script>
+  <script src="/assets/pwa-auto-update.js?v=downloader2-8896298c1aa0" defer></script>
 </body>
 </html>

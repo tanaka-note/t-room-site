@@ -516,6 +516,8 @@ async function serveAsset(request, env, url, path) {
   const assetPaths = new Map([
     ["/manifest.webmanifest", "/manifest.webmanifest"],
     ["/billing.css", "/billing.css"],
+    ["/tlain-login.css", "/tlain-login.css"],
+    ["/tlain-login.js", "/tlain-login.js"],
     ["/billing.js", "/billing.js"],
     ["/password-login-audit.js", "/password-login-audit.js"],
     ["/troom-date-picker.css", "/troom-date-picker.css"],

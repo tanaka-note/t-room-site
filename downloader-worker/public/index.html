@@ -61,14 +61,16 @@
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet,noimageindex">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#090c18">
-  <meta name="troom-app-build" content="downloader-a2c1bb0cb60d">
+  <meta name="troom-app-build" content="downloader-f24de80be446">
   <meta name="troom-auto-update" content="enabled">
   <title>T-lain Downloader</title>
-  <link rel="stylesheet" href="/downloader/downloader.css?v=downloader-a2c1bb0cb60d">
+  <link rel="stylesheet" href="/downloader/downloader.css?v=downloader-f24de80be446">
+  <link rel="stylesheet" href="/downloader/tlain-login.css?v=downloader-f24de80be446">
+  <script src="/downloader/tlain-login.js?v=downloader-f24de80be446" defer></script>
 </head>
 <body>
   <main class="shell">
-    <header class="masthead">
+    <header data-login-app-header class="masthead">
       <p class="eyebrow">T-lain · PRIVATE TOOL</p>
       <div class="title-row">
         <div><h1>Downloader</h1><p>権利を持つメディアを、解析・検査して一時保存します。</p></div>
@@ -78,12 +80,12 @@
 
     <section id="message" class="message" role="status" aria-live="polite" hidden></section>
 
-    <section id="login-view" class="login-panel" hidden>
+    <div class="tlain-login-view" data-login-status="message"><section id="login-view" class="login-panel tlain-login-card" hidden><p class="tlain-login-brand">T-lain</p>
       <p class="step-label">PRIVATE ACCESS</p>
-      <h2>パスキーで本人確認</h2>
+      <h1>Downloader</h1>
       <p>許可されたT-lain Identityだけが利用できます。</p>
       <button id="passkey-login" class="primary passkey-login-button" type="button"><svg class="passkey-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg><span id="passkey-login-label" class="passkey-login-label">パスキーでログイン</span></button>
-    </section>
+    </section></div>
 
     <section id="app-view" hidden>
       <form id="analyze-form" class="source-form">
@@ -159,9 +161,9 @@
       </section>
     </section>
   </main>
-  <script src="/security/passkey-client.js?v=downloader-a2c1bb0cb60d"></script>
-  <script src="/downloader/downloader.js?v=downloader-a2c1bb0cb60d"></script>
-  <script src="/downloader/delete-controls.js?v=downloader-a2c1bb0cb60d"></script>
-  <script src="/assets/pwa-auto-update.js?v=downloader-a2c1bb0cb60d" defer></script>
+  <script src="/security/passkey-client.js?v=downloader-f24de80be446"></script>
+  <script src="/downloader/downloader.js?v=downloader-f24de80be446"></script>
+  <script src="/downloader/delete-controls.js?v=downloader-f24de80be446"></script>
+  <script src="/assets/pwa-auto-update.js?v=downloader-f24de80be446" defer></script>
 </body>
 </html>

@@ -25,8 +25,8 @@ try {
   await page.goto(review.url);
   assert.equal(await page.locator('#review-person').count(),0);
   assert.equal(await page.locator('#login select, #login input').count(),0);
-  assert.equal((await page.locator('main').innerText()).replace(/\s+/g,' ').trim(),'体調管理 パスキーでログイン');
-  assert.equal(await page.locator('#login').innerText(),'パスキーでログイン');
+  assert.equal((await page.locator('main').innerText()).replace(/\s+/g,' ').trim(),'T-lain 体調管理 登録済みのパスキーでログインしてください。 パスキーでログイン');
+  assert.equal((await page.locator('#login').innerText()).replace(/\s+/g,' ').trim(),'T-lain 体調管理 登録済みのパスキーでログインしてください。 パスキーでログイン');
   assert.equal(await page.locator('#app').isVisible(),false);
   await page.screenshot({path:new URL('../../tmp/health-review/login.png',import.meta.url).pathname.replace(/^\/([A-Za-z]:)/,'$1')});
   // Unsupported PRF stops before any handoff or record request; no plaintext fallback.
