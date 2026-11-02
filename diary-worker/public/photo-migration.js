@@ -82,7 +82,11 @@ export async function mountMigration(initialSession) {
         continue;
       }
       const value = await response.json();
-      if (!response.ok) throw new Error(`${response.status}: ${value.error || '保存できませんでした。'}`);
+      if (!response.ok) {
+        const error = new Error(`${response.status}: ${value.error || '保存できませんでした。'}`);
+        error.status = response.status;
+        throw error;
+      }
       return value;
     }
   }

@@ -94,6 +94,7 @@ export class PhotoMigration {
           requestId: day.requestId, entryDate: day.date, title: day.title, content: '', tags: [], status: 'draft'
         } })).entry;
         record.entryId = entry.id;
+        record.draftRevision = 1;
         record.status = 'uploading';
         await this.checkpoint();
       } else {
@@ -107,14 +108,43 @@ export class PhotoMigration {
         this.onProgress({ date: day.date, stage: 'complete', photos: day.photos.length });
         continue;
       }
-      if (entry.status !== 'draft' || entry.content !== '' || entry.draftOfEntryId
+      if (entry.status !== 'draft' || entry.content !== '' || entry.draftOfEntryId || entry.deletedAt
+        || entry.revision !== record.draftRevision
         || (entry.photos || []).some(photo => !day.photos.some(p => p.id === photo.id))) throw new Error(`${day.date}: 下書きが変更されています。`);
       const existing = new Set((entry.photos || []).map(photo => photo.id));
-      // Sequential uploads preserve the fallback album order as well as limiting memory.
-      // Each upload itself is idempotent in the existing API.
+      // Staging uses attempt-specific R2 keys, so a failed overlapping retry cannot
+      // remove the successful attempt's objects. Final photographs have no staging TTL.
+      if (record.uploadSessionId && Date.parse(record.uploadExpiresAt) <= Date.now()) {
+        try { await this.api(`/photo-upload-sessions/${record.uploadSessionId}`, { method: 'DELETE' }); }
+        catch (error) { if (error.status !== 404) throw error; }
+        delete record.uploadSessionId;
+        delete record.stagePhotoIds;
+        record.uploaded = [...existing];
+        await this.checkpoint();
+      }
+      let resumingSession = Boolean(record.uploadSessionId);
+      if (!record.uploadSessionId && existing.size < day.photos.length) {
+        const { uploadSession } = await this.api('/photo-upload-sessions', { method: 'POST', body: { targetEntryId: entry.id } });
+        if (!isUuid(uploadSession?.id) || !Number.isFinite(Date.parse(uploadSession.expiresAt))) throw new Error('写真の一時保存情報が不正です。');
+        record.uploadSessionId = uploadSession.id;
+        record.uploadExpiresAt = uploadSession.expiresAt;
+        record.stagePhotoIds = day.photos.filter(photo => !existing.has(photo.id)).map(photo => photo.id);
+        record.uploaded = [...existing];
+        await this.checkpoint();
+      }
+      const saved = new Set(existing);
       for (const photo of day.photos) {
         if (this.shouldStop()) { await this.checkpoint(); return; }
-        if (!existing.has(photo.id)) {
+        if (!existing.has(photo.id) && resumingSession) {
+          try {
+            const result = await this.api(`/photo-upload-sessions/${record.uploadSessionId}/photos/${photo.id}`);
+            if (result.photo?.id !== photo.id) throw new Error('写真の保存確認が一致しません。');
+            saved.add(photo.id);
+          } catch (error) {
+            if (error.status !== 404) throw error;
+          }
+        }
+        if (!saved.has(photo.id)) {
           const form = new FormData();
           form.set('id', photo.id);
           form.set('width', String(photo.width));
@@ -125,16 +155,27 @@ export class PhotoMigration {
             if (bytes.byteLength !== photo[key].bytes || digest !== photo[key].sha256) throw new Error(`${day.date}: 元データの検証に失敗しました。`);
             form.set(key, new Blob([bytes], { type: key === 'original' ? photo.mimeType : 'image/webp' }), key === 'original' ? photo.fileName : `${key}.webp`);
           }
-          const result = await this.api(`/entries/${entry.id}/photos`, { method: 'POST', body: form });
+          const result = await this.api(`/photo-upload-sessions/${record.uploadSessionId}/photos`, { method: 'POST', body: form });
           if (result.photo?.id !== photo.id) throw new Error('画像保存の応答が一致しません。');
-          existing.add(photo.id);
+          saved.add(photo.id);
         }
-        record.uploaded = [...existing];
+        record.uploaded = [...saved];
         await this.checkpoint();
-        this.onProgress({ date: day.date, stage: 'uploading', uploaded: existing.size, photos: day.photos.length });
+        this.onProgress({ date: day.date, stage: 'uploading', uploaded: saved.size, photos: day.photos.length });
+      }
+      if (record.uploadSessionId) {
+        entry = (await this.api(`/entries/${entry.id}`)).entry;
+        if (entry.status !== 'draft' || entry.deletedAt || entry.revision !== record.draftRevision
+          || entry.entryDate !== day.date || entry.title !== day.title || entry.content !== '') throw new Error(`${day.date}: 下書きが変更されています。`);
+        record.status = 'committing';
+        await this.checkpoint();
+        await this.api(`/photo-upload-sessions/${record.uploadSessionId}/commit`, {
+          method: 'POST', body: { entryId: entry.id, photoIds: record.stagePhotoIds }
+        });
       }
       entry = (await this.api(`/entries/${entry.id}`)).entry;
-      if (entry.status !== 'draft' || entry.entryDate !== day.date || entry.title !== day.title || entry.content !== ''
+      if (entry.status !== 'draft' || entry.deletedAt || entry.revision !== record.draftRevision
+        || entry.entryDate !== day.date || entry.title !== day.title || entry.content !== ''
         || (entry.photos || []).length !== day.photos.length
         || !day.photos.every(photo => entry.photos.some(saved => saved.id === photo.id))) throw new Error(`${day.date}: 写真の照合に失敗しました。`);
       record.status = 'publishing';
