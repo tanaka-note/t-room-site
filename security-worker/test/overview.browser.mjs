@@ -24,6 +24,9 @@ const server = createServer(async (request, response) => {
   }
   const files = {
     "/security/": ["../public/index.html", "text/html"],
+    "/security/health.html": ["../public/health.html", "text/html"],
+    "/security/health-redirect.js": ["../public/health-redirect.js", "text/javascript"],
+    "/security/health-setup.mjs": ["../public/health-setup.mjs", "text/javascript"],
     "/security/security.js": ["../public/security.js", "text/javascript"],
     "/security/security-display.js": ["../public/security-display.js", "text/javascript"],
     "/security/security.css": ["../public/security.css", "text/css"],
@@ -165,8 +168,86 @@ try {
   assert.match(await timedOut.locator("#dashboard-panel").innerText(), /読み込みに時間がかかっています/);
   assert.equal(await timedOut.locator("#dashboard-panel").getAttribute("aria-busy"), "false");
   await timedOut.locator("#dashboard-retry").click(); await ready(timedOut); await timedOut.close();
+
+  // Health management belongs to the selected user's service link. Self setup is
+  // opened explicitly, including from the former standalone URL.
+  for (const width of [1280, 390]) {
+    const page = await newPage();
+    await page.setViewportSize({ width, height: 900 });
+    const grants = [], authentications = [];
+    let ownReads = 0, prepared = false, granted = false, failGrant = true;
+    const healthIdentity = {
+      identity: { id: "fixture-user", displayName: "確認ユーザー", status: "active" },
+      credentials: [{ credential_id: "health-credential", label: "本人の端末", status: "active" }],
+      links: [{ id: "health-link", service: "health", service_account_id: "fixture-account", display_label: "体調管理", status: "active" }],
+      invitations: [], sessions: [], approvalCandidates: []
+    };
+    await page.route("**/security/api/identities/fixture-user", route => fulfill(route, healthIdentity));
+    await page.route("**/security/passkey-client.js*", route => route.fulfill({ contentType: "text/javascript", body: `
+      window.TRoomPasskeys = { safeJapaneseMessage: text => text, authenticate: async (service, choose, options) => {
+        await fetch('/fixture-auth', { method: 'POST', body: JSON.stringify({ service, options }) });
+        return { prfOutput: new Uint8Array(32).fill(1) };
+      } };
+      window.TRoomCrypto = { unlockAdminPrivateKeyWithPasskey: async () => ({}) };
+    ` }));
+    await page.route("**/fixture-auth", async route => {
+      authentications.push(route.request().postDataJSON()); await fulfill(route, {});
+    });
+    await page.route("**/security/health-crypto.mjs", route => route.fulfill({ contentType: "text/javascript", body: `
+      export const createClientVault = async () => ({ iv: 'fixture', ciphertext: 'encrypted', publicKey: {} });
+      export const wrapMaster = async () => 'encrypted-grant';
+      export const unwrapMaster = async () => new Uint8Array(32);
+    ` }));
+    await page.route("**/security/api/health/own", route => {
+      ownReads++; return fulfill(route, { prepared, ready: granted });
+    });
+    await page.route("**/security/api/health/vault", route => { prepared = true; return fulfill(route, { ok: true }); });
+    await page.route("**/security/api/health/admin", route => fulfill(route, {
+      accountId: "fixture-account", config: { recoveryWrappedKey: "encrypted-recovery" }, recoveryPublicKey: {}, adminEnvelope: {},
+      members: [
+        { identityId: "fixture-user", credentialId: "health-credential", serviceLinkId: "health-link", publicKey: {}, granted },
+        { identityId: "another-user", credentialId: "another-credential", serviceLinkId: "another-link", publicKey: {}, granted: false }
+      ]
+    }));
+    await page.route("**/security/api/health/grant", route => {
+      grants.push(route.request().postDataJSON());
+      if (failGrant) { failGrant = false; return fulfill(route, { error: "もう一度パスキーで本人確認してください。" }, 401); }
+      granted = true; return fulfill(route, { ok: true });
+    });
+    await page.goto(url); await ready(page);
+    assert.equal(await page.locator('a[href="/security/health.html"], main > p a[href="/health/"]').count(), 0);
+    assert.equal(await page.locator("#health-setup-notice").isVisible(), false);
+    assert.equal(ownReads, 0);
+    await page.getByRole("button", { name: "ユーザー", exact: true }).click(); await usersReady(page);
+    await page.locator('[data-view-identity="fixture-user"]').click();
+    await page.locator("[data-health-manage]").waitFor();
+    assert.equal(ownReads, 0, "viewing identity details does not start key operations");
+    await page.locator("[data-health-manage]").click();
+    const approve = page.getByRole("button", { name: "このパスキーの鍵を承認" });
+    await approve.waitFor();
+    assert.equal(await approve.count(), 1, "another identity is never included");
+    assert.equal(grants.length, 0);
+    await approve.click();
+    await page.waitForFunction(() => document.querySelector("#message").textContent.includes("もう一度パスキー"));
+    await approve.click();
+    await page.waitForFunction(() => document.querySelector("[data-health-members]").textContent.includes("本人の端末：承認済み"));
+    assert.deepEqual(grants[1], { credentialId: "health-credential", serviceLinkId: "health-link", wrappedKey: "encrypted-grant" });
+    assert.deepEqual(authentications.map(auth => auth.service), ["security", "security", "security"]);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.goto(new URL("health.html", url).href);
+    await page.waitForURL("**/security/#health-setup");
+    await page.locator("#health-setup-prepare").waitFor();
+    assert.equal(await page.locator("#admin-view").isVisible(), false);
+    const readsBefore = ownReads;
+    await page.locator("#health-setup-prepare").click();
+    await page.waitForFunction(() => document.querySelector("#health-setup-status").textContent.includes("利用準備は完了"));
+    assert.equal(ownReads, readsBefore + 2);
+    assert.deepEqual(authentications.at(-1), { service: "health", options: { handoff: false } });
+    assert.equal(grants.length, 2, "self setup never delegates a key");
+    await page.close();
+  }
   assert.deepEqual(errors, []);
-  console.log("Security overview browser regressions passed (lazy tabs/filters, cached reads, independent failures, retries, invalid JSON, deadline).");
+  console.log("Security overview browser regressions passed (lazy reads, retries, Health user-detail approvals and self setup on desktop/mobile).");
 } finally {
   await browser.close();
   await new Promise((resolve) => server.close(resolve));
