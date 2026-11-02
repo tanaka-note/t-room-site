@@ -62,7 +62,7 @@
   <meta name="referrer" content="no-referrer">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#07090d">
-  <meta name="troom-app-build" content="portfolio-16b2fdadfe53">
+  <meta name="troom-app-build" content="portfolio-960ed8c30162">
     <meta name="application-name" content="資産運用報告">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -70,20 +70,20 @@
   <meta name="apple-mobile-web-app-title" content="資産報告">
   <title>資産運用報告ページ</title>
   <meta name="description" content="資産運用状況と不定期のレポートを記録する報告ページです。">
-  <link rel="manifest" href="./manifest.webmanifest?v=portfolio-16b2fdadfe53">
+  <link rel="manifest" href="./manifest.webmanifest?v=portfolio-960ed8c30162">
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png?v=20260812-2">
   <link rel="icon" href="./icons/favicon-32.png?v=20260812-2" sizes="32x32" type="image/png">
-  <link rel="stylesheet" href="./report.css?v=portfolio-16b2fdadfe53">
+  <link rel="stylesheet" href="./report.css?v=portfolio-960ed8c30162">
   <meta name="troom-auto-update" content="enabled">
-  <link rel="stylesheet" href="./editor.css?v=portfolio-16b2fdadfe53">
+  <link rel="stylesheet" href="./editor.css?v=portfolio-960ed8c30162">
 </head>
 <body>
-  <section id="login-panel" class="login-panel"><h1>資産運用報告</h1><p>閲覧・編集にはパスキーでログインしてください。</p><button id="login-button" type="button">パスキーでログイン</button><p id="login-message" role="status"></p><p>初回はSecurity Centerで「資産運用報告」のサービス連携を設定してください。</p><a href="/security/">Security Centerを開く</a></section>
+  <section id="login-panel" class="login-panel"><h1>資産運用報告</h1><p>閲覧・編集にはパスキーでログインしてください。</p><button id="login-button" class="passkey-login-button" type="button" disabled><svg class="passkey-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg><span id="passkey-login-label" class="passkey-login-label">パスキーでログイン</span></button><p id="login-message" role="status"></p><p>初回はSecurity Centerで「資産運用報告」のサービス連携を設定してください。</p><a href="/security/">Security Centerを開く</a></section>
   <main id="report-app" class="report-shell" hidden>
   <nav class="account-toolbar"><span id="account-label"></span><button type="button" id="edit-toggle" hidden>編集</button><button type="button" id="backup-button">データを書き出す</button><button type="button" id="logout-button">ログアウト</button></nav>
   <p id="app-message" role="status" aria-live="polite"></p>
   <label class="view-date">表示する記録 <select id="view-date"></select></label>
-  <section id="editor-panel" class="report-panel" hidden aria-labelledby="editor-title"><h2 id="editor-title">資産データの編集</h2><form id="editor-form"><div class="date-fields"><label>更新日（基準日）<input id="record-date" type="date" required></label><label>更新時刻（日本時間・任意）<input id="record-time" type="time"></label></div><p id="editor-note"></p><div id="asset-editors"></div><button type="button" id="add-asset">銘柄を追加</button><label id="legacy-total-label" hidden>銘柄合計（控除前・円）<input id="legacy-total" type="text" inputmode="numeric"></label><p>合計（控除前）：<strong id="editor-total"></strong></p><p>同じ日付への保存は、その日の記録の訂正になります。過去日を保存しても後日の記録は変更しません。</p><div class="editor-actions"><button type="submit" id="save-button">保存してチャートを更新</button><button type="button" id="cancel-edit">編集を閉じる</button></div></form></section>
+  <section id="editor-panel" class="report-panel" hidden aria-labelledby="editor-title"><h2 id="editor-title">資産データの編集</h2><form id="editor-form"><div class="date-fields"><label>更新日（基準日）<input id="record-date" type="date" required></label><label>更新時刻（日本時間・任意）<input id="record-time" type="time"></label></div><label id="principal-label">元本（円）<input id="base-principal" type="text" inputmode="numeric" required aria-describedby="principal-note"></label><p id="principal-note">全期間の成績計算に使う基準元本です。変更すると、過去を含む全日付の損益・損益率を再計算します。</p><p id="editor-note"></p><div id="asset-editors"></div><button type="button" id="add-asset">銘柄を追加</button><label id="legacy-total-label" hidden>銘柄合計（控除前・円）<input id="legacy-total" type="text" inputmode="numeric"></label><p>合計（控除前）：<strong id="editor-total"></strong></p><p>同じ日付への保存は、その日の記録の訂正になります。過去日を保存しても後日の記録は変更しません。</p><div class="editor-actions"><button type="submit" id="save-button">保存してチャートを更新</button><button type="button" id="cancel-edit">編集を閉じる</button></div></form></section>
     <header class="report-header">
       <div>
         <p class="eyebrow">MONTHLY PORTFOLIO REPORT</p>
@@ -202,8 +202,8 @@
     </section>
   </main>
 
-  <script type="module" src="./editor.js?v=portfolio-16b2fdadfe53"></script>
-  <script src="/assets/pwa-auto-update.js?v=portfolio-16b2fdadfe53" defer></script>
-  <script src="/security/passkey-client.js?v=portfolio-16b2fdadfe53" defer></script>
+  <script type="module" src="./editor.js?v=portfolio-960ed8c30162"></script>
+  <script src="/assets/pwa-auto-update.js?v=portfolio-960ed8c30162" defer></script>
+  <script src="/security/passkey-client.js?v=portfolio-960ed8c30162" defer></script>
 </body>
 </html>
