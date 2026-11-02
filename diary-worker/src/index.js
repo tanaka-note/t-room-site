@@ -503,6 +503,9 @@ async function serveAsset(request, env, url, path) {
   const assetPaths = new Map([
     ["/diary.css", "/diary.css"],
     ["/diary.js", "/diary.js"],
+    ["/photo-migration.js", "/photo-migration.js"],
+    ["/photo-migration-core.js", "/photo-migration-core.js"],
+    ["/photo-migration.css", "/photo-migration.css"],
     ["/diary-bootstrap.js", "/diary-bootstrap.js"],
     ["/password-login-audit.js", "/password-login-audit.js"],
     ["/dialog-navigation.js", "/dialog-navigation.js"],
