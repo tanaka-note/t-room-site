@@ -8,7 +8,7 @@ test("billing login offers only a primary passkey action and Security Center pre
     readFile(new URL("../public/billing.js", import.meta.url), "utf8"),
     readFile(new URL("../public/billing.css", import.meta.url), "utf8")
   ]);
-  assert.match(html, /登録済みのパスキーでログインしてください。/);
+  assert.match(html, /パスキーを使ってログインしてください。/);
   assert.match(html, /id="passkey-login" class="button primary full(?: [^"]*)?"/);
   assert.match(html, /class="passkey-icon"[\s\S]*aria-hidden="true"/);
   assert.match(html, /href="\/security\/"/);
