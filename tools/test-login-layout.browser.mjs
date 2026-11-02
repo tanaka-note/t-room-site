@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
-import { resolve, dirname, extname } from 'node:path';
+import { resolve, dirname, extname, sep } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -19,7 +19,10 @@ const server = createServer(async (req, res) => {
     const path = new URL(req.url, 'http://fixture.test').pathname;
     const app = registry.apps.filter(a => a.deployCwd !== '.').find(a => path.startsWith(new URL(a.publicUrls[0]).pathname));
     const base = app ? new URL(app.publicUrls[0]).pathname : '/';
-    let file = app ? resolve(root, dirname(app.entrypoints[0]), path.slice(base.length) || 'index.html') : resolve(root, '.' + path);
+    const directory = app ? resolve(root, dirname(app.entrypoints[0])) : resolve(root, 'assets');
+    if (!app && !path.startsWith('/assets/')) { res.writeHead(404); res.end('missing'); return; }
+    let file = app ? resolve(directory, path.slice(base.length) || 'index.html') : resolve(root, '.' + path);
+    if (!file.startsWith(directory + sep)) { res.writeHead(404); res.end('missing'); return; }
     if (file.endsWith('/cloud/cloud.js')) file = resolve(root, 'cloud-worker/public/cloud.js');
     const data = await readFile(file);
     res.writeHead(200, { 'Content-Type': mime[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-store' }); res.end(data);
