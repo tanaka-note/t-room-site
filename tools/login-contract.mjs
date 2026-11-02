@@ -8,6 +8,7 @@ export async function assertLoginContract(source, app, workspace) {
   if (!/passkey-login-button|パスキーでログイン/.test(source)) return;
   assert.match(source, /class="[^"]*\btlain-login-view\b/, `${app.id}: common login view is required`);
   assert.match(source, /class="[^"]*\btlain-login-card\b/, `${app.id}: common login card is required`);
+  assert.match(source, /class="[^"]*\btlain-login-guidance\b/, `${app.id}: common login guidance is required`);
   for (const file of ['tlain-login.css', 'tlain-login.js']) {
     assert.ok(source.includes(file + '?v='), `${app.id}: versioned ${file} is required`);
     const canonical = `tools/shared/${file}`;

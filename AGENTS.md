@@ -95,7 +95,7 @@
 - 対象アプリ、公開URL、build marker、Service Worker、deploy targetは`web-apps.json`を正とし、追加・変更時はcontract testを通す。
 - 技術的理由で自動更新を適用できない場合は勝手に例外化せず、ユーザーへ説明して確認する。
 
-ログイン画面は既存・新規サービスとも `tools/shared/tlain-login.css` と `tools/shared/tlain-login.js` を正本とする明るい背景・最大幅440pxの白いカードへ統一する。`tlain-login-view`／`tlain-login-card`、version付き参照、`web-apps.json` のbuild依存・assetCopiesを登録し、Web contractと共通ログイン表示試験を通す。独自の全幅・全画面・暗色ログインを追加しない。
+ログイン画面は既存・新規サービスとも `tools/shared/tlain-login.css` と `tools/shared/tlain-login.js` を正本とする明るい背景・最大幅440pxの白いカードへ統一する。`tlain-login-view`／`tlain-login-card`、version付き参照、`web-apps.json` のbuild依存・assetCopiesを登録し、Web contractと共通ログイン表示試験を通す。独自の全幅・全画面・暗色ログインを追加しない。通常のログインカードは紹介文を置かず、サービス名 →「パスキーを使ってログインしてください。」→ パスキーボタンの順とする。状態・エラー表示と登録・復旧の補助導線は維持する。
 
 ## 12. 画面遷移・戻る操作
 

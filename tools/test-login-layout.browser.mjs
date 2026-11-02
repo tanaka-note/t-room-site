@@ -42,6 +42,7 @@ try {
         const path = new URL(route.request().url()).pathname;
         if (path === '/security/api/setup/status') return route.fulfill({ json: {} });
         if (path === '/security/api/status') return route.fulfill({ json: { enabled: true, initialized: true, adminAuthenticated: false } });
+        if (path === '/cloud/api/session') return route.fulfill({ json: { authenticated: false } });
         return route.fulfill({ status: 401, json: { error: 'パスキーでログインしてください。' } });
       });
       await page.goto(origin + new URL(app.publicUrls[0]).pathname);
@@ -49,6 +50,11 @@ try {
       await button.waitFor({ state: 'visible' });
       const card = button.locator('xpath=ancestor::*[contains(concat(" ",normalize-space(@class)," ")," tlain-login-card ")]').first();
       await card.waitFor({ state: 'visible' });
+      const guidance = card.locator('.tlain-login-guidance');
+      assert.equal(await guidance.innerText(), 'パスキーを使ってログインしてください。', app.id);
+      assert.equal(await card.evaluate(el => el.querySelector('h1').nextElementSibling === el.querySelector('.tlain-login-guidance')), true, `${app.id}: service name must precede guidance without an introduction`);
+      assert.equal(await guidance.evaluate(el => Boolean(el.compareDocumentPosition(el.closest('.tlain-login-card').querySelector('.passkey-login-button')) & Node.DOCUMENT_POSITION_FOLLOWING)), true, `${app.id}: guidance must precede login button`);
+      assert.deepEqual(await card.locator('p:not(.tlain-login-guidance):not(.eyebrow):not(.tlain-login-brand):not(.step-label):not([role="status"]):not([role="alert"])').allTextContents().then(texts => texts.map(text => text.trim()).filter(Boolean)), [], `${app.id}: no service introduction in login card`);
       const metrics = await card.evaluate(el => {
         const rect = el.getBoundingClientRect(), style = getComputedStyle(el);
         const b = el.querySelector('.passkey-login-button'), br = b.getBoundingClientRect(), bs = getComputedStyle(b);
