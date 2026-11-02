@@ -84,6 +84,8 @@ async function setup(method, touch = false) {
 async function open(page) {
   await page.click("#camera-roll-button");
   await page.waitForFunction(() => document.getElementById("camera-roll-dialog").open);
+  await page.waitForSelector('#photo-month-filter option[value="2026-11"]', { state: "attached" });
+  await page.selectOption("#photo-month-filter", "2026-11");
   await page.click("#photo-save-button");
   await page.waitForFunction(() => document.getElementById("photo-save-dialog").open && !document.getElementById("photo-save-start").disabled);
 }
