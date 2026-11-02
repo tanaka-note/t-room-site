@@ -77,7 +77,7 @@
     $('restore-file').value='';$('restore-preview').textContent='';
     for(const id of ['confirm-title','confirm-copy','confirm-error','entry-error','account-error','message'])$(id).textContent='';
     resetCategory();render();$('account-name').textContent='';$('access-mode').textContent='';document.body.classList.remove('is-viewer');
-    $('app-view').hidden=true;$('login-view').hidden=false;$('login').hidden=false;$('boot-message').textContent='パスキーでログインしてください。';$('login').removeAttribute('aria-busy');$('passkey-login-label').textContent='パスキーでログイン';setBusy(false);
+    $('app-view').hidden=true;$('login-view').hidden=false;$('login').hidden=false;$('boot-message').textContent='パスキーを使ってログインしてください。';$('login').removeAttribute('aria-busy');$('passkey-login-label').textContent='パスキーでログイン';setBusy(false);
     if(broadcast)channel?.postMessage('session-changed');
   }
   function observeExpiry(expiresAt){clearTimeout(expiryTimer);if(session&&Number.isFinite(expiresAt)){session.expiresAt=expiresAt;expiryTimer=setTimeout(async()=>{if(session?.expiresAt*1000<=Date.now()){resetSession();return;}const generation=sessionGeneration;try{const value=await api('/session');currentGeneration(generation);showSession(value);}catch{if(generation===sessionGeneration)resetSession();}},Math.min(86400000,Math.max(0,expiresAt*1000-Date.now())));}}
@@ -234,5 +234,5 @@
   window.addEventListener('troom-session-renewed',event=>observeExpiry(event.detail.expiresAt));
   document.addEventListener('troom:before-auto-update',event=>{if(busy||$('date-wheel-dialog').open||$('troom-calendar-dialog').open)event.preventDefault();});
   window.addEventListener('beforeunload',event=>{if(busy||[...editors].some(([id,e])=>$(id).open&&e.initial!==e.serialize())){event.preventDefault();event.returnValue='';}});
-  (async()=>{try{showSession(await api('/session'));await load();}catch(error){$('boot-message').textContent=error.status===401?'パスキーでログインしてください。':error.message;$('login').hidden=false;}})();
+  (async()=>{try{showSession(await api('/session'));await load();}catch(error){$('boot-message').textContent=error.status===401?'パスキーを使ってログインしてください。':error.message;$('login').hidden=false;}})();
 })();

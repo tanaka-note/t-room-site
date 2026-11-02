@@ -62,16 +62,16 @@
   <title>請求書管理システム</title>
   <meta name="application-name" content="請求書管理システム">
   <meta name="theme-color" content="#577263">
-  <link rel="manifest" href="/billing/manifest.webmanifest?v=billing-a3e7b198d034">
-  <link rel="stylesheet" href="./billing.css?v=billing-a3e7b198d034">
-  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-a3e7b198d034">
-  <script src="./troom-date-picker.js?v=billing-a3e7b198d034" defer></script>
-  <script src="/diary/dialog-navigation.js?v=billing-a3e7b198d034" defer></script>
-  <script src="./billing.js?v=billing-a3e7b198d034" defer></script>
-  <meta name="troom-app-build" content="billing-a3e7b198d034">
+  <link rel="manifest" href="/billing/manifest.webmanifest?v=billing-1519aed8cc18">
+  <link rel="stylesheet" href="./billing.css?v=billing-1519aed8cc18">
+  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-1519aed8cc18">
+  <script src="./troom-date-picker.js?v=billing-1519aed8cc18" defer></script>
+  <script src="/diary/dialog-navigation.js?v=billing-1519aed8cc18" defer></script>
+  <script src="./billing.js?v=billing-1519aed8cc18" defer></script>
+  <meta name="troom-app-build" content="billing-1519aed8cc18">
   <meta name="troom-auto-update" content="enabled">
-  <link rel="stylesheet" href="/billing/tlain-login.css?v=billing-a3e7b198d034">
-  <script src="/billing/tlain-login.js?v=billing-a3e7b198d034" defer></script>
+  <link rel="stylesheet" href="/billing/tlain-login.css?v=billing-1519aed8cc18">
+  <script src="/billing/tlain-login.js?v=billing-1519aed8cc18" defer></script>
 </head>
 <body>
   <main>
@@ -87,12 +87,12 @@
       <div class="login-card tlain-login-card">
         <p class="eyebrow">T-lain PRIVATE</p>
         <h1 id="login-title">請求書管理システム</h1>
-        <p class="login-copy">登録済みのパスキーでログインしてください。</p>
+        <p class="login-copy tlain-login-guidance">パスキーを使ってログインしてください。</p>
         <div class="login-actions">
         <p id="login-operation-note" class="form-note" role="alert" hidden></p>
         <p id="login-error" class="error-message" role="alert"></p>
           <button id="passkey-login" class="button primary full passkey-login-button" type="button"><svg class="passkey-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg><span id="passkey-login-label" class="passkey-login-label">パスキーでログイン</span></button>
-          <p class="login-note">パスキーの登録・利用準備は<a href="/security/">Security Center</a>で行ってください。</p>
+          <a href="/security/">パスキーの登録・利用準備</a>
         </div>
       </div>
     </section>
@@ -260,7 +260,7 @@
       <div class="logs-wrap"><table><thead><tr><th>日時</th><th>操作</th><th>操作した人</th><th>対象者</th></tr></thead><tbody id="logs-body"></tbody></table></div>
     </div>
   </dialog>
-  <script src="/security/passkey-client.js?v=billing-a3e7b198d034" defer></script>
-  <script src="/assets/pwa-auto-update.js?v=billing-a3e7b198d034" defer></script>
+  <script src="/security/passkey-client.js?v=billing-1519aed8cc18" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=billing-1519aed8cc18" defer></script>
 </body>
 </html>
