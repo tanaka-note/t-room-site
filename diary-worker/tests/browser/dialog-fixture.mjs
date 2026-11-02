@@ -446,7 +446,6 @@ export async function runDialogs(service) {
 
         // A failed page can resume without losing or duplicating earlier pages.
         await page.fill('#photo-entry-search', 'tag');
-        await page.fill('#photo-file-name-search', 'fixture');
         await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 48 && !document.getElementById('camera-roll-more').disabled);
         failAlbumOffset = 144;
         await page.click('#camera-roll-more');
@@ -457,7 +456,7 @@ export async function runDialogs(service) {
         await page.waitForFunction(() => document.getElementById('camera-roll-more').hidden);
         assert.equal(await page.locator('#camera-roll-grid button').count(), 317);
         assert.equal(albumRequests[0].offset, 144);
-        assert.ok(albumRequests.every(request => request.entryQuery === 'tag' && request.fileName === 'fixture'));
+        assert.ok(albumRequests.every(request => request.entryQuery === 'tag' && request.fileName === null));
 
         // Switching months invalidates a late page and stops its remaining loop.
         await page.selectOption('#photo-month-filter', '');

@@ -14,6 +14,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     replaceTextInRichDocument, sameTextMarks, tokenizeEditorDocument, tokenizeEntryTextWithLinks, withoutPhotoMarkers;
   let WEATHER_LABELS, createWeatherIcon, createUnsetWeatherIcon;
   let photoViewer, photoViewerPromise;
+  let photoSaver, photoSaverPromise;
   let viewerOpenRequest = 0;
   const readingToolsReady = Promise.all([
     import(new URL(`diary-search.js${scriptUrl.search}`, scriptUrl).href),
@@ -125,7 +126,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     photoEntryQuery: "",
     photoMonth: "",
     photoOrder: "newest",
-    photoFileNameQuery: "",
     photoRequestId: 0,
     photoLoading: false,
     photoSearchTimer: null,
@@ -254,7 +254,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     photoEntrySearch: document.querySelector("#photo-entry-search"),
     photoMonthFilter: document.querySelector("#photo-month-filter"),
     photoSortButton: document.querySelector("#photo-sort-button"),
-    photoFileNameSearch: document.querySelector("#photo-file-name-search"),
     cameraRollStatus: document.querySelector("#camera-roll-status"),
     cameraRollGrid: document.querySelector("#camera-roll-grid"),
     cameraRollMore: document.querySelector("#camera-roll-more"),
@@ -374,7 +373,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function bindEvents() {
     document.addEventListener("troom:before-auto-update", (event) => {
-      if (hasEditorChanges() || state.editorComposing || state.photoPreparing || state.photoUploading || state.photoPickerActive || document.querySelector("dialog[open]")) {
+      if (hasEditorChanges() || state.editorComposing || state.photoPreparing || state.photoUploading || state.photoPickerActive || photoSaver?.busy || document.querySelector("dialog[open]")) {
         event.preventDefault();
       }
     });
@@ -539,12 +538,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       state.photoEntryQuery = elements.photoEntrySearch.value.trim();
       state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
     });
-    elements.photoFileNameSearch.addEventListener("input", () => {
-      cancelCameraRollLoad();
-      elements.cameraRollMore.disabled = true;
-      state.photoFileNameQuery = elements.photoFileNameSearch.value.trim();
-      state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
-    });
+    document.querySelector("#photo-save-button").addEventListener("click", openPhotoSave);
     elements.photoOpenEntry.addEventListener("click", openViewerEntry);
     elements.photoDelete.addEventListener("click", requestPhotoDeletion);
 
@@ -681,6 +675,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function enterDiary(session) {
+    photoSaver?.suspend();
     cancelPositionRestoration();
     const restoreVersion = initialScrollIntent.interrupted ? -1 : positionVersion;
     const generation = ++sessionGeneration;
@@ -746,6 +741,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function changeActiveHousehold() {
+    photoSaver?.suspend();
     const householdId = elements.householdSwitcher.value;
     elements.householdSwitcher.disabled = true;
     try {
@@ -1555,6 +1551,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       onClose: finishEntryClose
     });
     dialogs.register("camera-roll-dialog", { scrollRoots: () => [], restore: canView, onClose: finishCameraRollClose });
+    dialogs.register("photo-save-dialog", { restore: canView });
     dialogs.register("photo-viewer-dialog", {
       scrollRoots: () => [],
       guard: () => !state.photoDeleteBusy,
@@ -2875,6 +2872,28 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.saveDraftButton.textContent = "下書き保存";
   }
 
+  async function openPhotoSave() {
+    const generation = sessionGeneration;
+    try {
+      if (!photoSaverPromise) {
+        photoSaverPromise = import(new URL(`diary-photo-save.js${scriptUrl.search}`, scriptUrl).href).then(module => {
+          photoSaver = module.createPhotoSaveManager({ api, dialogs, formatBytes, onNotice: showToast,
+            getOwner: () => activeSessionContext && JSON.stringify([activeSessionContext, state.activeHouseholdId]),
+            getDefaultRange: () => {
+              const month = state.photoMonth || currentJapanMonth();
+              const [year, number] = month.split("-").map(Number);
+              return { from: `${month}-01`, to: `${month}-${new Date(Date.UTC(year, number, 0)).getUTCDate()}` };
+            },
+            onSessionExpired: () => { resetState(); showLogin("ログインして未完了分を再開してください。"); }
+          });
+          return photoSaver;
+        }).catch(error => { photoSaverPromise = null; throw error; });
+      }
+      const saver = await photoSaverPromise;
+      if (generation === sessionGeneration && !elements.appView.hidden) await saver.open();
+    } catch (error) { if (generation === sessionGeneration) showToast(error.message); }
+  }
+
   async function openCameraRoll() {
     updatePhotoSortButton();
     dialogs.open("camera-roll-dialog");
@@ -2950,7 +2969,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       parameters.set("month", state.photoMonth);
       parameters.set("order", state.photoOrder);
     }
-    if (state.photoFileNameQuery) parameters.set("fileName", state.photoFileNameQuery);
     let added = 0;
     const started = performance.now();
     try {
@@ -3713,6 +3731,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       closeCameraRollDialog();
       return;
     }
+    if (id === "photo-save-dialog") return dialogs.close(id);
     if (id === "photo-viewer-dialog") {
       closePhotoViewerDialog();
       return;
@@ -4035,6 +4054,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function resetState() {
+    photoSaver?.suspend();
     cancelPositionRestoration();
     elements.tagPageBack.href = `${BASE_PATH}/`;
     elements.tagPageBack.textContent = "← 日記へ戻る";
@@ -4115,7 +4135,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.photoMonth = "";
     state.photoOrder = "newest";
     updatePhotoSortButton();
-    state.photoFileNameQuery = "";
     state.viewerPhotos = [];
     state.viewerIndex = -1;
     finishPhotoPickerInteraction();

@@ -1707,7 +1707,19 @@ button:disabled {
   grid-template-columns: minmax(220px, 1.5fr) repeat(2, minmax(140px, 0.6fr));
   gap: 12px;
   margin: 24px 0 10px;
+  align-items: end;
 }
+
+#photo-save-button { min-height: 44px; }
+
+.photo-save-dialog { width: min(600px, calc(100% - 28px)); }
+.photo-save-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 24px 0 16px; }
+.photo-save-fields label { display: grid; gap: 6px; min-width: 0; color: var(--muted); font-size: 0.85rem; font-weight: 700; }
+.photo-save-fields input, .photo-save-fields select { width: 100%; min-width: 0; min-height: 44px; border: 1px solid var(--line); border-radius: 7px; padding: 0 11px; color: var(--ink); background: #fff; }
+.photo-save-fields .photo-save-method { grid-column: 1 / -1; }
+.photo-save-fields .date-input-shell input { padding-right: 40px; }
+.photo-save-fields .date-input-shell { position: relative; display: flex; }
+.photo-save-fields .date-picker-button { position: absolute; right: 0; top: 50%; height: 44px; }
 
 .camera-roll-filters label {
   display: grid;

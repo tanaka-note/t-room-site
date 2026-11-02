@@ -83,11 +83,11 @@ test('album opens with 48 photos, expands to the total cap and cannot grow on re
 
 test('album month and search results share the cap, and reset frees the old list', async () => {
   const f = albumFixture();
-  f.state.photoMonth = '2026-10'; f.state.photoEntryQuery = 'tag'; f.state.photoFileNameQuery = 'file';
+  f.state.photoMonth = '2026-10'; f.state.photoEntryQuery = 'tag';
   await f.loadPhotos(true); await f.loadPhotos(false);
   assert.equal(f.state.photos.length, f.max);
   assert.ok(f.requests.every(r => r.url.searchParams.get('month') === '2026-10'
-    && r.url.searchParams.get('entryQuery') === 'tag' && r.url.searchParams.get('fileName') === 'file'));
+    && r.url.searchParams.get('entryQuery') === 'tag' && !r.url.searchParams.has('fileName')));
   const oldPhotos = f.state.photos;
   await f.loadPhotos(true);
   assert.notEqual(f.state.photos, oldPhotos);

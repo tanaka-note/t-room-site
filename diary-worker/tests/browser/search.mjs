@@ -133,7 +133,7 @@ async function run(browserType, name, options = {}) {
     assert.equal(await page.locator('[data-clear-search="tag-search-input"]').isVisible(), false);
     assert.equal(await page.locator("#tag-search-input").evaluate(node => node === document.activeElement), true);
     await page.locator("#camera-roll-button").click();
-    for (const [id, parameter] of [["photo-entry-search", "entryQuery"], ["photo-file-name-search", "fileName"]]) {
+    for (const [id, parameter] of [["photo-entry-search", "entryQuery"]]) {
       const responseFor = value => page.waitForResponse(response => {
         const url = new URL(response.url());
         return url.pathname === '/diary/api/photos' && url.searchParams.get(parameter) === value;

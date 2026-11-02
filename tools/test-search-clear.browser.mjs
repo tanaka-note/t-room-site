@@ -12,7 +12,6 @@ const cases = [
   ['diary', 'diary-worker/public/index.html', '#diary-search-input', '#diary-search-clear'],
   ['diary', 'diary-worker/public/index.html', '#tag-search-input', '[data-clear-search="tag-search-input"]'],
   ['diary', 'diary-worker/public/index.html', '#photo-entry-search', '[data-clear-search="photo-entry-search"]'],
-  ['diary', 'diary-worker/public/index.html', '#photo-file-name-search', '[data-clear-search="photo-file-name-search"]'],
   ['cloud', 'cloud-worker/public/index.html', '#search-input', '[data-search-clear="search-input"]'],
   ['cloud', 'cloud-worker/public/index.html', '#floating-search-input', '[data-search-clear="floating-search-input"]'],
   ['cloud', 'cloud-worker/public/share.html', '#share-search', '#share-search-clear'],
