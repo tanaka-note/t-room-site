@@ -24,3 +24,6 @@ assert.match(source, /const PHOTO_REQUEST_MAX_BYTES = 80 \* 1024 \* 1024/);
 assert.match(source, /original\.size > 60 \* 1024 \* 1024/);
 
 process.stdout.write("Diary bounded request-body contract tests passed.\n");
+
+// Migration recovery is part of diary write safety.
+await import("./photo-migration.test.mjs");

@@ -64,6 +64,16 @@ API応答の`Server-Timing`は`diary_total`（Workerでの総時間）、`diary_
 
 失敗時の匿名の送信試行UUID、段階、HTTP status、例外分類、経過時間、Cloudflare Ray IDのconsole出力も維持する。これらの診断にはファイル名・本文・画像・Cookie・token・account/entry/photo IDを含めず、新たなログ収集先や永続保存設定は作らない。詳細調査と制約は[2026-10-23の調査記録](../docs/history/diary-photo-upload-20261023.md)を参照。
 
+## Googleフォトの一回限りの写真移行
+
+`scripts/prepare-takeout.py --source <ZIPの保存先> --output <packageフォルダ> --year 2025` は、全分割ZIPのJSONを照合し、日本時間の撮影日ごとに元画像・表示用WebP・サムネイルと `manifest.json` をローカルへ準備する。PythonのPillowとpillow-heifを使用する。元ZIPは変更せず、動画は対象外。同日の同一SHA-256は重複として記録し、撮影日時不明・不一致・非対応画像は除外一覧へ残す。撮影日時はGoogleのJSON、次にEXIFを使い、ファイル作成日時やファイル名から推測しない。
+
+既存の日記へログイン後、`/diary/?takeout-migration=2025` で移行専用画面を開く。通常画面にはリンクを追加しない。PC版Chrome/Edgeでpackageフォルダを選び、最初に未処理の1日分を試す。既存APIの認証・認可を維持し、日付がタイトルの下書きへ写真を保存し、全画像を照合してから本文内の撮影時刻順で投稿する。既存の日記がある日は上書きせず停止する。
+
+`migration-progress.json` を選択したフォルダへ書き、各画像の保存後に進捗を確定する。開始・画像保存・投稿の応答消失後も同じ日記作成request IDと画像IDを使い、保存先を読み直してから再開する。進捗には日記ID・画像ID・保存先の識別情報だけを含め、Cookie・token・画像本体は記録しない。原本・本文・画像をブラウザの永続キャッシュへ追加しない。タブ間の排他と処理中の自動更新延期を行う。PC終了・スリープ・タブ終了・認証期限切れで中断したら同じフォルダを再選択する。
+
+再開時に完了済み日記や下書きが編集されていたら停止し、自動修正しない。移行後の「保存結果を照合」は全対象の日記・画像ID・本文順序を読み取りで比較する。フォルダ内のmanifestは移行開始後に変更しない。確認コマンドは `node --test tests/photo-migration.test.mjs`、`node tests/browser/photo-migration.mjs`、`python scripts/test-prepare-takeout.py`。今回限りの移行用で、Googleとの継続同期・自動取り込み・新しい認証方式は追加しない。
+
 ## キャッシュと更新
 
 Service Workerは登録された正確なbuild付きの公開JS／CSS／アイコンURLだけをcache-firstにする。install時の先読みはログイン入口に必要な資産だけとし、本体や写真モジュールは利用後に保存する。API・HTML・写真・投資資産・manifestはこのキャッシュを経由しない。エラー、redirect、private、no-store応答は保存しない。

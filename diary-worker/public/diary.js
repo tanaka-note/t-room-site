@@ -1,4 +1,11 @@
 export async function startDiary(initialSession, deferredInstallPrompt = null, onReady = () => deferredInstallPrompt, initialScrollIntent = {}) {
+  if (new URL(location.href).searchParams.get("takeout-migration") === "2025") {
+    if (!initialSession?.authenticated || !initialSession.canManageEntries) throw new Error("日記を作成できるアカウントでログインしてください。");
+    const migrationUrl = new URL(`photo-migration.js${new URL(import.meta.url).search}`, import.meta.url);
+    await (await import(migrationUrl.href)).mountMigration(initialSession);
+    onReady();
+    return;
+  }
   // Keep the shared module on the same build URL as this app shell, including offline fallback.
   const scriptUrl = new URL(import.meta.url);
   let splitSearchTerms, createSearchExcerpt, highlightSearchTerms;
