@@ -41,7 +41,7 @@ export function commands(target) {
       node('.', 'tools/verify-web-contracts.mjs'),
       node('diary-worker', '--test', 'tests/photo-backup.test.js'),
       node('diary-worker', '--test', 'tests/photo-backup.workerd.mjs'),
-      ...tests('diary-worker', ...['entry-domain', 'photo-viewer', 'photo-deletion', 'album-photo-deletion', 'photo-order', 'photo-preparation', 'photo-upload', 'photo-save-timing', 'photo-rich-text-editing-ui', 'startup-state', 'month-range', 'rich-text-ui', 'tags-ui', 'dialog-assets', 'request-safety', 'session-read-reuse', 'backup', 'last-published-migration', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view', 'bootstrap', 'static-cache', 'passkey-login-ui'].map(n => `tests/${n}.mjs`), 'tests/photo-migration.test.mjs', 'tests/permissions.e2e.mjs')],
+      ...tests('diary-worker', ...['entry-domain', 'photo-viewer', 'photo-deletion', 'album-photo-deletion', 'photo-order', 'photo-preparation', 'photo-upload', 'photo-save-timing', 'photo-rich-text-editing-ui', 'startup-state', 'month-range', 'rich-text-ui', 'tags-ui', 'dialog-assets', 'request-safety', 'session-read-reuse', 'backup', 'last-published-migration', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view', 'bootstrap', 'static-cache', 'passkey-login-ui'].map(n => `tests/${n}.mjs`), 'tests/photo-migration.test.mjs', 'tests/upgrade-regression.mjs', 'tests/permissions.e2e.mjs')],
     billing: [{ cwd: 'billing-worker', script: 'test' }],
     downloader: [node('downloader-worker', '--test', ...files('downloader-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
     downloader2: [
