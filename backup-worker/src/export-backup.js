@@ -49,7 +49,9 @@ async function schemaMetadata(db, service, spec) {
 async function exportRequest(env, service, body, fetcher) {
   if (!/^[a-f0-9]{32}$/.test(env.D1_EXPORT_ACCOUNT_ID || '') || !env.D1_EXPORT_API_TOKEN) throw new Error('ExportUnavailable');
   const response = await fetcher(`https://api.cloudflare.com/client/v4/accounts/${env.D1_EXPORT_ACCOUNT_ID}/d1/database/${DATABASES[service]}/export`, {
-    method: 'POST', redirect: 'error', headers: { Authorization: `Bearer ${env.D1_EXPORT_API_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    // Workers supports manual/follow only. Check response.ok below so every
+    // redirect is rejected without sending the API credential to another URL.
+    method: 'POST', redirect: 'manual', headers: { Authorization: `Bearer ${env.D1_EXPORT_API_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
   });
   if (!response.ok) throw new Error('ExportUnavailable');
   const data = await response.json();
@@ -68,7 +70,7 @@ async function openExport(env, service, tables, fetcher, sleep) {
     if (result.status === 'complete' && signed) {
       const url = new URL(signed);
       if (url.protocol !== 'https:' || url.username || url.password) throw new Error('ExportUnavailable');
-      const response = await fetcher(url.href, { redirect: 'error' });
+      const response = await fetcher(url.href, { redirect: 'manual' });
       if (!response.ok || !response.body) throw new Error('ExportUnavailable');
       return { body: response.body, bookmark };
     }

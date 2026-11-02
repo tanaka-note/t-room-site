@@ -21,6 +21,8 @@
 
 SQLはUTF-8のstreamとして読み、概ね1 MiBまたは1,000行でJSON gzip partへ分ける。全DB分の巨大JSONは作らず、ライブDBのページ分割SELECTも使わない。単一SQL文16 Mi文字、token 10,000個、単一行JSON 8 MiB、圧縮前後object16 MiB、最大20,000 partを安全停止条件とする。これは無制限の処理ではなく、巨大DBではWorkflowのCPU/subrequest/15分step制限も評価が必要。上限の単純緩和をしない。50,000監査行・旧8 MiB超の合成データと全12 DBの実workerd export構文で保存・隔離復元を検証する。本番の実行時間・CPU・最大メモリの測定は別に行う。
 
+API・署名URL取得にはWorkers対応の`redirect: manual`を使い、3xxを含む非2xxは拒否する。API credentialを取得先へ転送しない。Nodeのfetch mockだけではWorkers非対応のredirect指定を見逃すため、実workerdのfetch・D1・R2による保存/リース/読戻し/保持と、API・取得先それぞれのリダイレクト拒否を合成データで回帰検証する。
+
 新形式は共通D1が`d1/{service}/v3/daily/`・`monthly/`、日記D1が`v9/daily/`・`monthly/`。各JSON gzipはschema・DB名・migration・export bookmark・取得時刻・列・行数・part key/byte数/SHA-256を含むmanifest。本文partは同namespaceの`data/{一意ID}/`へcreate-only保存する。日次と月次は同じ検証済みpartを参照し、月次のために本文を再コピーしない。manifestだけの成功ではなく、本文partの読み戻し・SHA確認後に世代を公開する。中断後は既存の正常日次を検証し、未完の月次から再開する。同日・同月の正常世代は上書きしない。
 
 保持は日次30・月次12。残すmanifestの内容と全partのHEADによるSHA metadata/サイズを確認してから、古いmanifestを削除する。partは残す全日次・月次からの参照を照合し、参照のない旧世代分だけを削除する。毎晩30世代の本文全量を読み直さない。実際の復元では各part本文を再hash検証する。旧v1/v2および日記v2〜v8と旧写真はこの整理対象に含めない。
