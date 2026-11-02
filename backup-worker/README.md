@@ -4,35 +4,44 @@
 
 ## 対象と保持
 
-- 専用Worker `t-room-backup` が毎日03:40 JSTにCloud / Security / Billing / Payments / Health / Inventory / AI / Calendar / Householdの許可された永続テーブルとDownloaderの利用集計を順番に保存する。Calendarのローカル利用はサーバーへ送らないため対象外。
-- Householdは専用D1のアカウント状態・現行世代/revision・家計record（保持中の旧世代を含む）・再送履歴を既存の同一DBスナップショット方式で保存し、Backup-dataへ「家計簿」として表示する。手動JSON出力とは別の定期保存。Secret・Cookie・パスキーは収集せず、隔離復元ではアカウントを無効化してsession versionを進める。既存の合計10,000行・行JSON 8MiB等の停止条件は変更しないため、明細や旧世代の増加で超過した場合は失敗として通知する。
+- 専用Worker `t-room-backup` の `D1BackupWorkflow` が本番12 D1を扱う。Portfolio / Cloud / Security / Billing / Payments / Health / Inventory / AI / Calendar / HouseholdとDownloader利用集計は03:40 JSTのCron、日記D1は既存の03:25 JSTから、DBごとに独立したWorkflowを起動する。開始は30秒ずつずらす。Calendarのローカル利用は対象外。
+- Portfolio（資産運用報告）は他サービスD1と同じ `40 18 * * *`（毎日03:40 JST）のscheduled呼び出しで起動する。独立したCronは追加しない。`portfolio-db` のアカウント状態、報告設定とrevision、日付別評価額・更新時刻・銘柄内訳、訂正前後の履歴・保存IDを全て対象にする。保存先は既存の非公開R2の `d1/portfolio/v3/daily/` と `monthly/`、保持は日次30・月次12世代。手動JSON出力・旧静的ページとは独立し、動的ページの更新が対象になる。Backup-dataには「資産運用報告」として保存世代・成否を表示する。新規のSecretやパスキーは収集せず、新旧両形式の隔離復元では両アカウントを無効化しsession versionを進める。
+- Householdは専用D1のアカウント状態・現行世代/revision・家計record（保持中の旧世代を含む）・再送履歴を保存し、Backup-dataへ「家計簿」として表示する。手動JSON出力とは別の定期保存。Secret・Cookie・パスキーは収集せず、隔離復元ではアカウントを無効化してsession versionを進める。通常保存は公式exportをストリーム処理するため、旧方式の合計10,000行・行JSON 8MiB制約には依存しない。
 - 日次30世代・月次12世代。月次はその月の最初の成功分。同日・同月の正常世代は再実行で上書きしない。世代数で整理するため、障害が続けば暦上の30日・12か月より古い世代が残る。
 - 対象のテーブル・列・既知schemaは`src/registry.js`を正本とする。未知のテーブル、対象テーブルの列変更、取得失敗は保存を停止して要確認にする。schema変更と同じPRで許可リスト・復元fixture・src/schema-guard.jsのmigration由来fingerprintを更新する。列だけでなくindex・trigger・制約を含むDDL差分も停止対象とし、D1内部table/migration管理tableは除外する。本番の既存DDLがmigrationと異なる場合も停止するので、初回公開前に読取専用で差分を確認し、内容を精査してから基準を更新する。
-- JSON gzipに実際のschema SQL、想定migration、サービス・DB名、取得時刻、列・行・件数を含める。各DBの全対象行は単一SQLのSQLiteスナップショットで取得し、schema確認は同じD1 batch transactionへ含める。取得開始・完了・予定時刻を記録する。DB間、D1とR2写真の同時点の保証はない。
+- JSON gzipに実際のschema SQL、想定migration、サービス・DB名、取得時刻、列・行・件数を含める。各DBの全対象行は一回の公式D1 exportの固定snapshotから取得する。export前後のschemaを検査し、途中のschema変更では公開しない。取得開始・完了・予定時刻を記録する。DB間、D1とR2写真の同時点の保証はない。
 - T-CloudはD1の管理情報・暗号化済み鍵情報が対象。R2のファイル本体、動画、サムネイルを複製しない。共有リンクと一時解除状態も自動復元対象にしない。
 - Healthの記録は暗号文のまま保存し、Security側の暗号化済み鍵情報と対応させて復旧する。PRF、平文秘密鍵、復号鍵、Worker Secretsを収集しない。パスキーの秘密鍵は端末側にあり、このバックアップから作成できない。
 - Password hashやサービスの一時セッション、challenge、handoff、Downloaderの処理中ジョブ・一時ファイルは対象外。AIの利用実績と料金予約・再送状態は照合に必要なため保持するが、復旧時に処理を再実行しない。
 - 日記D1は専用R2・03:25 JSTを維持し、写真処理と完全に独立する。写真の未処理・破損・R2障害はD1保存・検証・保持の成否に参加しない。写真は独立した差分保存を継続し、世代削除対象外とする。D1の成功だけで日記全体を復元可能と表示しない。
 
-## 保存の安全性と上限
+## D1 exportによる保存
 
-2026-10-26の本番DDLの読取専用照合で、日記・在庫のSQL表記差と請求書の既存`password_iterations DEFAULT 210000`（migrationは100000）を確認した。認証設定やDBは変更せず、精査した完全なDDL fingerprintだけを対応するmigration fingerprintに結び付けて許可する。未知の差分は引き続き停止し、migrationが変わると旧本番例外は無効になる。DDLだけのfixtureで表記差・既存の既定値差・未知の変更拒否を検証する。
+通常のD1保存はREST export API (`output_format: polling`, `dump_options.no_schema: true`, 対象table許可リスト) を使う。export用Secretは専用Workerだけに設定する。API token・一時署名URL・SQL本文をログやWorkflowのstep結果へ返さない。元のSQLをR2や作業diskへ保存せず、SQLも実行しない。データ用INSERT・既知のprologueだけを厳格に解析し、`registry.js`の対象列へ射影する。日記は既存`BACKUP_TABLES`を利用する。Password hash、login ID、session、challenge等の既存除外は維持し、Worker Secrets・PRF・復号鍵を追加取得しない。
 
-新規D1形式はv2（`d1/{service}/v2/daily/`と`monthly/`）、日記はD1単独v8（`v8/daily/`と`v8/monthly/`、`backupScope: d1-only`）。日記の旧`daily/`・`monthly/`・v7は上書き・自動昇格・自動整理せず保持する。新形式の保持数は日次30・月次12のまま。移行直後は旧形式分が追加容量になる。破損・形式不一致の既存世代を上書きせず失敗として残す。
+SQLはUTF-8のstreamとして読み、概ね1 MiBまたは1,000行でJSON gzip partへ分ける。全DB分の巨大JSONは作らず、ライブDBのページ分割SELECTも使わない。単一SQL文16 Mi文字、token 10,000個、単一行JSON 8 MiB、圧縮前後object16 MiB、最大20,000 partを安全停止条件とする。これは無制限の処理ではなく、巨大DBではWorkflowのCPU/subrequest/15分step制限も評価が必要。上限の単純緩和をしない。50,000監査行・旧8 MiB超の合成データと全12 DBの実workerd export構文で保存・隔離復元を検証する。本番の実行時間・CPU・最大メモリの測定は別に行う。
 
-各世代は一意の候補へ保存してSHA-256読み戻し確認後、R2 create-only条件付き書込で公開する。並行実行の敗者も勝者のSHA・gzip・形式・service・table/column/行数を検証する。日次だけ成功して月次が失敗した場合は成功扱いせず、次回は正常な日次を保持して月次から再開する。世代整理は残す全世代の内容検証に成功した後だけ行う。候補は自身の処理終了時に削除するが、強制終了や削除障害による`attempts/`の孤立objectは自動全体削除せず、運用確認対象とする。
+新形式は共通D1が`d1/{service}/v3/daily/`・`monthly/`、日記D1が`v9/daily/`・`monthly/`。各JSON gzipはschema・DB名・migration・export bookmark・取得時刻・列・行数・part key/byte数/SHA-256を含むmanifest。本文partは同namespaceの`data/{一意ID}/`へcreate-only保存する。日次と月次は同じ検証済みpartを参照し、月次のために本文を再コピーしない。manifestだけの成功ではなく、本文partの読み戻し・SHA確認後に世代を公開する。中断後は既存の正常日次を検証し、未完の月次から再開する。同日・同月の正常世代は上書きしない。
 
-D1→Workerの取得は合計10,000行・行JSON合計8 MiB・1行JSON 1 MiBまで。SQLite内で上限とJS safe integerを判定し、超過時は原本行をWorkerへ返さず停止する。単一巨大JSONセルを作らず、D1の2 MB行上限を避けて個別行で返す。圧縮前JSON・解凍後・圧縮objectは16 MiBに制限する。gzipはstream処理し、写真はWorkers DigestStreamで全体をメモリへ貯めず照合する。同一isolateの重いバックアップは重複実行しない。一般D1スキーマを任意にSQLへ変換するのではなく、許可リストのSQLだけを実行する。
+保持は日次30・月次12。残すmanifestの内容と全partのHEADによるSHA metadata/サイズを確認してから、古いmanifestを削除する。partは残す全日次・月次からの参照を照合し、参照のない旧世代分だけを削除する。毎晩30世代の本文全量を読み直さない。実際の復元では各part本文を再hash検証する。旧v1/v2および日記v2〜v8と旧写真はこの整理対象に含めない。
 
-これは無制限に増えるAI会話や監査を全量取得し続ける方式ではない。上限超過時はBackup-dataに失敗理由を表示し、既存世代を維持する。分割SELECTでは更新中の一貫性を保証できないため採用しない。将来は書込停止時間を調整したD1 export、または書込世代を固定できる別設計とWorkflows等への分離を推奨する。DB間・鍵情報と本文の世代一致は復旧時に照合し、自動で本番へ戻さない。実際の本番規模でCPU時間・最大メモリを計測したわけではない。
+DB単位のR2 CASリースを20分保持し、15分Workflow stepより長くする。公開・整理の各更新前に所有者と期限を確認する。期限切れの所有者は新所有者のリースを解除せず、期限切れ後は更新しない。Workflowは最大3試行（5分から指数待機）。保存・検証・成功監査の後だけ整理する。保存前に失敗した自身のpartは後処理するが、publish結果不明のpartは復旧点から参照されている可能性があるため消さず、孤立候補として運用確認する。
 
-公開前の2026-10-26の読取専用集計では、T-Cloudは少なくとも29,395行・行JSON 9,813,926 byteで、既にこの上限を超えていた（各tableの先頭最大25,001行だけの下限値）。**今回の方式で本番T-Cloudの新規全量バックアップは成功しない**。既存世代を削除せず`SnapshotTooLarge`で停止し、Backup-dataとCron全体で失敗を示す。他サービスは処理を継続する。T-Cloudの継続的な全量保存には上記の別方式が必要で、上限を緩和したり原本を除外して成功扱いにはしない。日記とSecurityについては集計時点で行数・行JSON合計・最大行・整数精度が上限内だった。本番原本の取得や復元実証とは区別する。
+以前の方式は合計10,000行/8 MiB上限で、2026-10-26時点のT-Cloudを既に保存できなかった。互換用の旧capture/JSON readerは残すが、Workflow bindingを設定した通常Cronは新方式を使う。新方式でも未知schema・不正SQL・整数精度喪失・破損・保存失敗を成功扱いしない。schemaの変更と同じPRでregistry/schema guard/復元fixtureを更新する。
 
-取得SQLはD1のcompound SELECT分岐数制限に合わせて5分岐以下の入れ子へ分け、単一SQL・全体上限の判定を維持する。全10サービスと日記について、実際のローカルworkerd/D1でもSQLの実行・schema照合・上限による本文抑止を検証する。本番bindingは使わない。
+取得SQLはD1のcompound SELECT分岐数制限に合わせて5分岐以下の入れ子へ分け、単一SQL・全体上限の判定を維持する。全11サービスと日記について、実際のローカルworkerd/D1でもSQLの実行・schema照合・上限による本文抑止を検証する。本番bindingは使わない。
 
-公式制約: [D1 limits](https://developers.cloudflare.com/d1/platform/limits/)、[D1 batch transaction](https://developers.cloudflare.com/d1/worker-api/d1-database/)、[Workers limits](https://developers.cloudflare.com/workers/platform/limits/)、[D1 export中の書込制限](https://developers.cloudflare.com/d1/best-practices/import-export-data/)。上限は安全停止のための保守的な実装値で、プロバイダの契約上限を増やすものではない。
+公式export中は対象DBの他のリクエストがブロックされるため夜間に実行する。公式の[export制約](https://developers.cloudflare.com/d1/best-practices/import-export-data/#known-limitations)と[WorkflowsのD1→R2例](https://developers.cloudflare.com/workflows/examples/backup-d1/)を参照。FTS等のvirtual tableはexport非対応なので、追加時に設計を再確認し、本番tableを削除して回避しない。Time Travelは並行した短期復旧手段として維持する。
 
-日記写真は既存の非公開R2 `t-room-diary-media` → `t-room-diary-backups` の差分保存を維持する。新しいWorker・Queue・D1 table・権限・復元APIは追加しない。通常の写真操作経路は変更せず、写真削除とバックアップ削除は連動しない。詳細は次節を参照。
+### 初回切り替え（このPRのmerge・自動Diary公開より前）
+
+1. 別途承認されたインフラ手順で、専用Workerに12 D1と`DIARY_BACKUP`、`D1_EXPORT_ACCOUNT_ID`、専用Secret `D1_EXPORT_API_TOKEN`、Workflow `t-room-d1-backup`を準備する。tokenは対象D1のexportに必要な最小権限だけを持たせ、Git・ログへ保存しない。通常のコード公開tokenや読み取り専用MCPの権限を広げない。
+2. `backup-worker`を専用手順で先に公開し、Workflowの実在・active version・binding・Secret名を読み戻す。新しいpublic route、workers.dev、写真R2本体へのbindingは追加しない。日記の既存バックアップR2とD1だけを追加する。
+3. Diaryの`D1_BACKUPS`はこのWorkflowを参照する。Diary Actions公開は専用WorkerのWorkflow/Secret/日記bindingが未準備ならpreflightで停止する。写真のCronとコピー・再検証・追いつき頻度は変更しない。DB migrationは不要。
+4. 初回定期実行後、12 DBそれぞれのWorkflow完了・成功監査・manifest/part読戻し・既存世代維持を確認する。Cronのdispatch成功だけで完了としない。schema/内容hash/整合性は隔離復元で確認し、本番DBを巻き戻さない。日記写真は独立した従来の残件・検証状態を確認する。
+5. 問題時はDiaryを先に旧versionへ戻して旧D1 Cronへ戻し、その後専用Workerを戻す。新旧世代・part・写真・証明は削除しない。初回の実環境時間・利用量が想定を超える場合は増枠で押し切らず処理分割を見直す。
+
+バックアップR2は既存の非公開構成・保存時暗号化を維持する。Securityの監査長期保管・Downloader一時R2の扱いは変更せず、バックアップ保管先を毎日再複製する機能は追加しない。
 
 ## 日記写真の独立実行と復元
 
@@ -57,9 +66,9 @@ R2 `_metadata/diary-photos/` にコピー/再検証別のカーソル・集計�
 
 従来の7日再検証は5,445 objectで平均778 object/日が必要で、従来の最大120 object/日（40×3試行）より大きい。独立枠では30日経過で再検証対象とし、ID順に分散する。8枠で最大320 object/日だが、バイト・時間制約もあるため30日は目安であり上限保証ではない。検証待ちが増え続ければ別の処理量設計が必要。全件毎回のSHA照合はしない。
 
-v1 receiptもSHA・source/copy版・サイズが一致すれば再利用する。初回のD1証明情報付与時はreceiptの新旧によらずsource/copyを深く検証する。写真参照（ID・作成日時・原本サイズ・3種のsource key）と内容SHAを結ぶimmutable検証情報を`media/photo-versions/{photoId}/{variant}/{referenceSha256}/{contentSha256}.json.gz`へ追加し、旧版を残す。検証後だけ`diary_photos.backup_identity`へvariant別source key・SHA-256・byte数を条件付き保存する。同じkeyの既存SHAと異なる内容は破損扱いで、付け替えない。v8 D1の参照・証明情報は同一transactionで取得し、D1保存時にR2へ問い合わせない。
+v1 receiptもSHA・source/copy版・サイズが一致すれば再利用する。初回のD1証明情報付与時はreceiptの新旧によらずsource/copyを深く検証する。写真参照（ID・作成日時・原本サイズ・3種のsource key）と内容SHAを結ぶimmutable検証情報を`media/photo-versions/{photoId}/{variant}/{referenceSha256}/{contentSha256}.json.gz`へ追加し、旧版を残す。検証後だけ`diary_photos.backup_identity`へvariant別source key・SHA-256・byte数を条件付き保存する。同じkeyの既存SHAと異なる内容は破損扱いで、付け替えない。v8 D1は同一transaction、v9 D1は同一exportで参照・証明情報を取得し、D1保存時に写真R2へ問い合わせない。
 
-隔離復元ではv8 D1を空のmigration済みDBへ戻し、account無効化を維持する。写真は別途`resolvePhotoManifest(bucket, payload)`で全参照を照合してから`restorePhotos`を隔離R2へ実行し、本体SHAを再照合する。snapshot内の証明SHA・サイズが一致するimmutable版だけを選び、候補数や日時で推測しない。証明がない旧snapshotは候補が1つでも`MediaIdentityUnproven`、証明に一致する版がなければ`MediaManifestIncomplete`で停止する。後日live D1に付与した証明を過去snapshotへ遡及しない。旧v2〜v8のD1は新列をNULLとして復元可能で、v7の明示マニフェストによる写真復元も維持する。
+隔離復元ではv8/v9 D1を空のmigration済みDBへ戻し、account無効化を維持する。v9は`restoreIsolated`が検証済み写真参照をv8互換の`photoPayload`として返す。写真は別途`resolvePhotoManifest(bucket, payload)`で全参照を照合してから`restorePhotos`を隔離R2へ実行し、本体SHAを再照合する。snapshot内の証明SHA・サイズが一致するimmutable版だけを選び、候補数や日時で推測しない。証明がない旧snapshotは候補が1つでも`MediaIdentityUnproven`、証明に一致する版がなければ`MediaManifestIncomplete`で停止する。後日live D1に付与した証明を過去snapshotへ遡及しない。旧v2〜v8のD1は新列をNULLとして復元可能で、v7の明示マニフェストによる写真復元も維持する。
 
 公開時はDiaryのmigration `0022_photo_backup_identity.sql`だけを事前適用し、コード公開後にDiaryのCronを専用手順で適用する。nullable列の追加なので旧コードの通常操作と互換性があり、rollback時も列・証明・写真を削除しない。schema fingerprintの既存本番表記差は、読取精査済みDDLへこの加算migrationを適用した期待値へ更新する。初回検証が済むまで写真の証明はNULLのままで、その間のD1世代は写真の自動対応付けを保証しない。検証後の次のD1世代から証明を含む。
 
@@ -69,19 +78,19 @@ v1 receiptもSHA・source/copy版・サイズが一致すれば再利用する�
 
 ## 成否と管理画面
 
-開始・成功・失敗・一部未完了・世代整理失敗を、内容を含まない実行ID・時刻・工程・固定理由コード・試行回数として既存Security監査へ記録する。専用Workerは監査への同期記録と既存Queueへの配送の両方が失敗した場合、保存を開始しない。日記は既存バックアップを継続し、監査配送失敗も安全なWorkerログに残す。
+開始・成功・失敗・一部未完了・世代整理失敗を、内容を含まない実行ID・時刻・工程・固定理由コード・試行回数として既存Security監査へ記録する。日記を含むD1 Workflowは監査への同期記録と既存Queueへの配送が両方失敗した場合、保存を開始しない。写真ジョブの監査配送と安全なWorkerログは従来どおり維持する。
 
-専用WorkerのCronは全サービスを順に処理し、途中の失敗でも後続を継続する。全件が`ok`の場合だけ正常終了する。保存失敗、監査不能、世代整理失敗、想定外例外、不正な戻り値が1件でもあれば、全件処理後に`BackupRunError`で失敗終了する。保存済みの世代整理失敗は`prune_failed`として保存失敗と区別するが、Cron全体は失敗扱いとする。実行単位の`runId`、予定時刻、固定の状態名、件数、サービス別結果を`backup_run_finished`ログへ残す。例外本文・バックアップ本文・任意の戻り値は記録しない。
+通常のCronはDBごとにWorkflowを作成し、1 DBのdispatch失敗でも後続DBを試す。`backup_dispatched`は起動依頼の完了だけを表し、保存成功を意味しない。起動に失敗したDBは固定項目の`backup_dispatch_failed`ログに残し、Cronも失敗する。日記D1のCronもdispatchだけを担当し、写真ジョブとは独立する。
 
-Cronの結果とBackup-dataの監査ベースの表示は確認元が異なる。監査RPCとQueueの両方が使えない場合、画面に前回の正常状態や実行中が残り得るが、今回のCronは監査不能を含む失敗として通知する。Cron全体のログも併せて監視し、画面だけを今回の成功判定に使わない。
+各Workflowは開始記録、公式export・列選別・分割保存・読戻し、成功監査、世代整理を行う。保存失敗・監査不能・整理失敗はWorkflowの失敗終了とし、既存監査へ`backup_failed`または`backup_prune_failed`を残す。安全な固定理由コード以外の例外本文はWorkflowの永続step状態にも渡さない。成功監査を残せない場合は世代整理しない。全体の完了は12 DBそれぞれのWorkflow終端・成功監査・保存世代で確認する。
 
-D1保存は最大3試行。SHA-256を付けてR2へ保存し、読み戻して一致を確認する。新しい保存と成功記録が完了するまで、専用Workerは古い世代を整理しない。日記D1も候補の読み戻し確認後に公開し、写真集合の状態によって保存を中断しない。
+Cronのdispatch結果とBackup-dataの監査表示は別の確認元。監査RPCとQueueが両方使えない場合、画面に前回の正常状態や実行中が残り得るため、Workflowの状態とCronの失敗も監視する。stepは最大3試行で、同日の正常日次があれば再取得せず検証・月次から再開する。旧bindingなしの互換Cronは従来の同期処理を維持するが、新構成の完了判定には使用しない。
 
 `Backup-data`は最終成功・最新実行・履歴・世代・容量・長期保管月を表示する。正常、実行中、失敗、一部未完了、未実行/遅延、世代整理失敗、状態取得不可を区別する。予定時刻から2時間の猶予後、開始記録自体がない場合も遅延とする。失敗後の成功で過去の失敗履歴を消さない。R2容量・世代一覧は通常6時間cache、手動更新は最短1分。実行状態はそのcacheと分け、アクセス時に監査DBから取得する。取得不能は正常扱いしない。
 
 日記はD1・写真コピー・写真再検証の監査targetを分離する。写真進捗は新規コピー、保存済み、未処理、検証待ち、失敗、破損、保存元なし、未確認を区別する。巡回中は部分集計と開始日時を表示し、未確認を正常扱いしない。D1容量/世代と写真の物理保管容量も別表示する。強制終了は事前の開始記録が残り、終端記録のない実行が猶予後に遅延になる。監査RPC/Queueとも停止した場合は安全なWorkerログとCron失敗も参照する。
 
-将来の公開はSecurityの状態RPC→Diaryのコードと明示したCron→Cloudの表示の順に行い、03:25のv8 D1の読戻し、写真の残件減少、再検証枠、監査の分離、非公開R2、旧世代維持を確認する。通常のActionsコード公開だけでは新Cronは反映されない。今回の調査事実は[2026-10-31の読取監査](../docs/history/2026-10-31-diary-backup-audit.md)を参照。
+写真独立実行の公開順と旧方式の調査事実は[2026-10-31の読取監査](../docs/history/2026-10-31-diary-backup-audit.md)を参照。
 
 ## セキュリティ監査の期限なし保管
 
@@ -100,11 +109,19 @@ Security Centerの一覧・詳細・ユーザー詳細は直近180日だけ表�
 新Workerと新バケットは既存mainの自動公開で作成されない。**通常のmain公開より前に、別途承認されたインフラ準備と公開順序の調整が必要**。既存サービスを本番binding付きでPreview公開しない。
 
 1. 非公開R2 `t-room-service-backups` を準備し、r2.dev無効・公開カスタムドメインなしを確認する。`security-audit/`と`_metadata/`へ期限削除を設定しない。バケット全体へのLifecycle削除も設定しない。
-2. `backup-worker/wrangler.jsonc`の10個のD1、Security Service Binding、監査Queueを照合する。専用Workerは必要なDBを読取るが、D1 binding自体は読取専用権限ではない点に注意する。T-CloudにはR2 bindingを追加せず、メタデータ用RPCだけを渡す。
+2. `backup-worker/wrangler.jsonc`の12個のD1、Security Service Binding、監査Queueを照合する。専用Workerは必要なDBを読取るが、D1 binding自体は読取専用権限ではない点に注意する。T-CloudにはR2 bindingを追加せず、メタデータ用RPCだけを渡す。
 3. Security D1へ`0026_backup_status_index.sql`を適用して状態取得の走査を絞る。新Workerを準備・公開し、Security（R2 binding・監査保管・状態RPC）→Diary（状態記録）→Cloud（集約表示）の順で公開する。新Workerに公開route・workers.dev・preview URLを付けない。mainの自動公開を先に走らせない。
 4. 安全なテストデータで初回成功・失敗記録・読戻し・未実行検知・権限を持つ一般ユーザーの成功と無権限ユーザーの拒否を確認する。本番の巻戻しや実ファイルの削除試験は行わない。
 
 R2は標準の保存時暗号化と認証付きアクセスを使用し、既存の端末側暗号化は維持する。Cloudflareアカウント全体の喪失に対する独立コピーではない。容量・リクエストは既存契約と合算される。
+
+### Portfolio追加の反映
+
+2026-11-02の読取専用調査で、既存の `t-room-backup` は毎日03:40 JSTのままで、`portfolio-db` のD1 bindingが欠けていることを確認した。対象レジストリ、WorkflowのDB ID許可リスト、schema fingerprint、`PORTFOLIO_DB` bindingを同じ変更で追加する。元のD1・利用者・認証・財務データを変更するmigrationは不要。
+
+PR作成・テストだけでは本番の自動保存は始まらない。公開時は検証済みmainからBackup Workerのコードと `PORTFOLIO_DB` bindingを反映し、既存のCronが `40 18 * * *` の1件のまま、接続先がPortfolio Workerの専用D1と一致することを読み戻す。レジストリとschema guardをbundleするSecurity・Diaryも対応版を公開する。既存の限定production tokenへ新しい権限を自動追加せず、Backup Workerは既存の専用インフラ公開手順を使う。
+
+反映後の次の共通03:40 JST枠で、`portfolio` の成功監査と日次・月次世代が揃っていることを確認する。既存世代を保持する規則は変えず、初回の保存前に過去の世代を作成済みとは扱わない。切り戻し時も保存済みのPortfolio世代・原本D1・訂正履歴を削除しない。
 
 ## 復元と検証
 
@@ -112,6 +129,6 @@ R2は標準の保存時暗号化と認証付きアクセスを使用し、既存
 
 Security/Cloud/Healthは組み合わせる世代を照合し、最新の失効状態を優先する。復元した古いcredential・link・招待・Password policyをそのまま有効化しない。第一管理者の既存復旧手段を維持し、epoch・有効session・処理中ジョブ・AIの料金予約を巻き戻して再実行しない。本番切替は別途承認した災害復旧手順で行う。
 
-`tools/restore-isolated.mjs`はNode専用で必ず自ら作る`:memory:`へ復元する。payload内のschema SQLは実行せず、信頼済みmigrationだけを適用する。復元時の在庫trigger二重加算等を避けるため隔離DB内だけでmigration由来triggerを一時停止し再作成する。全列・行数照合後、Identity/credential/link/招待/各accountは隔離無効化し、処理中AI requestは再実行不可とする。鍵暗号文と料金予約は保存して手動照合に使う。本番切替用の復元器ではない。
+`tools/restore-isolated.mjs`は新manifest/partと旧形式に対応し、Node専用で必ず自ら作る`:memory:`へ復元する。新形式はpartごとにSHA・列・件数を検証し、INSERT RETURNINGで各cellの保存値を照合する。payload内のschema SQLは実行せず、信頼済みmigrationだけを適用する。復元時の在庫trigger二重加算等を避けるため隔離DB内だけでmigration由来triggerを一時停止し再作成する。全列・行数照合後、Identity/credential/link/招待/各accountは隔離無効化し、処理中AI requestは再実行不可とする。鍵暗号文と料金予約は保存して手動照合に使う。本番切替用の復元器ではない。
 
-`pnpm test`は実migrationを用いた全10サービスの取得・隔離SQLite復元・内容照合・integrity/foreign_key_check、読戻し不一致、保存失敗、schema drift、保持、監査配送失敗、cacheと状態の分離を検証する。`security-worker/test/audit-archive.test.js`は長期保管の保存・検証・更新競合を検証する。非空の合成データをR2 fixtureに保存した世代から全10サービスを復元し、在庫数量・支払配分・請求/精算金額・AI利用額を照合する。メモリ内で生成した合成RSA/AES鍵のwrap/unwrap・暗号文復号も確認する。日記は別の復元/写真fixtureで検証する。いずれも合成データで、実R2/本番D1の復元実証・実端末PRF・本番鍵の復号を行ったものではない。
+`pnpm test`は実migrationを用いた全11サービスの取得・隔離SQLite復元・内容照合・integrity/foreign_key_check、読戻し不一致、保存失敗、schema drift、保持、監査配送失敗、cacheと状態の分離を検証する。`security-worker/test/audit-archive.test.js`は長期保管の保存・検証・更新競合を検証する。非空の合成データをR2 fixtureに保存した世代から各サービスを復元し、在庫数量・支払配分・請求/精算金額・AI利用額を照合する。Portfolio専用fixtureはWorkflowあり/なしの両形式を使い、実際の保存APIで銘柄変更・過去日追加・同日訂正を行い、共通scheduledから保存した世代の全列・全履歴・revisionの隔離復元とアカウント無効化、revision triggerの復旧を確認する。メモリ内で生成した合成RSA/AES鍵のwrap/unwrap・暗号文復号も確認する。日記は別の復元/写真fixtureで検証する。いずれも合成データで、実R2/本番D1の復元実証・実端末PRF・本番鍵の復号を行ったものではない。

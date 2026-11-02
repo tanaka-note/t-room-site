@@ -121,6 +121,8 @@ releaseは最新origin/main一致を確認後、CIと同じ`installDirectories()
 
 DownloaderのProductionはこのコマンドで拒否し、既存の署名・lease・reconciliation付きContainer/定義手順を使う。AIには公開Web build registryがないため既存専用手順を維持する。各Workerの従来deployコマンドも削除しない。
 
+D1 exportバックアップの初回切り替えは[バックアップ運用](../backup-worker/README.md#初回切り替えこのprのmerge自動diary公開より前)に従い、専用WorkerのWorkflow・export用Secret・日記D1/R2 bindingを先に準備する。DiaryのActions公開はその準備をread-only preflightで確認する。写真の差分保存・Cronは変更しない。
+
 ## GitHub Actionsからの本番自動公開
 
 ### Codex Cloudから実装・公開する

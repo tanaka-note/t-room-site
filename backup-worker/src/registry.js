@@ -1,5 +1,34 @@
 // Explicit durable-data allowlist. Schema drift fails closed until reviewed.
 export const SERVICES = {
+  "portfolio": {
+    "label": "資産運用報告",
+    "binding": "PORTFOLIO_DB",
+    "database": "portfolio-db",
+    "migration": "0001_portfolio.sql",
+    "tables": [
+      {
+        "name": "portfolio_accounts",
+        "columns": ["id", "display_name", "role", "is_active", "session_version"],
+        "sourceColumns": "id,display_name,role,is_active,session_version"
+      },
+      {
+        "name": "portfolio_state",
+        "columns": ["id", "revision", "metadata"],
+        "sourceColumns": "id,revision,metadata"
+      },
+      {
+        "name": "portfolio_records",
+        "columns": ["period", "time", "raw_market_value", "assets", "updated_at", "updated_by"],
+        "sourceColumns": "period,time,raw_market_value,assets,updated_at,updated_by"
+      },
+      {
+        "name": "portfolio_changes",
+        "columns": ["revision", "request_id", "fingerprint", "period", "previous_record", "saved_record", "updated_at", "account_id"],
+        "sourceColumns": "revision,request_id,fingerprint,period,previous_record,saved_record,updated_at,account_id"
+      }
+    ],
+    "knownTables": ["portfolio_accounts", "portfolio_state", "portfolio_records", "portfolio_changes"]
+  },
   "household": {
     "label": "家計簿",
     "binding": "HOUSEHOLD_DB",
