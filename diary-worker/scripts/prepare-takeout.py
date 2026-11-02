@@ -58,7 +58,7 @@ def thumbnail_bytes(image, edge, budget, quality):
     copy.thumbnail((edge, edge), Image.Resampling.LANCZOS)
     for q in range(quality, 39, -8):
         stream = io.BytesIO()
-        copy.save(stream, format='WEBP', quality=q, method=3)
+        copy.save(stream, format='WEBP', quality=q, method=2)
         data = stream.getvalue()
         if len(data) <= budget:
             return data
