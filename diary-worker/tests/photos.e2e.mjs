@@ -735,6 +735,37 @@ try {
   const rollAfterPhotoDelete = await jsonRequest(`/photos?fileName=${encodeURIComponent(deletablePhotoId)}`, { cookie: wifeCookie });
   assert.equal(rollAfterPhotoDelete.result.photos.some((photo) => photo.id === deletablePhotoId), false);
 
+  const albumPhotoId = randomUUID();
+  const albumMarker = `[[写真:${albumPhotoId}]]`;
+  const albumCreated = await jsonRequest('/entries', { method: 'POST', cookie: wifeCookie,
+    body: { entryDate: '2026-08-09', title: 'Album deletion fixture', content: `前${albumMarker}後`, tags: [] } });
+  assert.equal(albumCreated.response.status, 200, JSON.stringify(albumCreated.result));
+  const albumEntry = albumCreated.result.entry;
+  const albumUpload = await fetch(`${origin}/diary/api/entries/${albumEntry.id}/photos`, {
+    method: 'POST', headers: { Cookie: wifeCookie, 'X-Diary-Request': '1' },
+    body: createPhotoForm({ id: albumPhotoId, fileName: 'album-delete.png' })
+  });
+  assert.equal(albumUpload.status, 200);
+  const albumAsset = (await albumUpload.json()).photo;
+  const originalDownload = await fetch(`${origin}${albumAsset.originalUrl}?download=1`, { headers: { Cookie: wifeCookie } });
+  assert.match(originalDownload.headers.get('content-disposition'), /attachment/);
+  const displayDownload = await fetch(`${origin}${albumAsset.displayUrl}?download=1`, { headers: { Cookie: wifeCookie } });
+  assert.equal(displayDownload.status, 200, 'display image still loads');
+  assert.equal(displayDownload.headers.get('content-disposition'), null, 'low-quality attachment download is retired');
+  const albumDelete = (cookie, body) => jsonRequest(`/photos/${albumPhotoId}`, { method: 'DELETE', cookie, body });
+  assert.equal((await albumDelete(null, { revision: 1 })).response.status, 401);
+  assert.equal((await albumDelete(chiharuCookie, { revision: 1 })).response.status, 404);
+  assert.equal((await albumDelete(wifeCookie, {})).response.status, 400);
+  assert.equal((await albumDelete(wifeCookie, { revision: 2 })).response.status, 409);
+  const albumDeleted = await albumDelete(wifeCookie, { revision: albumEntry.revision });
+  assert.equal(albumDeleted.response.status, 200, JSON.stringify(albumDeleted.result));
+  const albumAfter = await jsonRequest(`/entries/${albumEntry.id}`, { cookie: wifeCookie });
+  assert.equal(albumAfter.result.entry.content, '前後');
+  assert.equal(albumAfter.result.entry.revision, albumEntry.revision + 1);
+  assert.equal(albumAfter.result.entry.lastPublishedAt, albumEntry.lastPublishedAt);
+  assert.equal(albumAfter.result.entry.photos.length, 0);
+  assert.equal((await fetch(`${origin}${albumAsset.originalUrl}`, { headers: { Cookie: wifeCookie } })).status, 404);
+
   const moved = await jsonRequest(`/entries/${entry.id}`, {
     method: "DELETE",
     cookie: wifeCookie,

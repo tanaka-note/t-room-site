@@ -73,6 +73,11 @@ function rewrite(cookie, values) {
 try {
   assert.equal((await request("/bootstrap")).response.status, 401);
   const reader = await login("reader");
+  const forbiddenPhotoDelete = await diary.fetch(new Request('https://fixture.test/diary/api/photos/aaaaaaaa-aaaa-4aaa-8aaa-000000000001', {
+    method: 'DELETE', headers: { Origin: 'https://fixture.test', Cookie: reader, 'X-Diary-Request': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ revision: 1 })
+  }), env, { waitUntil: promise => pending.push(promise) });
+  assert.equal(forbiddenPhotoDelete.status, 403, 'album photo deletion requires entry management permission');
   for (const suffix of ["", "?q=田中", "?month=2026-10&limit=1", "?tag=田中", "?favorite=1", "?dateFrom=2026-10-16&dateTo=2026-10-16"]) {
     checks.length = 0;
     const combined = await request(`/bootstrap${suffix}`, reader);

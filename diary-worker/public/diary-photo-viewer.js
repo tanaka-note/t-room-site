@@ -1,5 +1,5 @@
 // Photo presentation owns image loading and gestures; session, history and uploads stay with the caller.
-export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, createImage = () => new Image() }) {
+export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, canDelete = () => false, canNavigate = () => true, createImage = () => new Image() }) {
   let imageRequestId = 0;
   let imageLoad = null;
   const fullscreenErrorMessage = 'この環境では全画面に切り替えられません。';
@@ -257,11 +257,12 @@ export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, c
     loadPhotoViewerImage(photo);
     const dimensions = photo.width && photo.height ? ` / ${photo.width}×${photo.height}` : "";
     nodes.file.textContent = `${photo.fileName} / ${formatBytes(photo.originalSize)}${dimensions}`;
-    nodes.downloadLow.href = `${photo.displayUrl}?download=1`;
+    if (nodes.deleteButton) nodes.deleteButton.hidden = !canDelete(photo);
     nodes.downloadOriginal.href = `${photo.originalUrl}?download=1`;
   }
 
   function movePhotoViewer(direction) {
+    if (!canNavigate()) return;
     const next = selection.index + direction;
     if (next < 0 || next >= selection.photos.length) return;
     selection.index = next;

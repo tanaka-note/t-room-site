@@ -19,9 +19,9 @@ test('album month options group total and monthly photo counts while retaining s
       photoSortButton: { setAttribute() {} }
     };
     const api = async path => { assert.equal(path, '/photos/meta'); return { months }; };
-    const load = new Function('state', 'elements', 'api', 'document',
+    const load = new Function('state', 'elements', 'api', 'document', 'sessionGeneration',
       ['loadPhotoMeta', 'createOption', 'formatMonth', 'updatePhotoSortButton'].map(body).join('\n')
-        + '\nreturn loadPhotoMeta;')(state, elements, api, { createElement: () => ({}) });
+        + '\nreturn loadPhotoMeta;')(state, elements, api, { createElement: () => ({}) }, 0);
     await load();
     assert.deepEqual(elements.photoMonthFilter.options.map(option => option.textContent), labels);
     assert.deepEqual(elements.photoMonthFilter.options.map(option => option.value), ['', ...months.map(item => item.value)]);
@@ -50,7 +50,7 @@ function albumFixture({ total = 5001, pageMs = 0, overReturn = 0, emptyPage = fa
     return { photos, hasMore: emptyPage || offset + photos.length < total };
   };
   const constants = [...source.matchAll(/  const CAMERA_ROLL_\w+ = \d+;/g)].map(match => match[0]).join('\n');
-  const functions = ['cancelCameraRollLoad', 'loadPhotos', 'renderCameraRoll'].map(body).join('\n');
+  const functions = ['cancelCameraRollLoad', 'loadPhotos', 'renderCameraRoll', 'renderCameraRollStatus'].map(body).join('\n');
   const loaded = new Function('state', 'elements', 'api', 'performance', 'document', 'window', `
     ${constants}
     const createEmpty = () => ({}), formatDate = value => value, formatShortDate = value => value;

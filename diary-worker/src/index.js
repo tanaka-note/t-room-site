@@ -1,5 +1,6 @@
 import { foregroundSessionActivity, serviceRollingSession, renewServiceSession, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
 import { createDiaryEntryDomain } from "./entry-domain.js";
+import { deleteAlbumPhoto } from "./photo-deletion.js";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
@@ -409,6 +410,14 @@ async function handleApi(request, env, url, path, context, getSession, timing) {
   const photoDeleteMatch = path.match(/^\/api\/photos\/([0-9a-f-]{36})$/i);
   if (photoDeleteMatch && request.method === "DELETE") {
     requireEntryManagementAccess(session);
+    // workerd can expose an empty HTTP DELETE body as a stream. Existing editor
+    // requests have no JSON Content-Type; album requests explicitly send JSON.
+    if (request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() === "application/json") {
+      const body = await readJson(request, 4096);
+      const result = await deleteAlbumPhoto(photoDeleteMatch[1], body.revision, env, session, HttpError);
+      await drainMediaDeletionQueue(env, result.entryId, { maxBatches: MEDIA_DELETION_REQUEST_MAX_BATCHES });
+      return json(result);
+    }
     return deleteEntryPhoto(photoDeleteMatch[1], env, session);
   }
 
@@ -1552,9 +1561,8 @@ async function servePhoto(id, variant, request, env, session, url) {
   headers.set("ETag", object.httpEtag);
   headers.set("Cache-Control", "private, max-age=3600");
   headers.set("Content-Type", headers.get("Content-Type") || (variant === "original" ? row.content_type : "image/webp"));
-  if (url.searchParams.get("download") === "1") {
-    const name = variant === "original" ? row.file_name : `${stripExtension(row.file_name)}-low.webp`;
-    headers.set("Content-Disposition", contentDisposition(name));
+  if (variant === "original" && url.searchParams.get("download") === "1") {
+    headers.set("Content-Disposition", contentDisposition(row.file_name));
   }
   if (request.method === "HEAD") return new Response(null, { status: 200, headers });
   return new Response(object.body, { status: 200, headers });
@@ -2674,10 +2682,6 @@ function validateDateRange(dateFrom, dateTo) {
 function normalizeFileName(value) {
   const normalized = String(value || "photo").normalize("NFC").replace(/[\u0000-\u001f\u007f]/g, "").trim();
   return (normalized || "photo").slice(0, 240);
-}
-
-function stripExtension(value) {
-  return String(value || "photo").replace(/\.[^.]+$/, "") || "photo";
 }
 
 function contentDisposition(fileName) {
