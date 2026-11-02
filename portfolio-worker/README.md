@@ -1,6 +1,6 @@
 # 資産運用報告（編集対応）
 
-新URLは `https://tanaka-note.com/asset-report/`。旧 `asset-report-k7m4q9x2/` は変更しない。トップページ・記事一覧・検索インデックスへ入口を追加しない。HTMLとHTTPヘッダーの両方でnoindexとする。
+新URLは `https://tanaka-note.com/asset-report/`。旧 `asset-report-k7m4q9x2/` は変更しない。トップページのテーマ一覧に入口を置く。記事一覧・検索インデックスへは追加しない。HTMLとHTTPヘッダーの両方でnoindexとする。
 
 ## データと計算
 
