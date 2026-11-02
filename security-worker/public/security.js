@@ -51,6 +51,10 @@
       $("#invite-register").onclick = () => registerInvite(inviteToken);
       return;
     }
+    if (params.has("health-setup")) {
+      $("#health-setup-notice").hidden = false;
+      return;
+    }
     await routeStatus();
   }
 
@@ -70,6 +74,19 @@
       $("#bootstrap-view h2").textContent = "第一管理者パスキーの復旧登録";
     });
     $("#security-logout").addEventListener("click", logout);
+    $("#health-setup-prepare").addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      $("#health-setup-status").textContent = "利用準備を行っています。";
+      try {
+        const { prepareHealth } = await import("/security/health-setup.mjs");
+        const result = await prepareHealth();
+        $("#health-setup-status").textContent = result.ready
+          ? "利用準備は完了しています。パスキーで体調管理を利用できます。"
+          : "利用準備が完了しました。オーナーの承認をお待ちください。";
+      } catch (error) { $("#health-setup-status").textContent = TRoomPasskeys.safeJapaneseMessage(error.message); }
+      finally { button.disabled = false; }
+    });
     $("#tcloud-setup-resume").addEventListener("click", async (event) => {
       const button = event.currentTarget;
       button.disabled = true;
@@ -624,7 +641,8 @@
     const currentLinks = data.links.filter((item) => ["pending", "active"].includes(item.status));
     const linkHistory = data.links.filter((item) => !["pending", "active"].includes(item.status));
     const linkRow = (item, historical = false) => `<div class="link detail-item"><strong>${escapeHtml(item.account_display_name || item.display_label)}</strong>${item.service === "cloud" && item.service_account_id === "folder-member" && item.account_display_name ? `<small> / ${escapeHtml(item.display_label)}</small>` : ""}${item.folderUnavailable ? '<span class="warning-text">（連携先を取得できません）</span>' : ""}<br><small>${escapeHtml(display.serviceLabel(item.service))} / ${escapeHtml(item.role_label || display.roleLabel(item.role))} / ${escapeHtml(display.serviceLinkStatusLabel(item.status, { identityStatus: data.identity.status, service: item.service, hasCredential }))}</small>${historical ? "" : item.protected ? '<span class="protected-link">基幹連携</span>' : `<button class="danger" data-remove-link="${escapeHtml(item.id)}">連携解除</button>`}</div>`;
-    const links = currentLinks.map((item) => linkRow(item)).join("");
+    const links = currentLinks.map((item) => linkRow(item) + (item.service === "health" && item.status === "active"
+      ? `<div class="detail-editor"><button type="button" class="secondary" data-health-manage="${escapeHtml(item.id)}">体調管理の鍵の準備・承認</button><div data-health-members="${escapeHtml(item.id)}" role="status" aria-live="polite"></div></div>` : "")).join("");
     const invitationRows = data.invitations.map((item) => ({ ...item, effectiveStatus: display.invitationEffectiveStatus(item) }))
       .sort((left, right) => Number(right.effectiveStatus === "active") - Number(left.effectiveStatus === "active"));
     const currentInvitations = invitationRows.filter((item) => item.effectiveStatus === "active");
@@ -654,7 +672,7 @@
     $("#identity-detail").innerHTML = `
       <section class="detail-section detail-summary"><h2>${escapeHtml(data.identity.displayName)}</h2><p class="status-${escapeHtml(data.identity.status)}">${escapeHtml(display.identityStatusLabel(data.identity.status))}</p><small>${data.identity.lastLoginAt ? `最終認証 ${escapeHtml(formatDate(data.identity.lastLoginAt))}` : "認証履歴なし"}${data.identity.lastSeenAt ? ` / 最終アクセス ${escapeHtml(formatDate(data.identity.lastSeenAt))}` : ""}</small></section>
       <section class="detail-section"><h3>現在のログイン状況</h3><div class="session-status-grid">${loginStates}</div></section>
-      <section class="detail-section"><h3>サービス連携</h3>${links || "<p>サービス連携はありません。</p>"}<button id="detail-open-link" type="button" class="secondary">＋ サービス連携を追加</button><div id="detail-link-editor" class="detail-editor" hidden><div id="detail-link-row"></div><p id="detail-link-empty" class="muted" hidden>追加できるサービス連携はありません</p><div class="editor-actions"><button id="detail-add-link" type="button">追加</button><button id="detail-cancel-link" type="button" class="secondary">キャンセル</button></div></div><p class="hint">日記・請求書は管理者確認後すぐ利用できます。T-Cloudは安全な鍵委譲が完了するまで承認待ちになります。</p></section>
+      <section class="detail-section"><h3>サービス連携</h3>${links || "<p>サービス連携はありません。</p>"}<button id="detail-open-link" type="button" class="secondary">＋ サービス連携を追加</button><div id="detail-link-editor" class="detail-editor" hidden><div id="detail-link-row"></div><p id="detail-link-empty" class="muted" hidden>追加できるサービス連携はありません</p><div class="editor-actions"><button id="detail-add-link" type="button">追加</button><button id="detail-cancel-link" type="button" class="secondary">キャンセル</button></div></div><p class="hint">日記・請求書は管理者確認後すぐ利用できます。T-Cloud・体調管理はパスキーごとの利用準備と鍵の承認が必要です。</p></section>
       <section class="detail-section"><h3>パスキー</h3>${credentials || "<p>まだパスキーは登録されていません</p>"}</section>
       <section class="detail-section"><h3>招待</h3>${invitations || "<p>有効な招待はありません。</p>"}</section>
       ${historyRows ? `<section class="detail-section"><details class="identity-history"><summary>過去の履歴を表示</summary><div class="identity-history-rows">${historyRows}</div></details></section>` : ""}
@@ -668,10 +686,55 @@
     document.querySelectorAll("[data-revoke-credential]").forEach((button) => button.addEventListener("click", () => revokeCredential(button.dataset.revokeCredential, button)));
     document.querySelectorAll("[data-revoke-invitation]").forEach((button) => button.addEventListener("click", () => revokeInvitation(button.dataset.revokeInvitation, button)));
     document.querySelectorAll("[data-remove-link]").forEach((button) => button.addEventListener("click", () => removeLink(button.dataset.removeLink, button)));
+    document.querySelectorAll("[data-health-manage]").forEach((button) => button.addEventListener("click", () => manageHealthKeys(data, button)));
     if ($("#disable-identity-button")) $("#disable-identity-button").onclick = (event) => disableIdentity(id, event.currentTarget);
     $("#detail-open-link").onclick = () => openDetailLinkEditor().catch((error) => showMessage(error.message, true));
     $("#detail-cancel-link").onclick = () => closeDetailLinkEditor();
     $("#detail-add-link").onclick = (event) => addDetailLink(id, event.currentTarget);
+  }
+
+  async function manageHealthKeys(data, button) {
+    const members = button.nextElementSibling;
+    button.disabled = true;
+    members.textContent = "鍵の状態を確認しています。";
+    try {
+      const { loadHealthApprovals } = await import("/security/health-setup.mjs");
+      const approvals = await loadHealthApprovals(data.identity.id, button.dataset.healthManage);
+      if (state.selectedIdentity !== data || !members.isConnected) return;
+      members.replaceChildren();
+      for (const item of approvals) {
+        const credential = data.credentials.find(credential => credential.credential_id === item.credentialId);
+        const line = document.createElement("p");
+        const label = credential?.label || "パスキー";
+        line.textContent = `${label}：${item.granted ? "承認済み" : "鍵の承認待ち"}`;
+        if (!item.granted) {
+          const approve = document.createElement("button");
+          approve.type = "button";
+          approve.textContent = "このパスキーの鍵を承認";
+          approve.onclick = async () => {
+            approve.disabled = true;
+            try {
+              await item.approve();
+              line.textContent = `${label}：承認済み`;
+            } catch (error) { showMessage(error.message, true); }
+            finally { approve.disabled = false; }
+          };
+          line.append(" ", approve);
+        }
+        members.append(line);
+      }
+      if (!approvals.length) members.textContent = "本人のパスキーによる利用準備が必要です。";
+      const help = document.createElement("p");
+      help.textContent = "本人の端末で利用準備を行い、その後ここで鍵を承認してください。";
+      const link = document.createElement("a");
+      link.href = "/security/#health-setup";
+      link.textContent = "本人の利用準備";
+      help.append(" ", link);
+      members.append(help);
+    } catch (error) {
+      members.textContent = "鍵の状態を確認できませんでした。オーナー自身の体調管理連携と、T-Cloudの利用準備も確認してください。";
+      showMessage(error.message, true);
+    } finally { button.disabled = false; }
   }
 
   function toggleReinviteEditor(open) {
@@ -719,7 +782,7 @@
       if (!link) throw new Error("追加するサービスと連携先を選択してください。");
       if (link.privileged) await freshAdminAuthentication();
       const result = await post(`/identities/${encodeURIComponent(identityId)}/links`, { links: [linkPayload(link)] });
-      showMessage(result.requiresApproval ? "T-Cloud連携を追加しました。鍵委譲が完了するまで承認待ちです。" : "サービス連携を追加しました。既存のパスキーで利用できます。");
+      showMessage(result.requiresApproval ? "T-Cloud連携を追加しました。鍵委譲が完了するまで承認待ちです。" : link.service === "health" ? "体調管理の連携を追加しました。本人の利用準備と鍵の承認を行ってください。" : "サービス連携を追加しました。既存のパスキーで利用できます。");
       await viewIdentity(identityId);
     } catch (error) { showMessage(error.message, true); }
     finally { button.disabled = false; }
