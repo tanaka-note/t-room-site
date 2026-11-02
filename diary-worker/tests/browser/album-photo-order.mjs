@@ -92,8 +92,8 @@ try {
       assert.equal(requests.at(-1).order, undefined);
       await Promise.all([page.waitForResponse(r => r.url().includes('/api/photos?') && r.url().includes('month=2026-10')),
         page.selectOption('#photo-month-filter', '2026-10')]);
-      await page.click('#photo-sort-button');
       await waitFirst(1);
+      assert.equal(requests.at(-1).order, 'oldest');
       assert.equal(await page.locator('#photo-sort-button').getAttribute('aria-pressed'), 'true');
       assert.match(await page.locator('#photo-sort-button').getAttribute('aria-label'), /古い順で表示中/);
       assert.deepEqual(await order(), Array.from({ length: 48 }, (_, i) => i + 1));
@@ -140,10 +140,13 @@ try {
       assert.equal(await page.locator('#photo-sort-button').isVisible(), false);
       assert.equal(requests.at(-1).order, undefined);
       await page.selectOption('#photo-month-filter', '2026-10');
-      await page.waitForFunction(() => document.querySelector('#photo-sort-button').hidden === false);
-      assert.equal(await page.locator('#photo-sort-button').getAttribute('aria-pressed'), 'false');
+      await waitFirst(1);
+      assert.equal(requests.at(-1).order, 'oldest');
+      assert.equal(requests.at(-1).offset, '0');
+      assert.equal(await page.locator('#photo-sort-button').isVisible(), true);
+      assert.equal(await page.locator('#photo-sort-button').getAttribute('aria-pressed'), 'true');
       assert.deepEqual(errors, []);
-      console.log(`Album order ${name}: monthly-only toggle, pagination, viewer, return and stale responses passed.`);
+      console.log(`Album order ${name}: oldest monthly default, toggle, pagination, viewer, return and stale responses passed.`);
     } finally { if (releaseStale) { releaseStale(); releaseStale = null; } await context.close(); }
   }
 } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
