@@ -56,19 +56,21 @@
 })(window).enforce();</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>体調管理 | T-lain</title>
-  <link rel="stylesheet" href="/health/health.css?v=health-b2a54c1ba20f">
-  <meta name="troom-app-build" content="health-b2a54c1ba20f">
+  <link rel="stylesheet" href="/health/health.css?v=health-52414e73898e">
+  <meta name="troom-app-build" content="health-52414e73898e">
   <meta name="troom-auto-update" content="enabled">
+  <link rel="stylesheet" href="/health/tlain-login.css?v=health-52414e73898e">
+  <script src="/health/tlain-login.js?v=health-52414e73898e" defer></script>
 </head>
 <body>
   <main>
-    <header class="app-header">
+    <header data-login-app-header class="app-header">
       <h1>体調管理</h1>
     </header>
 
-    <section id="login" class="card login-card" aria-label="体調管理へのログイン">
-      <button id="sign-in" type="button" class="passkey-login-button"><svg class="passkey-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg><span id="passkey-login-label" class="passkey-login-label">パスキーでログイン</span></button>
-    </section>
+    <div class="tlain-login-view" data-login-status="message"><section id="login" class="card login-card tlain-login-card" aria-label="体調管理へのログイン"><p class="tlain-login-brand">T-lain</p><h1>体調管理</h1>
+      <p>登録済みのパスキーでログインしてください。</p><button id="sign-in" type="button" class="passkey-login-button"><svg class="passkey-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg><span id="passkey-login-label" class="passkey-login-label">パスキーでログイン</span></button>
+    </section></div>
     <p id="message" class="error" role="status" aria-live="polite"></p>
 
     <section id="app" hidden>
@@ -201,9 +203,9 @@
       <p id="export-error" class="error" role="alert"></p><button type="submit">ダウンロード</button>
     </form>
   </dialog>
-  <script src="/security/passkey-client.js?v=health-b2a54c1ba20f"></script>
-  <script src="/diary/dialog-navigation.js?v=health-b2a54c1ba20f"></script>
-  <script src="/assets/pwa-auto-update.js?v=health-b2a54c1ba20f" defer></script>
-  <script type="module" src="/health/health.js?v=health-b2a54c1ba20f"></script>
+  <script src="/security/passkey-client.js?v=health-52414e73898e"></script>
+  <script src="/diary/dialog-navigation.js?v=health-52414e73898e"></script>
+  <script src="/assets/pwa-auto-update.js?v=health-52414e73898e" defer></script>
+  <script type="module" src="/health/health.js?v=health-52414e73898e"></script>
 </body>
 </html>

@@ -95,6 +95,8 @@
 - 対象アプリ、公開URL、build marker、Service Worker、deploy targetは`web-apps.json`を正とし、追加・変更時はcontract testを通す。
 - 技術的理由で自動更新を適用できない場合は勝手に例外化せず、ユーザーへ説明して確認する。
 
+ログイン画面は既存・新規サービスとも `tools/shared/tlain-login.css` と `tools/shared/tlain-login.js` を正本とする明るい背景・最大幅440pxの白いカードへ統一する。`tlain-login-view`／`tlain-login-card`、version付き参照、`web-apps.json` のbuild依存・assetCopiesを登録し、Web contractと共通ログイン表示試験を通す。独自の全幅・全画面・暗色ログインを追加しない。
+
 ## 12. 画面遷移・戻る操作
 
 - 重ねて表示する画面は、戻る操作、背景クリック／タップ、閉じるボタン、Escを共通の閉じる処理へ接続し、一番手前の画面だけを閉じる。未保存入力の確認、処理中の保護、履歴整合性を保つ。詳細と既存画面の移行範囲は[`docs/navigation-and-dialogs.md`](docs/navigation-and-dialogs.md)に従う。

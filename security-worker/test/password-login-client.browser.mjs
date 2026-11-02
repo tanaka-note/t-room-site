@@ -41,7 +41,9 @@ try {
       await page.goto(`${origin}/${service}/`);
       const id = { security: 'admin-passkey-login', health: 'sign-in', inventory: 'login', payments: 'login' }[service] || 'passkey-login';
       const result = await page.locator(`#${id}`).evaluate(button => {
-        document.body.replaceChildren(button);
+        // Keep the common card ancestor: presentation is intentionally scoped to login UI.
+        const card = document.createElement('section'); card.className = 'tlain-login-card';
+        card.append(button); document.body.replaceChildren(card);
         document.body.style.cssText = 'width:330px;max-width:100%;margin:0;padding:0;';
         button.hidden = false;
         const style = getComputedStyle(button), icon = button.querySelector('svg'), iconStyle = getComputedStyle(icon);

@@ -60,24 +60,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="theme-color" content="#071426">
-  <meta name="tcloud-build" content="cloud-f80556712118">
-  <meta name="troom-app-build" content="cloud-f80556712118">
-  <meta name="troom-service-worker" content="/cloud/media-worker.js?v=cloud-f80556712118">
+  <meta name="tcloud-build" content="cloud-d57e5c56953e">
+  <meta name="troom-app-build" content="cloud-d57e5c56953e">
+  <meta name="troom-service-worker" content="/cloud/media-worker.js?v=cloud-d57e5c56953e">
   <meta name="application-name" content="T-Cloud Storage">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>T-Cloud Storage</title>
-  <link rel="manifest" href="/cloud/manifest.webmanifest?v=cloud-f80556712118">
+  <link rel="manifest" href="/cloud/manifest.webmanifest?v=cloud-d57e5c56953e">
   <link rel="icon" href="/cloud/icons/icon-192-v3.png?rev=20260811-3" sizes="192x192" type="image/png">
   <link rel="apple-touch-icon" href="/cloud/icons/apple-touch-icon-v3.png?rev=20260811-3">
-  <link rel="stylesheet" href="/cloud/cloud.css?v=cloud-f80556712118">
-  <link rel="stylesheet" href="/cloud/photo-viewer.css?v=cloud-f80556712118">
+  <link rel="stylesheet" href="/cloud/cloud.css?v=cloud-d57e5c56953e">
+  <link rel="stylesheet" href="/cloud/photo-viewer.css?v=cloud-d57e5c56953e">
   <meta name="troom-auto-update" content="enabled">
+  <link rel="stylesheet" href="/cloud/tlain-login.css?v=cloud-d57e5c56953e">
+  <script src="/cloud/tlain-login.js?v=cloud-d57e5c56953e" defer></script>
 </head>
 <body>
-  <main id="boot-view" class="login-shell" aria-label="T-Cloud Storageを準備中" aria-busy="true">
-    <section class="login-card">
+  <main id="boot-view" class="login-shell tlain-login-view" aria-label="T-Cloud Storageを準備中" aria-busy="true">
+    <section class="login-card tlain-login-card">
       <a class="wordmark" aria-label="T-Cloud Storage"><span>T</span> T-Cloud</a>
       <p class="eyebrow">PRIVATE STORAGE</p>
       <h1>T-Cloud<br>Storage</h1>
@@ -85,8 +87,8 @@
     </section>
   </main>
 
-  <main id="login-view" class="login-shell" hidden>
-    <section class="login-card" aria-labelledby="login-title">
+  <main id="login-view" class="login-shell tlain-login-view" hidden>
+    <section class="login-card tlain-login-card" aria-labelledby="login-title">
       <a class="wordmark" href="/" aria-label="T-lainトップへ"><span>T</span> T-lain</a>
       <p class="eyebrow">PRIVATE STORAGE</p>
       <h1 id="login-title">T-Cloud<br>Storage</h1>
@@ -651,31 +653,31 @@
     </div>
   </dialog>
 
-  <script src="/cloud/vendor/argon2.umd.min.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/vendor/mpegts-1.8.0.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/ui.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/thumbnail-codec.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/crypto-vault.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/file-safety.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/media-range.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/media-format.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/media-remux.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/offline-store.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/display-cache.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/session-guard.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/media-client.js?v=cloud-f80556712118" defer></script>
-  <script src="/assets/pwa-auto-update.js?v=cloud-f80556712118" defer></script>
-  <script src="/security/passkey-client.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/listing-model.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/listing-view.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/search-input.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/selection-state.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/bulk-delete.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/transfer-progress.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/upload-view.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/preview-controls.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/photo-viewer.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/photo-fullscreen.js?v=cloud-f80556712118" defer></script>
-  <script src="/cloud/cloud.js?v=cloud-f80556712118" defer></script>
+  <script src="/cloud/vendor/argon2.umd.min.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/vendor/mpegts-1.8.0.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/ui.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/thumbnail-codec.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/crypto-vault.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/file-safety.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/media-range.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/media-format.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/media-remux.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/offline-store.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/display-cache.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/session-guard.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/media-client.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/security/passkey-client.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/listing-model.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/listing-view.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/search-input.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/selection-state.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/bulk-delete.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/transfer-progress.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/upload-view.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/preview-controls.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/photo-viewer.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/photo-fullscreen.js?v=cloud-d57e5c56953e" defer></script>
+  <script src="/cloud/cloud.js?v=cloud-d57e5c56953e" defer></script>
 </body>
 </html>

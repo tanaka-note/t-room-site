@@ -60,17 +60,19 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
   <meta name="referrer" content="no-referrer">
-  <meta name="troom-app-build" content="security-2be498d8e67e">
+  <meta name="troom-app-build" content="security-7643fec74a43">
   <meta name="troom-auto-update" content="enabled">
   <title>T-lain セキュリティセンター</title>
-  <link rel="stylesheet" href="/security/security.css?v=security-2be498d8e67e">
+  <link rel="stylesheet" href="/security/security.css?v=security-7643fec74a43">
+  <link rel="stylesheet" href="/security/tlain-login.css?v=security-7643fec74a43">
+  <script src="/security/tlain-login.js?v=security-7643fec74a43" defer></script>
 </head>
 <body>
   <main class="shell">
-    <header><p class="eyebrow">T-lain</p><h1>セキュリティセンター</h1><p>端末のロック解除、招待、サービス連携、アクセス履歴を管理します。</p></header>
+    <header data-login-app-header><p class="eyebrow">T-lain</p><h1>セキュリティセンター</h1><p>端末のロック解除、招待、サービス連携、アクセス履歴を管理します。</p></header>
     <section id="message" class="message" hidden aria-live="polite"></section>
 
-    <section id="bootstrap-view" class="card" hidden>
+    <div class="tlain-login-view" data-login-status="message"><section id="bootstrap-view" class="card tlain-login-card" hidden><p class="tlain-login-brand">T-lain</p><h1>セキュリティセンター</h1>
       <h2>第一管理者の初期登録</h2>
       <p>現在のT-Cloud管理者ID・パスワードで本人確認し、端末のロック解除を登録します。現在の管理者パスワードは削除されません。</p>
       <form id="bootstrap-form">
@@ -78,27 +80,27 @@
         <label>現在の管理者パスワード<input id="bootstrap-password" type="password" autocomplete="current-password" required></label>
         <button type="submit">端末のロック解除を登録</button>
       </form>
-    </section>
+    </section></div>
 
-    <section id="admin-login-view" class="card" hidden>
+    <div class="tlain-login-view" data-login-status="message"><section id="admin-login-view" class="card tlain-login-card" hidden><p class="tlain-login-brand">T-lain</p><h1>セキュリティセンター</h1>
       <h2>管理者ログイン</h2>
       <button id="admin-passkey-login" type="button" class="passkey-login-button"><svg class="passkey-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg><span id="passkey-login-label" class="passkey-login-label">パスキーでログイン</span></button>
       <p class="hint">第一管理者パスワードによる復旧登録は、登録済みパスキーを失った場合にも利用できます。</p>
       <button id="admin-password-recovery" class="secondary" type="button">管理者パスワードでパスキーを復旧登録</button>
-    </section>
+    </section></div>
 
-    <section id="invite-view" class="card" hidden>
+    <div class="tlain-login-view" data-login-status="message"><section id="invite-view" class="card tlain-login-card" hidden><p class="tlain-login-brand">T-lain</p><h1>セキュリティセンター</h1>
       <h2 id="invite-title">パスキー招待</h2>
       <p id="invite-description">招待された本人の端末で、標準の画面ロック解除を使用して登録します。</p>
       <p id="invite-progress" role="status" hidden></p>
       <button id="invite-register" type="button">端末のロック解除を登録</button>
-    </section>
+    </section></div>
 
-    <section id="invite-complete" class="card invite-complete" hidden aria-labelledby="invite-complete-title">
+    <div class="tlain-login-view" data-login-status="message"><section id="invite-complete" class="card invite-complete tlain-login-card" hidden aria-labelledby="invite-complete-title"><div class="tlain-login-brand">T-lain</div><h1>セキュリティセンター</h1>
       <span class="completion-check" aria-hidden="true">✓</span>
       <h2 id="invite-complete-title" tabindex="-1">パスキーの登録が完了しました。</h2>
       <p>管理者の確認後、利用できるようになります。しばらくお待ちください。</p>
-    </section>
+    </section></div>
 
       <section id="tcloud-setup-notice" class="card setup-notice" hidden aria-live="polite">
         <h2>T-Cloudのパスキー利用準備</h2>
@@ -188,11 +190,11 @@
       </section>
     </section>
   </main>
-  <script src="/cloud/vendor/argon2.umd.min.js?v=security-2be498d8e67e"></script>
-  <script src="/cloud/crypto-vault.js?v=security-2be498d8e67e"></script>
-  <script src="/security/passkey-client.js?v=security-2be498d8e67e"></script>
-  <script src="/security/security-display.js?v=security-2be498d8e67e"></script>
-  <script src="/assets/pwa-auto-update.js?v=security-2be498d8e67e" defer></script>
-  <script src="/security/security.js?v=security-2be498d8e67e"></script>
+  <script src="/cloud/vendor/argon2.umd.min.js?v=security-7643fec74a43"></script>
+  <script src="/cloud/crypto-vault.js?v=security-7643fec74a43"></script>
+  <script src="/security/passkey-client.js?v=security-7643fec74a43"></script>
+  <script src="/security/security-display.js?v=security-7643fec74a43"></script>
+  <script src="/assets/pwa-auto-update.js?v=security-7643fec74a43" defer></script>
+  <script src="/security/security.js?v=security-7643fec74a43"></script>
 </body>
 </html>
