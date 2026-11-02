@@ -38,7 +38,7 @@ test('real imported data seeds all dated D1 records exactly without inventing ea
     const { history, assets, ...expectedMetadata } = legacy;
     assert.equal(state.revision, 0);
     assert.deepEqual(JSON.parse(state.metadata), expectedMetadata);
-    assert.deepEqual(sqlite.prepare('SELECT id,role FROM portfolio_accounts ORDER BY id').all(), [
+    assert.deepEqual(sqlite.prepare('SELECT id,role FROM portfolio_accounts ORDER BY id').all().map(({ id, role }) => ({ id, role })), [
       { id: 'owner', role: 'owner' }, { id: 'viewer', role: 'viewer' }
     ]);
   } finally {
