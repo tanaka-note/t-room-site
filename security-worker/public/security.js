@@ -32,7 +32,7 @@
     servicesPromise: null, dashboardLoading: false, dashboardLoaded: false, dashboardRequest: 0,
     readGeneration: 0, usersLoaded: false, identitiesPromise: null, identitiesRequest: 0,
     auditLoaded: false, auditPage: 0, auditCursors: [null], auditPositions: [], auditDetails: new WeakMap(),
-    activePanel: "dashboard-panel", panelScroll: new Map()
+    activePanel: "dashboard-panel", panelScroll: new Map(), healthSetupScroll: null
   };
   const $ = (selector) => document.querySelector(selector);
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
@@ -59,6 +59,22 @@
   }
 
   function bind() {
+    window.addEventListener("hashchange", () => {
+      const open = new URLSearchParams(location.hash.replace(/^#/, "")).has("health-setup");
+      const previousTop = window.scrollY;
+      const wasOpen = !$("#health-setup-notice").hidden;
+      $("#health-setup-notice").hidden = !open;
+      if (open) {
+        state.healthSetupScroll ??= previousTop;
+        $("#health-setup-prepare").focus({ preventScroll: true });
+        $("#health-setup-notice").scrollIntoView({ block: "start" });
+      } else if (wasOpen && state.healthSetupScroll !== null) {
+        const top = state.healthSetupScroll;
+        requestAnimationFrame(() => window.scrollTo(0, top));
+      } else if ($("#admin-view").hidden && $("#admin-login-view").hidden && !state.inviteFlow) {
+        routeStatus();
+      }
+    });
     window.addEventListener("pageshow", (event) => {
       if (event.persisted && state.inviteFlow && !state.inviteRegistrationPending) routeStatus();
     });
@@ -729,6 +745,13 @@
       const link = document.createElement("a");
       link.href = "/security/#health-setup";
       link.textContent = "本人の利用準備";
+      link.onclick = (event) => {
+        if (location.hash === "#health-setup") {
+          event.preventDefault();
+          $("#health-setup-prepare").focus({ preventScroll: true });
+          $("#health-setup-notice").scrollIntoView({ block: "start" });
+        } else state.healthSetupScroll = window.scrollY;
+      };
       help.append(" ", link);
       members.append(help);
     } catch (error) {
@@ -1202,7 +1225,7 @@
       currentIdentities: [], auditIdentities: [], identityNames: new Map(), selectedIdentity: null,
       auditLoaded: false, auditLoading: false, auditCursor: null, auditQuery: "", auditPage: 0,
       auditCursors: [null], auditPositions: [], auditDetails: new WeakMap(),
-      dashboardLoaded: false, dashboardLoading: false, panelScroll: new Map() });
+      dashboardLoaded: false, dashboardLoading: false, panelScroll: new Map(), healthSetupScroll: null });
     for (const selector of ["#identity-list", "#identity-detail", "#audit-list", "#link-rows", "#ai-budget-list", "#dashboard-panel"])
       $(selector).replaceChildren();
     $("#identity-detail").hidden = true;
