@@ -204,3 +204,9 @@ HouseholdとCalendarも変更対象だけを自動公開し、手動 production_
 初回だけ旧Workerにdeployment-statusがないため自動preflightは停止する。専用手順として、対象CI成功・最新main・clean checkoutを確認し、既存Wrangler認証でSecret名/bindingとD1のd1_migrationsを読み取る。Household 0005は追加DDL/indexのみで既存レコードを削除しないことをレビューして適用する。該当target全体のbuild freshness検査後に通常のWrangler公開を行い、公開build、active version、deployment-statusを読み戻す。Calendarの初回公開でもBUILD_IDを最新main SHAに設定する。その後、同一mainの失敗したActions公開jobを再実行し、通常のversion upload→100% promotion→公開後照合を確認する。検査を無効化したりActions環境変数を偽装しない。
 
 Weekly cross-service regressionは月曜06:20 JSTと手動実行で、auth/backup/household/calendar/security、DiaryとCloudの限定smokeを実行する。共通認証、実Security連携、バックアップの隔離復元、主要画面、家計簿の4規模fixtureを変更の有無によらず確認する。production Environment・Secrets・公開jobは使わず、Container/Androidビルド/全CloudメディアE2Eは含めない。結果と失敗traceを14日保管する。通常の変更対象CIは継続する。
+
+### 共通ログイン画面
+
+既存・今後のパスキーログイン画面は `tools/shared/tlain-login.css`／`tlain-login.js` を正本とする。家計簿・日記・支払明細・請求書管理を基準に、明るい背景、最大幅440pxの白いカード、周囲の余白、48px以上の緑のパスキーボタンへ統一する。ページには `tlain-login-view` と `tlain-login-card` を付け、カード内にサービス名、説明、ボタン、状態表示と必要な補助導線を置く。表示に必要な既存メッセージノードはID・リスナーを保ったままカードへ移動し、ログイン後は元の位置へ戻す。認証・復旧・招待・鍵管理の処理は各サービスの正本を維持する。
+
+各Workerの配信コピーとcanonicalファイルを `web-apps.json` の `assetCopies`／`buildFiles` に登録し、HTMLの最後のCSS参照として読み込む。厳格なasset allowlistがあるWorkerはこの2ファイルも許可する。対象限定build syncでコピー、PWA precache、markerを更新する。Web contractは登録済みHTMLからログイン画面を自動検出し、今後追加するページについても共通部品の参照漏れとコピーの不一致を拒否する。`tools/test-login-layout.browser.mjs` は実HTML/CSSと合成未認証応答でPC・スマートフォン幅、カード・ボタン寸法、背景、状態表示の配置とアプリ画面への復帰を検証する。siteのVisual試験から実行する。
