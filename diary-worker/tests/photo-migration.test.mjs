@@ -20,6 +20,8 @@ function fixture() {
   let creates = 0;
   let uploads = 0;
   let unrelated = [];
+  let staged = new Set();
+  let sessionCounter = 0;
   let session = { authenticated: true, canManageEntries: true, activeHouseholdId: destination.householdId, loginId: destination.loginId, role: destination.role };
   async function api(path, options = {}) {
     if (path === '/session') return session;
@@ -29,9 +31,28 @@ function fixture() {
       if (failAfter === 'create') { failAfter = null; throw new Error('lost create response'); }
       return { entry: structuredClone(entry) };
     }
+    if (path === '/photo-upload-sessions') {
+      sessionCounter++;
+      return { uploadSession: { id: `30000000-0000-5000-8000-${String(sessionCounter).padStart(12, '0')}`, expiresAt: new Date(Date.now() + 86400000).toISOString() } };
+    }
+    if (options.method === 'DELETE') {
+      staged.clear();
+      if (failAfter === 'expired-cleanup') { failAfter = null; throw Object.assign(new Error('already cleaned'), { status: 404 }); }
+      return { ok: true };
+    }
+    if (/\/photos\/[a-f0-9-]{36}$/.test(path)) {
+      const id = path.split('/').at(-1);
+      if (staged.has(id)) return { photo: { id } };
+      throw Object.assign(new Error('missing staged photo'), { status: 404 });
+    }
+    if (path.endsWith('/commit')) {
+      for (const id of options.body.photoIds) if (!entry.photos.some(photo => photo.id === id)) entry.photos.push({ id });
+      if (failAfter === 'commit') { failAfter = null; throw new Error('lost commit response'); }
+      return { photos: structuredClone(entry.photos) };
+    }
     if (path.endsWith('/photos')) {
       const id = options.body.get('id');
-      if (!entry.photos.some(p => p.id === id)) { uploads++; entry.photos.push({ id }); }
+      if (!staged.has(id)) { uploads++; staged.add(id); }
       if (failAfter === 'upload') { failAfter = null; throw new Error('lost upload response'); }
       if (failAfter === 'stop') { failAfter = null; stop = true; }
       return { photo: { id } };
@@ -75,6 +96,26 @@ test('resume after lost publication response does not repost or overwrite', asyn
   await f.engine().run();
   assert.equal(f.creates, 1); assert.equal(f.uploads, 2); assert.equal(f.entry.revision, 2);
   await f.engine().run({ verifyOnly: true });
+});
+test('resume after lost staging commit response reconciles final photos', async () => {
+  const f = fixture(); f.failure = 'commit';
+  await assert.rejects(f.engine().run(), /lost commit/);
+  assert.equal(f.entry.status, 'draft'); assert.equal(f.entry.photos.length, 2);
+  await f.engine().run();
+  assert.equal(f.creates, 1); assert.equal(f.uploads, 2); assert.equal(f.entry.status, 'published');
+});
+test('expired staging renews only the pending day, retaining completed records', async () => {
+  const f = fixture(); f.failure = 'stop'; await f.engine().run();
+  f.journal.days[day.date].uploadExpiresAt = '2020-01-01T00:00:00Z';
+  f.resume(); await f.engine().run();
+  assert.equal(f.creates, 1); assert.equal(f.uploads, 3); assert.equal(f.entry.photos.length, 2);
+  assert.equal(f.entry.status, 'published');
+});
+test('expired staging already removed by cleanup is safely recreated', async () => {
+  const f = fixture(); f.failure = 'stop'; await f.engine().run();
+  f.journal.days[day.date].uploadExpiresAt = '2020-01-01T00:00:00Z';
+  f.failure = 'expired-cleanup'; f.resume(); await f.engine().run();
+  assert.equal(f.creates, 1); assert.equal(f.entry.status, 'published'); assert.equal(f.entry.photos.length, 2);
 });
 test('stopping leaves a draft and resumes without duplicating the saved photo', async () => {
   const f = fixture(); f.failure = 'stop';

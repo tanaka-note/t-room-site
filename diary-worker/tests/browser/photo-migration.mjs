@@ -16,19 +16,22 @@ const manifest = { version: 1, id: 'a'.repeat(64), year: 2025, timezone: 'Asia/T
   }]
 }] };
 let entry, requests = 0;
+const staged = new Set();
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const json = value => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(value)); };
   if (url.pathname === '/diary/api/session') return json(session);
-  if (url.pathname.includes('/api/entries')) {
+  if (url.pathname.includes('/api/')) {
     if (req.method === 'GET') return json(url.pathname.endsWith('/entries') ? { entries: [], hasMore: false } : { entry });
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
     const body = Buffer.concat(chunks).toString();
     requests++;
+    if (url.pathname.endsWith('/photo-upload-sessions')) return json({ uploadSession: { id: '30000000-0000-5000-8000-000000000001', expiresAt: new Date(Date.now() + 86400000).toISOString() } });
     if (req.method === 'POST' && url.pathname.endsWith('/entries')) {
       entry = { id: 1, ...JSON.parse(body), revision: 1, photos: [] }; return json({ entry });
     }
-    if (url.pathname.endsWith('/photos')) { entry.photos.push({ id }); return json({ photo: { id } }); }
+    if (url.pathname.endsWith('/photos')) { staged.add(id); return json({ photo: { id } }); }
+    if (url.pathname.endsWith('/commit')) { entry.photos = [...staged].map(id => ({ id })); return json({ photos: entry.photos }); }
     Object.assign(entry, JSON.parse(body)); entry.revision++; return json({ entry });
   }
   if (url.pathname === '/') {
@@ -80,7 +83,7 @@ try {
   assert.equal(journal.days['2025-01-01'].entryId, 1);
   await page.getByRole('button', { name: '保存結果を照合', exact: true }).click();
   await page.getByText('処理完了：1/1日を保存済み', { exact: true }).first().waitFor();
-  assert.equal(requests, 3, 'verification never modifies saved diaries');
+  assert.equal(requests, 5, 'verification never modifies saved diaries');
   assert.deepEqual(errors, []);
   console.log('photo migration browser fixture passed (folder, durable journal, API upload, publication, verification)');
 } finally {
