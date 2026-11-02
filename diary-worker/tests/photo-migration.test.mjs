@@ -154,6 +154,14 @@ test('changed draft and published content are not overwritten on resume', async 
   f.entry.status = 'published';
   await assert.rejects(f.engine().run(), /一致しません/);
 });
+test('unrelated draft edits and trash changes stop migration before commit', async () => {
+  for (const change of [entry => { entry.revision++; entry.tags = ['user-added']; }, entry => { entry.deletedAt = '2025-01-02'; }]) {
+    const f = fixture(); f.failure = 'stop'; await f.engine().run();
+    change(f.entry); f.resume();
+    await assert.rejects(f.engine().run(), /下書きが変更/);
+    assert.equal(f.entry.photos.length, 0, 'do not commit staged images to a modified draft');
+  }
+});
 test('unsafe paths, duplicate IDs, and unsorted timestamps are rejected', () => {
   for (const mutate of [
     m => { m.days[0].photos[0].original.path = '../secret'; },

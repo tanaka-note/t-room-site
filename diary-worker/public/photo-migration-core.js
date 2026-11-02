@@ -94,6 +94,7 @@ export class PhotoMigration {
           requestId: day.requestId, entryDate: day.date, title: day.title, content: '', tags: [], status: 'draft'
         } })).entry;
         record.entryId = entry.id;
+        record.draftRevision = 1;
         record.status = 'uploading';
         await this.checkpoint();
       } else {
@@ -107,7 +108,8 @@ export class PhotoMigration {
         this.onProgress({ date: day.date, stage: 'complete', photos: day.photos.length });
         continue;
       }
-      if (entry.status !== 'draft' || entry.content !== '' || entry.draftOfEntryId
+      if (entry.status !== 'draft' || entry.content !== '' || entry.draftOfEntryId || entry.deletedAt
+        || entry.revision !== record.draftRevision
         || (entry.photos || []).some(photo => !day.photos.some(p => p.id === photo.id))) throw new Error(`${day.date}: 下書きが変更されています。`);
       const existing = new Set((entry.photos || []).map(photo => photo.id));
       // Staging uses attempt-specific R2 keys, so a failed overlapping retry cannot
@@ -162,6 +164,9 @@ export class PhotoMigration {
         this.onProgress({ date: day.date, stage: 'uploading', uploaded: saved.size, photos: day.photos.length });
       }
       if (record.uploadSessionId) {
+        entry = (await this.api(`/entries/${entry.id}`)).entry;
+        if (entry.status !== 'draft' || entry.deletedAt || entry.revision !== record.draftRevision
+          || entry.entryDate !== day.date || entry.title !== day.title || entry.content !== '') throw new Error(`${day.date}: 下書きが変更されています。`);
         record.status = 'committing';
         await this.checkpoint();
         await this.api(`/photo-upload-sessions/${record.uploadSessionId}/commit`, {
@@ -169,7 +174,8 @@ export class PhotoMigration {
         });
       }
       entry = (await this.api(`/entries/${entry.id}`)).entry;
-      if (entry.status !== 'draft' || entry.entryDate !== day.date || entry.title !== day.title || entry.content !== ''
+      if (entry.status !== 'draft' || entry.deletedAt || entry.revision !== record.draftRevision
+        || entry.entryDate !== day.date || entry.title !== day.title || entry.content !== ''
         || (entry.photos || []).length !== day.photos.length
         || !day.photos.every(photo => entry.photos.some(saved => saved.id === photo.id))) throw new Error(`${day.date}: 写真の照合に失敗しました。`);
       record.status = 'publishing';
