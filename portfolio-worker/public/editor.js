@@ -12,7 +12,7 @@ function clearSession(broadcast = false) {
   clearReport(); $('editor-form').reset(); $('asset-editors').replaceChildren(); $('view-date').replaceChildren();
   for (const id of ['account-label','app-message','editor-note','editor-total']) $(id).textContent = '';
   $('report-app').hidden = true; $('editor-panel').hidden = true; $('login-panel').hidden = false;
-  $('login-button').disabled = false; $('login-button').textContent = 'パスキーでログイン';
+  $('login-button').disabled = false; $('login-button').removeAttribute('aria-busy'); $('passkey-login-label').textContent = 'パスキーでログイン';
   if (broadcast) channel?.postMessage('session-changed');
 }
 function armExpiry() {
@@ -94,8 +94,8 @@ function addRow(asset) {
   remove.onclick = () => { if (busy || !confirm('この日付の保有銘柄から削除しますか？ 過去の記録には影響しません。')) return; row.remove(); markDirty(); updateTotal(); };
   row.append(remove); $('asset-editors').append(row);
 }
-function openDraft(record) {
-  draft = clone(record); markDirty(false); $('record-date').value = record.period; $('record-time').value = record.time || '';
+function openDraft(record, basePrincipal = dataset.metadata.basePrincipal) {
+  draft = clone(record); markDirty(false); $('base-principal').value = basePrincipal; $('record-date').value = record.period; $('record-time').value = record.time || '';
   $('asset-editors').replaceChildren(); $('legacy-total-label').hidden = record.assets !== null; $('add-asset').hidden = record.assets === null;
   $('editor-note').textContent = record.assets === null ? '移行済みの過去記録には銘柄別データがないため、この日は控除前の合計額を修正します。' : '評価額を編集すると合計を自動計算します。新しい日付を指定すると、その日の記録として保存できます。';
   if (record.assets === null) $('legacy-total').value = record.rawMarketValue; else record.assets.forEach(addRow);
@@ -118,7 +118,7 @@ $('record-date').addEventListener('change', async () => {
     } else {
       // A new date explicitly copies the last known stock list as an input template.
       const template = draft.assets === null ? dataset.record : collectDraft();
-      openDraft({ ...template, period, time: null });
+      openDraft({ ...template, period, time: null }, $('base-principal').value);
       $('editor-note').textContent = '新しい日付です。表示中の銘柄を入力用に引き継ぎました。この日時点の評価額を確認して保存してください。';
       markDirty();
     }
@@ -135,20 +135,22 @@ $('view-date').onchange = async () => {
 $('editor-form').onsubmit = async event => {
   event.preventDefault(); if (busy || !session) return;
   try {
-    const record = collectDraft();
+    const record = collectDraft(), basePrincipal = numeric($('base-principal').value);
+    if (basePrincipal === 0) throw new Error('元本は1円以上の整数円で入力してください。');
+    if (basePrincipal !== dataset.metadata.basePrincipal && !confirm('元本を変更すると、過去を含む全日付の損益・損益率を再計算します。保存しますか？')) return;
     if (dataset.history.some(entry => entry.period === record.period) && !confirm(`${record.period} の記録を訂正して保存しますか？`)) return;
     setBusy(true);
-    await api('/save', { record, expectedRevision: dataset.revision, requestId: crypto.randomUUID() });
+    await api('/save', { record, basePrincipal, expectedRevision: dataset.revision, requestId: crypto.randomUUID() });
     markDirty(false); $('editor-panel').hidden = true;
     await load(record.period); message('保存しました。合計とチャートを更新しました。'); channel?.postMessage('data-changed');
   } catch (error) { failure(error); } finally { setBusy(false); }
 };
 $('login-button').onclick = async () => {
-  if (busy) return; setBusy(true); $('login-button').textContent = '確認中…'; message('', true);
+  if (busy) return; setBusy(true); $('login-button').setAttribute('aria-busy', 'true'); $('passkey-login-label').textContent = '確認中…'; message('', true);
   try {
     const auth = await window.TRoomPasskeys.authenticate('portfolio', links => window.TRoomPasskeys.chooseLinkDialog(links, 'portfolio'));
     await enter(await api('/passkey/handoff', { handoffToken: auth.handoff.handoffToken })); channel?.postMessage('session-changed');
-  } catch (error) { failure(error); } finally { setBusy(false); $('login-button').textContent = 'パスキーでログイン'; }
+  } catch (error) { failure(error); } finally { setBusy(false); $('login-button').removeAttribute('aria-busy'); $('passkey-login-label').textContent = 'パスキーでログイン'; }
 };
 async function enter(value) {
   session = value; armExpiry(); $('login-panel').hidden = true; $('report-app').hidden = false;
@@ -171,4 +173,5 @@ document.addEventListener('troom:before-auto-update', event => { if (dirty || bu
 window.addEventListener('pageshow', async event => { if (event.persisted && session) try { await api('/session'); } catch (error) { failure(error); } });
 document.addEventListener('visibilitychange', async () => { if (!document.hidden && session) try { await api('/session'); } catch (error) { failure(error); } });
 if (channel) channel.onmessage = event => { if (event.data === 'session-changed') clearSession(); else if (session) message('別の画面で更新されました。未保存の入力を確認し、再読み込みしてください。'); };
-try { await enter(await api('/session')); } catch (error) { if (error.status !== 401) failure(error); }
+setBusy(true);
+try { await enter(await api('/session')); } catch (error) { if (error.status !== 401) failure(error); } finally { setBusy(false); }

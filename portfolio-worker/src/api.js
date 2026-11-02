@@ -1,4 +1,4 @@
-import { HttpError, reportView, storedRecord, validateRecord } from './domain.js';
+import { HttpError, amount, reportView, storedRecord, validateRecord } from './domain.js';
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
 async function state(env) {
   const row = await env.DB.prepare("SELECT revision,metadata FROM portfolio_state WHERE id='main'").first();
@@ -37,7 +37,11 @@ export async function portfolioApi(request, env, path, session, readJson, audit)
     const body = await readJson(request);
     if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0 || !/^[a-f0-9-]{36}$/i.test(body.requestId || '')) throw new HttpError(400, '保存情報を確認してください。');
     const current = await state(env), record = validateRecord(body.record, current.metadata);
-    const fingerprint = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify({ expectedRevision: body.expectedRevision, record })))), x => x.toString(16).padStart(2, '0')).join('');
+    const hasPrincipal = Object.hasOwn(body, 'basePrincipal');
+    const basePrincipal = hasPrincipal ? amount(body.basePrincipal) : current.metadata.basePrincipal;
+    if (basePrincipal === 0) throw new HttpError(400, '元本は1円以上の整数円で入力してください。');
+    const principalChange = hasPrincipal ? { basePrincipal } : {};
+    const fingerprint = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify({ expectedRevision: body.expectedRevision, record, ...principalChange })))), x => x.toString(16).padStart(2, '0')).join('');
     const previousRequest = await env.DB.prepare('SELECT revision,fingerprint FROM portfolio_changes WHERE request_id=?').bind(body.requestId).first();
     if (previousRequest) {
       if (previousRequest.fingerprint !== fingerprint) throw new HttpError(409, '同じ保存IDで異なる内容は保存できません。', 'conflict');
@@ -48,14 +52,17 @@ export async function portfolioApi(request, env, path, session, readJson, audit)
     // Imported historical summaries have no invented per-stock breakdown.
     if (record.assets === null && (!prior || prior.assets !== null)) throw new HttpError(400, 'この日付は銘柄別に入力してください。');
     const revision = current.revision + 1, now = new Date().toISOString();
+    const previousRecord = prior ? storedRecord(prior) : null;
+    const previousChange = hasPrincipal ? { ...previousRecord, basePrincipal: current.metadata.basePrincipal } : previousRecord;
+    const savedChange = { ...record, ...principalChange };
     try {
       await env.DB.batch([
         // CAS must fail inside the transaction if another save wins after reading.
-        env.DB.prepare("UPDATE portfolio_state SET revision=CASE WHEN revision=? THEN revision+1 ELSE -1 END WHERE id='main'").bind(current.revision),
+        env.DB.prepare("UPDATE portfolio_state SET metadata=?,revision=CASE WHEN revision=? THEN revision+1 ELSE -1 END WHERE id='main'").bind(JSON.stringify({ ...current.metadata, basePrincipal }), current.revision),
         env.DB.prepare('INSERT INTO portfolio_records(period,time,raw_market_value,assets,updated_at,updated_by) VALUES(?,?,?,?,?,?) ON CONFLICT(period) DO UPDATE SET time=excluded.time,raw_market_value=excluded.raw_market_value,assets=excluded.assets,updated_at=excluded.updated_at,updated_by=excluded.updated_by')
           .bind(record.period, record.time, record.rawMarketValue, record.assets === null ? null : JSON.stringify(record.assets), now, session.serviceAccountId),
         env.DB.prepare('INSERT INTO portfolio_changes(revision,request_id,fingerprint,period,previous_record,saved_record,updated_at,account_id) VALUES(?,?,?,?,?,?,?,?)')
-          .bind(revision, body.requestId, fingerprint, record.period, prior ? JSON.stringify(storedRecord(prior)) : null, JSON.stringify(record), now, session.serviceAccountId)
+          .bind(revision, body.requestId, fingerprint, record.period, previousChange ? JSON.stringify(previousChange) : null, JSON.stringify(savedChange), now, session.serviceAccountId)
       ]);
     } catch {
       const saved = await env.DB.prepare('SELECT revision,fingerprint FROM portfolio_changes WHERE request_id=?').bind(body.requestId).first();

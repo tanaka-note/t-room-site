@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { verifyPasskeyLogin } from './passkey-login.browser.mjs';
+import { verifyPrincipalEditor } from './principal.browser.mjs';
 import { fixture } from './fixture.js';
 const require=createRequire(import.meta.url),{chromium}=require('../../diary-worker/node_modules/playwright');
 const owner=fixture(),viewer=fixture('viewer');await owner.login();await viewer.login();
@@ -13,7 +15,7 @@ const server=createServer((req,res)=>{try{
  else if(url.pathname==='/security/passkey-client.js')file=new URL('security-worker/public/passkey-client.js',root);
  else if(url.pathname==='/assets/pwa-auto-update.js')file=new URL('assets/pwa-auto-update.js',root);
  else throw new Error('missing');
- const type=types[file.pathname.slice(file.pathname.lastIndexOf('.'))]||'text/plain';res.writeHead(200,{'Content-Type':type,'Cache-Control':'no-store'});res.end(readFileSync(file));
+ const body=readFileSync(file),type=types[file.pathname.slice(file.pathname.lastIndexOf('.'))]||'text/plain';res.writeHead(200,{'Content-Type':type,'Cache-Control':'no-store'});res.end(body);
  }catch{res.writeHead(404);res.end('missing');}});
 await new Promise(done=>server.listen(0,'127.0.0.1',done));const url=`http://127.0.0.1:${server.address().port}/asset-report/`;
 const browser=await chromium.launch({headless:true});mkdirSync(new URL('../../tmp/portfolio-screens/',import.meta.url),{recursive:true});
@@ -24,6 +26,8 @@ async function routeApi(page,f){await page.route('**/asset-report/api/**',async 
  const response=await f.request(path,body,headers,request.method());await route.fulfill({status:response.status,headers:Object.fromEntries(response.headers),body:await response.text()});
 });}
 try{
+ await verifyPasskeyLogin(browser, url, await owner.state());
+ await verifyPrincipalEditor(browser, url, routeApi);
  for(const width of [1440,390,320]){
   const context=await browser.newContext({viewport:{width,height:1000}}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',dialog=>dialog.accept());await routeApi(page,owner);await page.goto(url);await page.locator('#report-app').waitFor({state:'visible'});
   await page.waitForFunction(()=>document.querySelector('#history-period').textContent.includes('2026') || document.querySelector('#app-message').textContent);
