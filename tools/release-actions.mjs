@@ -53,6 +53,17 @@ export function assertVersionSettings(before, after) {
   }
   if (JSON.stringify(before.queues?.consumers) !== JSON.stringify(after.queues?.consumers)) throw new Error('Queue consumer changes require the dedicated release procedure.');
 }
+export function assertD1ExportReadiness(settings) {
+  const bindings = settings?.bindings || [];
+  if (!bindings.some(b => b.type === 'workflow' && b.name === 'D1_BACKUPS' && b.workflow_name === 't-room-d1-backup')
+    || !bindings.some(b => b.type === 'secret_text' && b.name === 'D1_EXPORT_API_TOKEN')
+    || !bindings.some(b => b.type === 'plain_text' && b.name === 'D1_EXPORT_ACCOUNT_ID' && /^[a-f0-9]{32}$/.test(b.text || ''))
+    || !bindings.some(b => b.type === 'd1' && b.name === 'DIARY_DB' && (b.id || b.database_id) === 'e4677259-db4b-4562-ad82-fe542a1edb75')
+    || !bindings.some(b => b.type === 'd1' && b.name === 'PORTFOLIO_DB' && (b.id || b.database_id) === '8fd0d41b-8ce2-42b8-a2e8-8c4461d08b32')
+    || !bindings.some(b => b.type === 'r2_bucket' && b.name === 'DIARY_BACKUP' && b.bucket_name === 't-room-diary-backups')) {
+    throw new Error('Prepare t-room-backup Workflow, D1 export Secret and Diary/Portfolio bindings before releasing Diary. See backup-worker/README.md.');
+  }
+}
 export function assertDenied(status, body) {
   if (![401, 403].includes(status) || body?.success !== false) {
     const codes = (body?.errors || []).map(error => error.code).filter(Number.isFinite);
@@ -118,6 +129,7 @@ export async function releaseActions(target) {
   if (app) run(root, ['tools/check-web-app-builds.mjs', '--target', app.deployTarget]);
   if (target === 'health') healthProductionPreflight(directory);
   const settings=await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${name}/settings`);
+  if(target==='diary' && config.workflows?.some(w=>w.binding==='D1_BACKUPS'))assertD1ExportReadiness(await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/t-room-backup/settings`));
   if(['household','calendar'].includes(target))await serviceProductionPreflight(target,directory,config,settings);
   await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/subdomain`);
   const outDir = resolve(root, 'tmp/production', target); mkdirSync(outDir, { recursive: true });

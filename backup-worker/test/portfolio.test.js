@@ -8,6 +8,10 @@ import {backupService,capture,decode} from '../src/backup.js';
 import {getBackupSnapshot} from '../src/browser.js';
 import {restoreIsolated} from '../tools/restore-isolated.mjs';
 import {portfolioApi} from '../../portfolio-worker/src/api.js';
+import {dispatchServices} from '../src/dispatch.js';
+import {executeExportWorkflow} from '../src/workflow-run.js';
+import {DATABASES,readExportParts} from '../src/export-backup.js';
+import {exportEnv,exportFetcher} from './export-fixtures.mjs';
 
 function seed(db) {
  const metadata={schemaVersion:1,period:'2026-10-31',basePrincipal:1000000,
@@ -30,13 +34,14 @@ async function save(db,record) {
 const rows=(db,table)=>db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
 function scheduledWorker() {
  const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'')
+  .replace(/^export \{ D1BackupWorkflow \}.*;\r?\n/gm,'')
   .replace('export class BackupBrowserIntegration','class BackupBrowserIntegration').replace('export default {','globalThis.worker = {');
- const calls=[],context={WorkerEntrypoint:class{},SERVICES,crypto,getBackupSnapshot,console:{log(){},error(){}},
+ const calls=[],context={WorkerEntrypoint:class{},SERVICES,crypto,getBackupSnapshot,dispatchServices,console:{log(){},error(){}},
   backupService:async(env,id,now)=>{calls.push({id,now});return id==='portfolio'?backupService(env,id,now,async()=>{}):{state:'ok'};}};
  vm.runInNewContext(source,context);return {worker:context.worker,calls};
 }
 
-test('Portfolio shares the existing 03:40 JST invocation and restores updated, backdated and corrected records plus revision history in isolation',async()=>{
+for(const workflow of [false,true])test(`Portfolio ${workflow?'Workflow v3':'legacy v2'} shares the 03:40 JST invocation and restores updates, backdating, corrections and history with accounts quarantined`,async t=>{
  const db=database('portfolio'),bucket=new Bucket(),audit=recorder();let restored;
  try{
   const assets=seed(db);assets[0].name='Updated synthetic holding';assets[0].marketValue=350000;
@@ -46,15 +51,34 @@ test('Portfolio shares the existing 03:40 JST invocation and restores updated, b
   const before=Object.fromEntries(SERVICES.portfolio.tables.map(t=>[t.name,rows(db,t.name)]));
   assert.equal(before.portfolio_changes.length,3);assert.equal(before.portfolio_state[0].revision,3);
   const scheduledTime=Date.parse('2026-11-01T18:40:00Z'),env={PORTFOLIO_DB:d1(db),BACKUP:bucket,...audit};
+  const jobs=[];
+  if(workflow){
+   Object.assign(env,exportEnv('portfolio',d1(db),bucket));
+   env.D1_BACKUPS={async create(job){jobs.push(job);}};
+   t.mock.method(globalThis,'fetch',exportFetcher(db,'portfolio').fetcher);
+  }
   const h=scheduledWorker();await h.worker.scheduled({scheduledTime},env);
-  assert.equal(h.calls.filter(c=>c.id==='portfolio').length,1);
-  assert.ok(h.calls.every(c=>c.now===scheduledTime),'all services must use the same scheduled time');
-  const key='d1/portfolio/v2/daily/2026-11-02.json.gz';
-  assert.ok(bucket.objects.has(key));assert.ok(bucket.objects.has('d1/portfolio/v2/monthly/2026-11.json.gz'));
+  if(workflow){
+   assert.equal(h.calls.length,0,'Workflow binding must bypass legacy capture');
+   assert.deepEqual(jobs.map(j=>j.params.service).sort(),Object.keys(SERVICES).sort());
+   assert.ok(jobs.every(j=>j.params.scheduledTime===scheduledTime&&Object.hasOwn(DATABASES,j.params.service)));
+   const job=jobs.find(j=>j.params.service==='portfolio');assert.equal(job.id,`portfolio-${scheduledTime}`);
+   const step={async sleep(){},async do(name,options,fn){return (fn||options)();}};
+   assert.deepEqual(await executeExportWorkflow(env,job.params,step),{service:'portfolio',state:'ok'});
+  }else{
+   assert.equal(h.calls.filter(c=>c.id==='portfolio').length,1);
+   assert.ok(h.calls.every(c=>c.now===scheduledTime),'all services must use the same scheduled time');
+  }
+  const version=workflow?'v3':'v2',key=`d1/portfolio/${version}/daily/2026-11-02.json.gz`;
+  assert.ok(bucket.objects.has(key));assert.ok(bucket.objects.has(`d1/portfolio/${version}/monthly/2026-11.json.gz`));
   const snapshot=await decode(bucket.objects.get(key).bytes);
-  assert.equal(snapshot.scheduledFor,'2026-11-01T18:40:00.000Z');assert.equal(snapshot.consistency,'single-database-transaction');
+  assert.equal(snapshot.scheduledFor,'2026-11-01T18:40:00.000Z');assert.equal(snapshot.consistency,workflow?'single-database-export':'single-database-transaction');
   assert.equal(snapshot.expectedMigration,'0001_portfolio.sql');
-  for(const t of SERVICES.portfolio.tables)assert.deepEqual(snapshot.tables[t.name].rows,before[t.name].map(r=>({...r})),t.name);
+  if(workflow){
+   const recovered=Object.fromEntries(SERVICES.portfolio.tables.map(t=>[t.name,[]]));
+   for await(const part of readExportParts(bucket,snapshot,'portfolio'))recovered[part.table].push(...part.rows);
+   for(const table of SERVICES.portfolio.tables)assert.deepEqual(recovered[table.name],before[table.name].map(r=>({...r})),table.name);
+  }else for(const table of SERVICES.portfolio.tables)assert.deepEqual(snapshot.tables[table.name].rows,before[table.name].map(r=>({...r})),table.name);
   restored=await restoreIsolated(bucket,key,'portfolio');
   for(const name of ['portfolio_state','portfolio_records','portfolio_changes'])assert.deepEqual(rows(restored.db,name),before[name],name);
   assert.ok(rows(restored.db,'portfolio_accounts').every(a=>a.is_active===0&&a.session_version===2),'restoration must not reactivate accounts or sessions');
@@ -73,7 +97,7 @@ test('Portfolio shares the existing 03:40 JST invocation and restores updated, b
   const app=JSON.parse(readFileSync(new URL('../../portfolio-worker/wrangler.jsonc',import.meta.url),'utf8'));
   assert.deepEqual(config.triggers.crons,['40 18 * * *'],'reuse the existing shared schedule');
   assert.equal(config.d1_databases.find(d=>d.binding==='PORTFOLIO_DB').database_id,app.d1_databases.find(d=>d.binding==='DB').database_id);
-  assert.deepEqual(config.r2_buckets,[{binding:'BACKUP',bucket_name:'t-room-service-backups'}]);
+  assert.deepEqual(config.r2_buckets.find(b=>b.binding==='BACKUP'),{binding:'BACKUP',bucket_name:'t-room-service-backups'});
   assert.doesNotMatch(JSON.stringify(snapshot.tables),/SESSION_SECRET|credential_id|Cookie/);
  }finally{restored?.db.close();db.close();}
 });

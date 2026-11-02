@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check src/index.js && node --check src/backup.js && node --check src/monitor.js && node --check src/registry.js && node --check src/browser.js && node --check src/integrity.js && node --check src/snapshot.js && node --check src/schema-guard.js",
+    "check": "node --check src/index.js && node --check src/backup.js && node --check src/monitor.js && node --check src/registry.js && node --check src/browser.js && node --check src/integrity.js && node --check src/snapshot.js && node --check src/schema-guard.js && node --check src/export-sql.js && node --check src/export-backup.js && node --check src/workflow.js && node --check src/workflow-run.js && node --check src/dispatch.js && node --check src/export-lease.js",
     "test": "node --test test/*.test.js"
   },
   "devDependencies": {
