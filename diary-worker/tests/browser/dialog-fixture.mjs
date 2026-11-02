@@ -323,7 +323,7 @@ export async function runDialogs(service) {
           await page.keyboard.press('Shift+ArrowRight');
           assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-1.svg', 'modified arrows retain their normal meaning');
           const scrollBefore = await page.locator('#photo-viewer-dialog').evaluate(dialog => dialog.scrollTop);
-          await page.locator('#photo-download-low').focus();
+          await page.locator('#photo-delete').focus();
           await page.keyboard.press('ArrowRight');
           await displayed(2);
           assert.equal(await page.locator('#photo-viewer-dialog').evaluate(dialog => dialog.scrollTop), scrollBefore, 'arrow navigation must not also scroll the viewer');
@@ -417,7 +417,8 @@ export async function runDialogs(service) {
         await page.waitForFunction(() => document.querySelector('.photo-stage').clientHeight === 900);
         await navigate(1);
         await displayed(2);
-        assert.equal(await page.locator('#photo-download-low').getAttribute('href'), '/display/2.svg?download=1', 'download follows the selected photo');
+        assert.equal(await page.locator('#photo-download-low').count(), 0, 'low-quality download is retired');
+        assert.equal(await page.locator('#photo-delete').isVisible(), true);
         await navigate(-1);
         await displayed(1);
         assert.deepEqual(await page.evaluate(() => ({ state: JSON.stringify(history.state), length: history.length })), viewerHistory, 'photo navigation must not add or replace dialog history');

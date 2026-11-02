@@ -95,6 +95,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     entriesAbortController: null,
     requestId: 0,
     deleteMode: null,
+    photoDeleteTarget: null,
+    photoDeleteBusy: false,
+    deletedPhotoIds: new Set(),
+    photoDeletionUpdates: new Map(),
     editorPhotos: [],
     editorDeletedPhotoIds: new Set(),
     editorPendingPhotoDeletionIds: new Set(),
@@ -255,7 +259,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     photoViewerStatus: document.querySelector("#photo-viewer-status"),
     photoViewerFile: document.querySelector("#photo-viewer-file"),
     photoOpenEntry: document.querySelector("#photo-open-entry"),
-    photoDownloadLow: document.querySelector("#photo-download-low"),
+    photoDelete: document.querySelector("#photo-delete"),
     photoDownloadOriginal: document.querySelector("#photo-download-original"),
     toast: document.querySelector("#toast")
   };
@@ -344,14 +348,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
             get image() { return elements.photoViewerImage; },
             set image(value) { elements.photoViewerImage = value; },
             status: elements.photoViewerStatus, file: elements.photoViewerFile,
-            downloadLow: elements.photoDownloadLow, downloadOriginal: elements.photoDownloadOriginal
+            deleteButton: elements.photoDelete, downloadOriginal: elements.photoDownloadOriginal
           },
           selection: {
             get photos() { return state.viewerPhotos; },
             get index() { return state.viewerIndex; },
             set index(value) { state.viewerIndex = value; }
           },
-          formatDate, formatBytes
+          formatDate, formatBytes, canDelete: canDeleteViewerPhoto,
+          canNavigate: () => !state.photoDeleteBusy
         });
         photoViewer.bind();
         return photoViewer;
@@ -534,6 +539,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
     });
     elements.photoOpenEntry.addEventListener("click", openViewerEntry);
+    elements.photoDelete.addEventListener("click", requestPhotoDeletion);
 
     document.querySelectorAll("[data-close-dialog]").forEach((button) => {
       button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
@@ -1535,6 +1541,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       capture: () => state.activeEntry,
       restore: entry => {
         if (!canView() || !entry || !state.entryMap.has(entry.id)) return false;
+        applyPhotoDeletionToEntry(entry);
         state.activeEntry = entry;
         renderEntryDetail(entry);
       },
@@ -1543,11 +1550,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     dialogs.register("camera-roll-dialog", { scrollRoots: () => [], restore: canView, onClose: finishCameraRollClose });
     dialogs.register("photo-viewer-dialog", {
       scrollRoots: () => [],
-      capture: () => ({ photos: state.viewerPhotos, index: state.viewerIndex }),
+      guard: () => !state.photoDeleteBusy,
+      capture: () => ({ photos: state.viewerPhotos, index: state.viewerIndex, photoId: state.viewerPhotos[state.viewerIndex]?.id }),
       restore: saved => {
-        if (!canView() || !photoViewer || !saved.photos[saved.index]) return false;
+        if (!canView() || !photoViewer) return false;
+        removeDeletedPhotos(saved.photos);
+        if (!saved.photos.length) return false;
         state.viewerPhotos = saved.photos;
-        state.viewerIndex = saved.index;
+        const index = saved.photos.findIndex(photo => photo.id === saved.photoId);
+        state.viewerIndex = index < 0 ? Math.min(saved.index, saved.photos.length - 1) : index;
         photoViewer.render();
       },
       onClose: finishPhotoViewerClose
@@ -1566,7 +1577,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       onClose: finishEditorClose
     });
     dialogs.register("editor-leave-dialog", { guard: () => !state.editorSaving });
-    dialogs.register("delete-confirm-dialog", { onClose: () => { state.deleteMode = null; } });
+    dialogs.register("delete-confirm-dialog", {
+      guard: () => !state.photoDeleteBusy,
+      onClose: () => { state.deleteMode = null; state.photoDeleteTarget = null; }
+    });
     dialogs.register("date-wheel-dialog", { backdrop: applyDateWheel, onClose: () => { state.dateWheelTarget = null; } });
   }
 
@@ -2866,9 +2880,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function loadPhotoMeta() {
+    const generation = sessionGeneration;
     const result = await api("/photos/meta");
+    if (generation !== sessionGeneration) return;
     const monthValue = state.photoMonth;
     const months = result.months || [];
+    if (monthValue && !months.some(item => item.value === monthValue)) months.push({ value: monthValue, count: 0 });
     const totalCount = months.reduce((total, item) => total + Number(item.count || 0), 0);
     elements.photoMonthFilter.replaceChildren(createOption("", `すべて（${totalCount.toLocaleString("ja-JP")}）`), ...months.map((item) => (
       createOption(item.value, `${formatMonth(item.value)}（${Number(item.count || 0).toLocaleString("ja-JP")}）`)
@@ -2966,6 +2983,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         button.className = "camera-roll-item";
         button.type = "button";
         button.dataset.photoIndex = String(index);
+        button.dataset.photoId = photo.id;
         button.setAttribute("aria-label", `${formatDate(photo.entryDate)}「${photo.entryTitle || "無題"}」の写真を開く`);
         const image = document.createElement("img");
         image.src = photo.thumbnailUrl;
@@ -2986,6 +3004,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       });
       elements.cameraRollGrid.append(...cards);
     }
+    renderCameraRollStatus();
+  }
+
+  function renderCameraRollStatus() {
     const atLimit = state.photos.length >= CAMERA_ROLL_MAX_PHOTOS;
     elements.cameraRollStatus.textContent = `${state.photos.length.toLocaleString("ja-JP")}件の写真を表示しています。`
       + (atLimit && state.photoHasMore ? "表示上限に達しました。年月や検索条件で絞り込んでください。" : "");
@@ -3010,6 +3032,119 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.viewerIndex = index;
     photoViewer.render();
     dialogs.open("photo-viewer-dialog");
+  }
+
+  function canDeleteViewerPhoto(photo) {
+    if (!state.canManageEntries || elements.editorDialog.open || state.deletedPhotoIds.has(photo.id)) return false;
+    return state.viewerPhotos === state.photos || (state.viewerPhotos === state.activeEntry?.photos
+      && state.activeEntry.status === "published" && !state.activeEntry.deletedAt);
+  }
+
+  async function requestPhotoDeletion() {
+    const photo = state.viewerPhotos[state.viewerIndex];
+    if (!photo || state.photoDeleteBusy || !canDeleteViewerPhoto(photo)) return;
+    const generation = sessionGeneration;
+    const request = viewerOpenRequest;
+    state.photoDeleteBusy = true;
+    elements.photoDelete.disabled = true;
+    try {
+      const { entry } = await api(`/entries/${photo.entryId}`);
+      if (generation !== sessionGeneration || request !== viewerOpenRequest || !elements.photoViewerDialog.open) return;
+      if (entry.deletedAt || entry.status !== "published" || !entry.photos.some(item => item.id === photo.id)) {
+        throw new Error("写真の状態が変わっています。写真を開き直してください。");
+      }
+      state.photoDeleteTarget = { id: photo.id, entryId: entry.id, revision: entry.revision };
+      state.deleteMode = "photo";
+      elements.deleteConfirmTitle.textContent = "この写真を削除しますか？";
+      elements.deleteConfirmMessage.textContent = `「${photo.fileName}」を日記本文からも削除します。この操作は取り消せません。`;
+      elements.deleteConfirmYes.textContent = "削除";
+      dialogs.open("delete-confirm-dialog");
+    } catch (error) {
+      if (generation === sessionGeneration) showToast(error.message);
+    } finally {
+      if (generation === sessionGeneration) {
+        state.photoDeleteBusy = false;
+        elements.photoDelete.disabled = false;
+      }
+    }
+  }
+
+  function removeDeletedPhotos(photos) {
+    if (!photos) return;
+    for (let index = photos.length - 1; index >= 0; index--) {
+      if (state.deletedPhotoIds.has(photos[index].id)) photos.splice(index, 1);
+    }
+  }
+
+  function applyPhotoDeletionToEntry(entry) {
+    if (!entry) return;
+    const update = state.photoDeletionUpdates.get(entry.id);
+    if (update && entry.revision <= update.revision) {
+      Object.assign(entry, { content: update.content, contentFormat: update.contentFormat, revision: update.revision });
+    }
+    removeDeletedPhotos(entry.photos);
+  }
+
+  function removePhotoFromCameraRoll(id) {
+    const index = state.photos.findIndex(photo => photo.id === id);
+    if (index < 0) return;
+    const dialog = elements.cameraRollDialog;
+    const buttons = [...elements.cameraRollGrid.querySelectorAll("[data-photo-id]")];
+    const top = dialog.getBoundingClientRect().top;
+    const visible = buttons.find(button => button.getBoundingClientRect().bottom > top);
+    const anchor = visible?.dataset.photoId === id
+      ? buttons[index + 1] || buttons[index - 1] : visible;
+    const anchorTop = anchor?.getBoundingClientRect().top;
+    const scrollTop = dialog.scrollTop;
+    state.photos.splice(index, 1);
+    state.photoOffset = Math.max(0, state.photoOffset - 1);
+    buttons[index]?.remove();
+    [...elements.cameraRollGrid.querySelectorAll("[data-photo-index]")].forEach((button, offset) => {
+      button.dataset.photoIndex = String(offset);
+    });
+    if (!state.photos.length) elements.cameraRollGrid.replaceChildren(createEmpty("該当する写真はありません。"));
+    dialog.scrollTop = scrollTop + (anchor?.isConnected ? anchor.getBoundingClientRect().top - anchorTop : 0);
+    renderCameraRollStatus();
+  }
+
+  async function confirmPhotoDeletion() {
+    const target = state.photoDeleteTarget;
+    if (!target || state.photoDeleteBusy) return;
+    const generation = sessionGeneration;
+    state.photoDeleteBusy = true;
+    elements.deleteConfirmYes.disabled = true;
+    elements.deleteConfirmNo.disabled = true;
+    cancelCameraRollLoad();
+    let deleted = false;
+    try {
+      const result = await api(`/photos/${target.id}`, { method: "DELETE", body: { revision: target.revision } });
+      if (generation !== sessionGeneration) return;
+      state.deletedPhotoIds.add(target.id);
+      state.photoDeletionUpdates.set(result.entryId, result);
+      removePhotoFromCameraRoll(target.id);
+      removeDeletedPhotos(state.viewerPhotos);
+      state.viewerIndex = Math.min(state.viewerIndex, state.viewerPhotos.length - 1);
+      applyPhotoDeletionToEntry(state.activeEntry);
+      applyPhotoDeletionToEntry(state.entryMap.get(result.entryId));
+      if (state.activeEntry?.id === result.entryId && elements.entryDialog.open) renderEntryDetail(state.activeEntry);
+      deleted = true;
+    } catch (error) {
+      if (generation === sessionGeneration) showToast(error.message);
+    } finally {
+      if (generation === sessionGeneration) {
+        state.photoDeleteBusy = false;
+        elements.deleteConfirmYes.disabled = false;
+        elements.deleteConfirmNo.disabled = false;
+      }
+    }
+    if (generation !== sessionGeneration) return;
+    await closeDeleteConfirmation();
+    if (generation !== sessionGeneration) return;
+    if (!deleted) return;
+    if (state.viewerPhotos.length) photoViewer.render();
+    else await closePhotoViewerDialog();
+    showToast("写真を削除しました。");
+    try { await loadPhotoMeta(); } catch { showToast("写真は削除済みですが、件数を取得できませんでした。アルバムを開き直してください。"); }
   }
 
   function closeCameraRollDialog(afterClose = null) {
@@ -3276,6 +3411,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   async function confirmEntryDeletion() {
     const mode = state.deleteMode;
+    if (mode === "photo") return confirmPhotoDeletion();
     if (!await closeDeleteConfirmation()) return;
     if (mode === "draft") await deleteActiveDraft();
     else if (mode === "permanent") await permanentlyDeleteActiveEntry();
@@ -3956,6 +4092,13 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.draftCount = 0;
     state.activeEntry = null;
     state.deleteMode = null;
+    state.photoDeleteTarget = null;
+    state.photoDeleteBusy = false;
+    state.deletedPhotoIds.clear();
+    state.photoDeletionUpdates.clear();
+    elements.photoDelete.disabled = false;
+    elements.deleteConfirmYes.disabled = false;
+    elements.deleteConfirmNo.disabled = false;
     clearEditorPhotos();
     state.photoOffset = 0;
     state.photos = [];
