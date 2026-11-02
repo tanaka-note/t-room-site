@@ -508,8 +508,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.cameraRollMore.addEventListener("click", () => loadPhotos(false));
     elements.cameraRollGrid.addEventListener("click", handleCameraRollClick);
     elements.photoMonthFilter.addEventListener("change", () => {
+      const previousMonth = state.photoMonth;
       state.photoMonth = elements.photoMonthFilter.value;
       if (!state.photoMonth) state.photoOrder = "newest";
+      else if (!previousMonth) state.photoOrder = "oldest";
       updatePhotoSortButton();
       loadPhotos(true);
     });
