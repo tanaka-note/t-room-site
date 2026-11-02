@@ -38,6 +38,7 @@ DB単位のR2 CASリースを20分保持し、15分Workflow stepより長くす�
 ### 初回切り替え（このPRのmerge・自動Diary公開より前）
 
 1. 別途承認されたインフラ手順で、専用Workerに12 D1と`DIARY_BACKUP`、`D1_EXPORT_ACCOUNT_ID`、専用Secret `D1_EXPORT_API_TOKEN`、Workflow `t-room-d1-backup`を準備する。tokenは対象D1のexportに必要な最小権限だけを持たせ、Git・ログへ保存しない。通常のコード公開tokenや読み取り専用MCPの権限を広げない。
+   - export APIには対象アカウントの **D1 Write** が必要。2026-11-02の本番API照合で、D1 ReadはDB metadata取得に成功してもexportは401/code 10000で拒否されることを確認した。専用tokenにはD1以外のWorker/R2/token管理権限を付けない。GETによる資格情報の確認だけで公開準備完了とせず、代表DBのWorkflow完了・保存物・成功監査まで確認する。exportは読取操作であり、本番データを変更・復元するAPIは実行しない。
 2. `backup-worker`を専用手順で先に公開し、Workflowの実在・active version・binding・Secret名を読み戻す。新しいpublic route、workers.dev、写真R2本体へのbindingは追加しない。日記の既存バックアップR2とD1だけを追加する。
 3. Diaryの`D1_BACKUPS`はこのWorkflowを参照する。Diary Actions公開は専用WorkerのWorkflow/Secret/日記bindingが未準備ならpreflightで停止する。写真のCronとコピー・再検証・追いつき頻度は変更しない。DB migrationは不要。
 4. 初回定期実行後、12 DBそれぞれのWorkflow完了・成功監査・manifest/part読戻し・既存世代維持を確認する。Cronのdispatch成功だけで完了としない。schema/内容hash/整合性は隔離復元で確認し、本番DBを巻き戻さない。日記写真は独立した従来の残件・検証状態を確認する。
