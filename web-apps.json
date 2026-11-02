@@ -487,7 +487,12 @@
         "portfolio-worker/public"
       ],
       "buildFiles": [
-        "security-worker/public/passkey-client.js"
+        "security-worker/public/passkey-client.js",
+        "diary-worker/public/dialog-navigation.js",
+        "payments-worker/public/troom-date-picker.js",
+        "payments-worker/public/troom-date-picker.css",
+        "payments-worker/public/date-wheel.js",
+        "payments-worker/public/date-wheel.css"
       ],
       "buildMode": "content-hash",
       "serviceWorker": null,
@@ -496,7 +501,29 @@
       "twa": null,
       "deployTarget": "t-room-portfolio",
       "deployCwd": "portfolio-worker",
-      "deployCommand": "pnpm run deploy"
+      "deployCommand": "pnpm run deploy",
+      "assetCopies": [
+        {
+          "source": "diary-worker/public/dialog-navigation.js",
+          "copy": "portfolio-worker/public/dialog-navigation.js"
+        },
+        {
+          "source": "payments-worker/public/troom-date-picker.js",
+          "copy": "portfolio-worker/public/troom-date-picker.js"
+        },
+        {
+          "source": "payments-worker/public/troom-date-picker.css",
+          "copy": "portfolio-worker/public/troom-date-picker.css"
+        },
+        {
+          "source": "payments-worker/public/date-wheel.js",
+          "copy": "portfolio-worker/public/date-wheel.js"
+        },
+        {
+          "source": "payments-worker/public/date-wheel.css",
+          "copy": "portfolio-worker/public/date-wheel.css"
+        }
+      ]
     }
   ],
   "excludedHtml": [

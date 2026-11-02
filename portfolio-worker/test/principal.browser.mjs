@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { pickDate } from './date-picker.browser.mjs';
 import { fixture } from './fixture.js';
 
 export async function verifyPrincipalEditor(browser, url, routeApi) {
@@ -12,8 +13,7 @@ export async function verifyPrincipalEditor(browser, url, routeApi) {
       await page.locator('#edit-toggle').click();
       assert.equal(await page.locator('#base-principal').inputValue(), '1000000');
       await page.locator('#base-principal').fill('800,000');
-      await page.locator('#record-date').fill('2026-11-01');
-      await page.locator('#record-date').dispatchEvent('change');
+      await pickDate(page, 'record-date', '2026-11-01');
       await page.waitForFunction(() => document.querySelector('#editor-note').textContent.includes('新しい日付'));
       assert.equal(await page.locator('#base-principal').inputValue(), '800,000');
       let confirmation = '';
@@ -33,7 +33,7 @@ export async function verifyPrincipalEditor(browser, url, routeApi) {
       assert.match(await page.locator('#return-value').textContent(), /46\.00/);
       await page.reload(); await page.locator('#report-app').waitFor({ state: 'visible' });
       assert.match(await page.locator('#principal-value').textContent(), /800,000/);
-      await page.locator('#view-date').selectOption('2026-10-30');
+      await pickDate(page, 'view-date', '2026-10-30');
       await page.waitForFunction(() => document.querySelector('.holdings-panel').hidden);
       assert.match(await page.locator('#profit-value').textContent(), /268,000/);
       await page.locator('#edit-toggle').click();

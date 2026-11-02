@@ -3,13 +3,23 @@ import { ALLOCATION_GROUPS, adjustmentForPeriod } from './portfolio-model.mjs';
 const $ = id => document.getElementById(id);
 let session = null, dataset = null, selected = null, draft = null, dirty = false, busy = false, generation = 0, activity = Date.now(), expiryTimer;
 const requests = new Set(), channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('portfolio') : null;
+const pickerCleanups = [];
+const dialogs = window.TroomDialogNavigation.create({ key: 'portfolio-date-dialogs' });
+const dateNavigation = { ...dialogs, register(id, options) { pickerCleanups.push(options.onClose); dialogs.register(id, options); } };
+window.TRoomDatePicker.setNavigation(dateNavigation);
+window.TRoomDateWheel.initialize(dateNavigation, () => busy || !session);
+const pickerOpen = () => Boolean(document.querySelector('dialog[open]'));
 const clone = value => structuredClone(value);
 const money = value => new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY', maximumFractionDigits: 0 }).format(value);
 function message(value, login = false) { $(login ? 'login-message' : 'app-message').textContent = value; }
 function clearSession(broadcast = false) {
   generation++; session = dataset = selected = draft = null; dirty = busy = false;
   clearTimeout(expiryTimer); for (const controller of requests) controller.abort(); requests.clear();
-  clearReport(); $('editor-form').reset(); $('asset-editors').replaceChildren(); $('view-date').replaceChildren();
+  // Navigation reset closes dialogs; run their registered cleanup to cancel wheel timers too.
+  dialogs.reset(); for (const cleanup of pickerCleanups) cleanup?.();
+  for (const id of ['date-wheel-value', 'date-wheel-year', 'date-wheel-month', 'date-wheel-day', 'troom-calendar-title']) $(id).replaceChildren();
+  document.querySelector('.troom-calendar-grid')?.replaceChildren();
+  clearReport(); $('editor-form').reset(); $('asset-editors').replaceChildren(); $('view-date').value = '';
   for (const id of ['account-label','app-message','editor-note','editor-total']) $(id).textContent = '';
   $('report-app').hidden = true; $('editor-panel').hidden = true; $('login-panel').hidden = false;
   $('login-button').disabled = false; $('login-button').removeAttribute('aria-busy'); $('passkey-login-label').textContent = 'パスキーでログイン';
@@ -57,7 +67,6 @@ function displayRecord(record) {
 }
 async function load(period) {
   const data = await api('/data'); dataset = data;
-  $('view-date').replaceChildren(...[...data.history].reverse().map(entry => { const option = document.createElement('option'); option.value = entry.period; option.textContent = entry.period; return option; }));
   const record = period && period !== data.record.period ? (await api(`/record?period=${encodeURIComponent(period)}`)).record : data.record;
   displayRecord(record);
 }
@@ -130,7 +139,7 @@ $('view-date').onchange = async () => {
   if (busy || !discard()) { $('view-date').value = selected?.period || ''; return; }
   const period = $('view-date').value; setBusy(true);
   try { const result = await api(`/record?period=${encodeURIComponent(period)}`); displayRecord(result.record); $('editor-panel').hidden = true; markDirty(false); }
-  catch (error) { failure(error); } finally { setBusy(false); }
+  catch (error) { failure(error); $('view-date').value = selected?.period || ''; } finally { setBusy(false); }
 };
 $('editor-form').onsubmit = async event => {
   event.preventDefault(); if (busy || !session) return;
@@ -169,7 +178,7 @@ window.addEventListener('beforeinstallprompt', event => { event.preventDefault()
 $('install-app-button').onclick = async () => { if (busy) return; if (installPrompt) { setBusy(true); try { await installPrompt.prompt(); await installPrompt.userChoice; } finally { installPrompt = null; setBusy(false); } } else message('ブラウザのメニューから「ホーム画面に追加」または「アプリをインストール」を選択してください。iPhoneではSafariの共有メニューから追加できます。'); };
 for (const name of ['pointerdown','keydown','touchstart','wheel']) window.addEventListener(name, event => { if (event.isTrusted) activity = Date.now(); }, { passive: true });
 window.addEventListener('beforeunload', event => { if (dirty || busy) { event.preventDefault(); event.returnValue = ''; } });
-document.addEventListener('troom:before-auto-update', event => { if (dirty || busy) event.preventDefault(); });
+document.addEventListener('troom:before-auto-update', event => { if (dirty || busy || pickerOpen()) event.preventDefault(); });
 window.addEventListener('pageshow', async event => { if (event.persisted && session) try { await api('/session'); } catch (error) { failure(error); } });
 document.addEventListener('visibilitychange', async () => { if (!document.hidden && session) try { await api('/session'); } catch (error) { failure(error); } });
 if (channel) channel.onmessage = event => { if (event.data === 'session-changed') clearSession(); else if (session) message('別の画面で更新されました。未保存の入力を確認し、再読み込みしてください。'); };

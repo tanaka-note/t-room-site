@@ -3,7 +3,7 @@
 button,input,select{font:inherit;color:inherit;border:1px solid #364256;border-radius:9px;background:#151c28;padding:10px 14px}
 button{cursor:pointer}button:hover{border-color:#52e6aa}button:disabled{opacity:.55;cursor:wait}a{color:#52e6aa}
 .account-toolbar,.editor-actions,.date-fields{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.account-toolbar{margin:0 0 20px}.account-toolbar span{margin-right:auto;color:#a8b2c4}
-.view-date{display:flex;align-items:center;gap:12px;margin-bottom:20px}.view-date select{max-width:100%}
+.view-date{display:flex;align-items:center;gap:12px;margin-bottom:20px}.view-date .date-input-shell{width:220px;max-width:100%}
 #app-message:not(:empty){padding:12px;border-left:3px solid #52e6aa;white-space:pre-line}
 #editor-panel{margin-bottom:24px}#editor-panel h2{margin-top:0}.date-fields label{display:grid;gap:6px;flex:1;min-width:190px}
 #editor-form p{color:#a8b2c4;line-height:1.7}.asset-editor{display:grid;grid-template-columns:minmax(120px,2fr) minmax(100px,1fr) minmax(110px,1fr) auto;gap:10px;padding:14px 0;border-bottom:1px solid #253044}.asset-editor label{display:grid;gap:5px;color:#a8b2c4;font-size:.85rem}.asset-editor input,.asset-editor select{width:100%;min-width:0;color:#f3f6fb}.asset-editor button{align-self:end}.editor-actions{margin-top:20px}#save-button{background:#144633;border-color:#52e6aa}
@@ -17,3 +17,6 @@ button.passkey-login-button:hover { background: #3d584a; }
 button.passkey-login-button:focus-visible { outline: 3px solid #8ca895; outline-offset: 3px; }
 button.passkey-login-button:disabled { opacity: .6; cursor: wait; }
 button.passkey-login-button .passkey-icon { width: 24px; height: 24px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Keep shared date dialogs in the same light palette as the other services. */
+.troom-calendar-dialog,.date-wheel-dialog{color-scheme:light;--ink:#1f2933;--muted:#667085;--line:#d8dee6;--accent:#577263;--accent-dark:#3d584a;--green:#577263}

@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { verifyPasskeyLogin } from './passkey-login.browser.mjs';
+import { pickDate, verifyDatePickers } from './date-picker.browser.mjs';
 import { verifyPrincipalEditor } from './principal.browser.mjs';
 import { fixture } from './fixture.js';
 const require=createRequire(import.meta.url),{chromium}=require('../../diary-worker/node_modules/playwright');
@@ -27,6 +28,7 @@ async function routeApi(page,f){await page.route('**/asset-report/api/**',async 
 });}
 try{
  await verifyPasskeyLogin(browser, url, await owner.state());
+ await verifyDatePickers(browser, url, routeApi);
  await verifyPrincipalEditor(browser, url, routeApi);
  for(const width of [1440,390,320]){
   const context=await browser.newContext({viewport:{width,height:1000}}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',dialog=>dialog.accept());await routeApi(page,owner);await page.goto(url);await page.locator('#report-app').waitFor({state:'visible'});
@@ -37,14 +39,14 @@ try{
   await page.locator('#edit-toggle').click();await page.locator('#asset-editors [data-field=amount]').first().fill('500000');assert.match(await page.locator('#editor-total').textContent(),/1,400,000/);
   if(width===1440){
    const before=await page.locator('#history-chart').evaluate(canvas=>canvas.toDataURL());
-   await page.locator('#record-date').fill('2026-10-29');await page.locator('#record-date').dispatchEvent('change');await page.waitForFunction(()=>document.querySelector('#editor-note').textContent.includes('新しい日付'));
+   await pickDate(page, 'record-date', '2026-10-29');await page.waitForFunction(()=>document.querySelector('#editor-note').textContent.includes('新しい日付'));
    await page.locator('#record-time').fill('14:35');await page.locator('#save-button').click();await page.waitForFunction(()=>document.querySelector('#app-message').textContent.includes('チャートを更新'));
    assert.equal((await owner.state()).history.length,3);assert.notEqual(await page.locator('#history-chart').evaluate(canvas=>canvas.toDataURL()),before);
    assert.equal(await page.locator('#view-date').inputValue(),'2026-10-29');assert.match(await page.locator('#report-updated').textContent(),/14:35/);
-   await page.locator('#view-date').selectOption('2026-10-30');await page.waitForFunction(()=>document.querySelector('.holdings-panel').hidden);await page.locator('#edit-toggle').click();assert.equal(await page.locator('#legacy-total-label').isVisible(),true);
+   await pickDate(page, 'view-date', '2026-10-30');await page.waitForFunction(()=>document.querySelector('.holdings-panel').hidden);await page.locator('#edit-toggle').click();assert.equal(await page.locator('#legacy-total-label').isVisible(),true);
    await page.locator('#legacy-total').fill('1234567');await page.locator('#save-button').click();await page.waitForFunction(()=>document.querySelector('#app-message').textContent.includes('保存しました'));
    assert.equal((await owner.state()).history.find(r=>r.period==='2026-10-30').rawMarketValue,1234567);
-   await page.locator('#view-date').selectOption('2026-10-31');await page.locator('.holdings-panel').waitFor({state:'visible'});
+   await pickDate(page, 'view-date', '2026-10-31');await page.locator('.holdings-panel').waitFor({state:'visible'});
   }
   if(await page.locator('#cancel-edit').isVisible())await page.locator('#cancel-edit').click();await page.screenshot({path:new URL(`../../tmp/portfolio-screens/${width}.png`,import.meta.url).pathname,fullPage:true});
   assert.deepEqual(errors,[]);await context.close();
