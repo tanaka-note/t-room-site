@@ -7,6 +7,11 @@
   "preview_urls": false,
   "d1_databases": [
     {
+      "binding": "PORTFOLIO_DB",
+      "database_name": "portfolio-db",
+      "database_id": "8fd0d41b-8ce2-42b8-a2e8-8c4461d08b32"
+    },
+    {
       "binding": "CLOUD_DB",
       "database_name": "cloud-db",
       "database_id": "d536bdb7-c3b4-46df-bdc5-f9ea4f00c4cd"

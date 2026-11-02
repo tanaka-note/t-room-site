@@ -40,7 +40,7 @@ export async function restoreIsolated(bucket, key, service) {
     const canonical=rows=>rows.map(r=>JSON.stringify(Object.fromEntries(Object.entries(r).sort(([a],[b])=>a.localeCompare(b))))).sort();
     for(const t of tables) assert.deepEqual(canonical(db.prepare(`SELECT ${t.columns.join(',')} FROM ${t.name}`).all()),canonical(verified.payload.tables[t.name].rows),t.name);
     if(service==='security') db.exec("UPDATE security_identities SET status='disabled',is_security_admin=0; UPDATE security_credentials SET status='revoked'; UPDATE security_service_links SET status='disabled'; UPDATE security_invitations SET status='expired'");
-    if(['billing','payments','inventory','calendar','household'].includes(service)) db.exec(`UPDATE ${service}_accounts SET is_active=0,session_version=session_version+1`);
+    if(['billing','payments','inventory','calendar','household','portfolio'].includes(service)) db.exec(`UPDATE ${service}_accounts SET is_active=0,session_version=session_version+1`);
     if(service==='diary') db.exec('UPDATE diary_accounts SET active=0,session_version=session_version+1,must_change_password=1');
     if(service==='ai') db.exec("UPDATE ai_accounts SET status='disabled'; UPDATE ai_request_claims SET status='failed',error_code='isolated_restore' WHERE status='processing'");
     for(const t of triggers) db.exec(t.sql);
