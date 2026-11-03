@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { chromium } from 'playwright';
 
 // Entirely synthetic fixture: no production cookies, files, uploads, or tracing.
@@ -47,6 +49,7 @@ const server = createServer(async (req, res) => {
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const browser = await chromium.launch({ headless: true });
+const temporary = await mkdtemp(join(tmpdir(), 'diary-migration-folder-'));
 try {
   const page = await browser.newPage();
   const errors = []; page.on('pageerror', error => errors.push(error.message));
@@ -86,6 +89,45 @@ try {
   assert.equal(requests, 5, 'verification never modifies saved diaries');
   assert.deepEqual(errors, []);
   console.log('photo migration browser fixture passed (folder, durable journal, API upload, publication, verification)');
+  await page.close();
+
+  const folder = join(temporary, 'package');
+  await mkdir(join(folder, 'photos', id), { recursive: true });
+  await writeFile(join(folder, 'manifest.json'), JSON.stringify(manifest));
+  for (const key of ['original', 'display', 'thumbnail']) await writeFile(join(folder, manifest.days[0].photos[0][key].path), original);
+  entry = undefined; requests = 0; staged.clear();
+  const standardPage = await browser.newPage();
+  standardPage.on('pageerror', error => errors.push(error.message));
+  await standardPage.goto(`http://127.0.0.1:${server.address().port}/?takeout-migration=2025`);
+  async function chooseFolder() {
+    const chooserPromise = standardPage.waitForEvent('filechooser');
+    await standardPage.getByLabel('標準のフォルダー選択', { exact: true }).click();
+    await (await chooserPromise).setFiles(folder);
+    await standardPage.getByText('準備完了', { exact: true }).waitFor();
+  }
+  await chooseFolder();
+  assert.equal(requests, 0, 'standard folder selection never uploads files or mutates diaries');
+  await standardPage.getByRole('button', { name: '未処理の1日分を取り込む', exact: true }).click();
+  await standardPage.getByText('処理完了：1/1日を保存済み', { exact: true }).first().waitFor();
+  assert.equal(requests, 5);
+  assert.equal(entry.status, 'published');
+  const downloadPromise = standardPage.waitForEvent('download');
+  await standardPage.getByRole('link', { name: '再開用の進捗ファイルを保存', exact: true }).click();
+  const downloadPath = await (await downloadPromise).path();
+  const exported = JSON.parse(await readFile(downloadPath, 'utf8'));
+  assert.equal(exported.manifestId, manifest.id);
+  assert.equal(exported.days['2025-01-01'].status, 'complete');
+  assert.ok(exported.checkpoint > 0);
+  assert.ok(!('photos' in exported) && !('cookie' in exported) && !('token' in exported));
+  await standardPage.reload();
+  await chooseFolder();
+  assert.match(await standardPage.locator('#migration-summary').innerText(), /完了済み 1日/);
+  await standardPage.getByRole('button', { name: '未処理の1日分を取り込む', exact: true }).click();
+  await standardPage.getByText('処理完了：1/1日を保存済み', { exact: true }).first().waitFor();
+  assert.equal(requests, 5, 'reload resumes IndexedDB journal without duplicate mutation');
+  assert.deepEqual(errors, []);
+  console.log('standard directory chooser, IndexedDB checkpoint, progress export, and reload resume passed');
 } finally {
   await browser.close(); await new Promise(resolve => server.close(resolve));
+  await rm(temporary, { recursive: true, force: true });
 }
