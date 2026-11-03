@@ -27,3 +27,5 @@ process.stdout.write("Diary bounded request-body contract tests passed.\n");
 
 // Migration recovery is part of diary write safety.
 await import("./photo-migration.test.mjs");
+// Exercise the same IDs and migration engine against real local Worker APIs.
+await import("./photo-migration-api.e2e.mjs");
