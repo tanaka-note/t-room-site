@@ -33,3 +33,19 @@ Androidのアプリボタンは、既存のHTTPS App Linksに対応する次の�
 `pnpm run browser-policy:test`、`pnpm run browser-policy:test:browser`、`pnpm run web-apps:test`を実行する。ブラウザテストは既存DiaryのPlaywrightを使い、必要なら`PLAYWRIGHT_PACKAGE`で既存インストールを指定できる。Chromium/Firefox/WebKitで通常UA、LINE UA、standalone、キャッシュHTML、CSP、初期化停止、戻る操作、リンク、画面幅を検証する。本人のパスキー操作と実機LINE→Androidアプリ起動は、UA再現テストとは別に扱う。
 
 仕様参照：[LINE外部ブラウザ](https://developers.line.biz/ja/docs/messaging-api/using-line-url-scheme/#opening-url-in-external-browser)、[Android App Links](https://developer.android.com/training/app-links/about)、[Intentとブラウザfallback](https://developer.chrome.com/docs/android/intents)。
+
+## サイト内のホーム追加ボタン
+
+資産報告はログアウトの横、電卓は設定内に「ホームへ追加」を置く。
+正本は `tools/shared/pwa-install.js`。`web-apps.json` の `assetCopies` で各アプリへ配信し、
+headで読み込んで `beforeinstallprompt` を早期に保持する。タップ時にブラウザの
+`prompt()` を直接呼び、確認中の連打とWeb自動更新を防ぐ。
+
+通知が届いていないときにインストール済みとは断定せず、状態を案内する。
+Androidを同じブラウザメニューへ誘導し直す処理や、削除・データ消去の案内はしない。
+iOSはSafariの共有からの追加を案内する。受け付けと完了を区別し、`appinstalled` で
+完了表示にする。standalone・fullscreen・minimal-ui起動では追加ボタンを隠す。
+アプリ識別子・起動URL・scopeはこのボタン対応では変更しない。
+
+単体試験とブラウザfixtureは通知の未到着、受け付け、キャンセル、失敗、再通知、
+表示位置、更新保護を検証する。Android実機のインストール結果は別に確認する。

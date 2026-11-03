@@ -52,6 +52,7 @@ function markDirty(value = true) { dirty = value; document.dispatchEvent(new Eve
 function setBusy(value) {
   busy = value;
   for (const button of document.querySelectorAll('button')) button.disabled = value;
+  window.TRoomPwaInstall?.setBlocked(value);
   $('view-date').disabled = value;
   for (const input of $('editor-form').querySelectorAll('input,select')) input.disabled = value;
 }
@@ -173,9 +174,6 @@ $('backup-button').onclick = async () => {
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = `asset-report-${selected.period}.json`; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (error) { failure(error); } finally { setBusy(false); }
 };
-let installPrompt;
-window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); installPrompt = event; });
-$('install-app-button').onclick = async () => { if (busy) return; if (installPrompt) { setBusy(true); try { await installPrompt.prompt(); await installPrompt.userChoice; } finally { installPrompt = null; setBusy(false); } } else message('ブラウザのメニューから「ホーム画面に追加」または「アプリをインストール」を選択してください。iPhoneではSafariの共有メニューから追加できます。'); };
 for (const name of ['pointerdown','keydown','touchstart','wheel']) window.addEventListener(name, event => { if (event.isTrusted) activity = Date.now(); }, { passive: true });
 window.addEventListener('beforeunload', event => { if (dirty || busy) { event.preventDefault(); event.returnValue = ''; } });
 document.addEventListener('troom:before-auto-update', event => { if (dirty || busy || pickerOpen()) event.preventDefault(); });

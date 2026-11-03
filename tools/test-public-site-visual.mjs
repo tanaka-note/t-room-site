@@ -15,3 +15,4 @@ if (result.status !== 0) process.exit(result.status ?? 1);
 
 // Login presentation is a cross-service visual contract, including future entries.
 await import("./test-login-layout.browser.mjs");
+await import("./test-calculator-install.browser.mjs");
