@@ -40,15 +40,23 @@ export function entryMatches(entry, day) {
 }
 
 export class PhotoMigration {
-  constructor({ manifest, journal, api, readFile, saveJournal, destination, onProgress = () => {}, shouldStop = () => false }) {
+  constructor({ manifest, journal, api, readFile, saveJournal, destination, onProgress = () => {}, shouldStop = () => false,
+    concurrency = 3, parallelBytes = 16 * 1024 ** 2, canParallel = () => true }) {
     this.manifest = validateManifest(manifest);
     this.journal = journal || { version: 1, manifestId: manifest.id, destination, days: {} };
     if (this.journal.version !== 1 || this.journal.manifestId !== manifest.id
       || JSON.stringify(this.journal.destination) !== JSON.stringify(destination)) throw new Error('進捗のデータまたは保存先が一致しません。');
-    Object.assign(this, { api, readFile, saveJournal, destination, onProgress, shouldStop });
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 3
+      || !Number.isSafeInteger(parallelBytes) || parallelBytes < 1 || parallelBytes > 16 * 1024 ** 2) throw new Error('並列送信の指定が不正です。');
+    Object.assign(this, { api, readFile, saveJournal, destination, onProgress, shouldStop, concurrency, parallelBytes, canParallel });
+    this.checkpointTail = Promise.resolve();
   }
 
-  async checkpoint() { await this.saveJournal(structuredClone(this.journal)); }
+  async checkpoint() {
+    const snapshot = structuredClone(this.journal);
+    this.checkpointTail = this.checkpointTail.then(() => this.saveJournal(snapshot));
+    await this.checkpointTail;
+  }
 
   async verifySession() {
     const session = await this.api('/session');
@@ -133,8 +141,7 @@ export class PhotoMigration {
         await this.checkpoint();
       }
       const saved = new Set(existing);
-      for (const photo of day.photos) {
-        if (this.shouldStop()) { await this.checkpoint(); return; }
+      const transferPhoto = async photo => {
         if (!existing.has(photo.id) && resumingSession) {
           try {
             const result = await this.api(`/photo-upload-sessions/${record.uploadSessionId}/photos/${photo.id}`);
@@ -159,10 +166,33 @@ export class PhotoMigration {
           if (result.photo?.id !== photo.id) throw new Error('画像保存の応答が一致しません。');
           saved.add(photo.id);
         }
-        record.uploaded = [...saved];
+        record.uploaded = day.photos.filter(photo => saved.has(photo.id)).map(photo => photo.id);
         await this.checkpoint();
         this.onProgress({ date: day.date, stage: 'uploading', uploaded: saved.size, photos: day.photos.length });
+      };
+      const active = new Set();
+      let index = 0, activeBytes = 0, failure;
+      while (index < day.photos.length || active.size) {
+        while (!failure && !this.shouldStop() && index < day.photos.length
+          && active.size < (this.canParallel() ? this.concurrency : 1)) {
+          const photo = day.photos[index];
+          const size = ['original', 'display', 'thumbnail'].reduce((sum, key) => sum + photo[key].bytes, 0);
+          // A photo larger than the shared byte budget is allowed only on its own.
+          if (active.size && activeBytes + size > this.parallelBytes) break;
+          index++;
+          activeBytes += size;
+          const task = transferPhoto(photo).catch(error => { failure ||= error; }).finally(() => {
+            activeBytes -= size;
+            active.delete(task);
+          });
+          active.add(task);
+        }
+        if (active.size) await Promise.race(active);
+        else break;
       }
+      // In-flight uploads and their checkpoints must settle before stop, failure or commit.
+      if (failure) throw failure;
+      if (this.shouldStop()) { await this.checkpoint(); return; }
       if (record.uploadSessionId) {
         entry = (await this.api(`/entries/${entry.id}`)).entry;
         if (entry.status !== 'draft' || entry.deletedAt || entry.revision !== record.draftRevision
