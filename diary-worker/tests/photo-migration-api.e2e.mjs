@@ -25,7 +25,11 @@ const server = spawn(process.execPath, [wrangler, 'dev', ...passkeyFixtureArgs, 
   '--var', 'DIARY_MAIN_ADMIN_LOGIN_ID:main@example.test', '--var', `SESSION_SECRET:${randomBytes(32).toString('hex')}`], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
 server.stdout.resume(); server.stderr.resume();
 let cookie;
+let activePhotoRequests = 0, peakPhotoRequests = 0;
 async function api(path, { method = 'GET', body } = {}) {
+  const uploading = body instanceof FormData;
+  if (uploading) { activePhotoRequests++; peakPhotoRequests = Math.max(peakPhotoRequests, activePhotoRequests); }
+  try {
   const response = await fetch(`${origin}/diary/api${path}`, {
     method, headers: { ...(cookie ? { Cookie: cookie } : {}), 'X-Diary-Request': '1',
       ...(body instanceof FormData || body === undefined ? {} : { 'Content-Type': 'application/json' }) },
@@ -35,6 +39,7 @@ async function api(path, { method = 'GET', body } = {}) {
   assert.equal(response.status, 200, `${method} ${path}: ${JSON.stringify(result)}`);
   if (response.headers.has('set-cookie')) cookie = response.headers.get('set-cookie').split(';', 1)[0];
   return result;
+  } finally { if (uploading) activePhotoRequests--; }
 }
 try {
   for (let attempt = 0; ; attempt++) {
@@ -47,7 +52,7 @@ try {
   await api('/passkey/handoff', { method: 'POST', body: { handoffToken: 'fixture-main-admin' } });
   const session = await api('/session');
   const bytes = new Uint8Array([1, 2, 3, 4]);
-  const photos = ['20000000-0000-4000-8000-000000000001', '20000000-0000-5000-8000-000000000002'].map((id, index) => ({
+  const photos = ['20000000-0000-4000-8000-000000000001', '20000000-0000-5000-8000-000000000002', '20000000-0000-5000-8000-000000000003'].map((id, index) => ({
     id, date: '2025-01-01', timestamp: 1735700400 + index, fileName: `migration-${index}.png`, mimeType: 'image/png', width: 2, height: 2,
     ...Object.fromEntries(['original', 'display', 'thumbnail'].map(key => [key, {
       path: `photos/${id}/${key}.${key === 'original' ? 'png' : 'webp'}`,
@@ -61,6 +66,7 @@ try {
   const options = { manifest, destination: { origin, householdId: session.activeHouseholdId, loginId: session.loginId, role: session.role },
     api, readFile: async () => bytes, saveJournal: async value => { journal = structuredClone(value); } };
   await new PhotoMigration(options).run();
+  assert.equal(peakPhotoRequests, 3); assert.equal(activePhotoRequests, 0);
   assert.equal(journal.days['2025-01-01'].status, 'complete');
   const entryId = journal.days['2025-01-01'].entryId;
   await new PhotoMigration({ ...options, journal }).run();
@@ -77,7 +83,7 @@ try {
   }
   const entries = (await api('/entries?dateFrom=2025-01-01&dateTo=2025-01-01')).entries;
   assert.deepEqual(entries.map(entry => entry.id), [entryId]);
-  console.log('PhotoMigration real Worker: v4/v5 IDs, create, staging, commit, publication, resume, order and original bytes passed.');
+  console.log('PhotoMigration real Worker: three parallel uploads, v4/v5 IDs, commit, publication, resume, order and original bytes passed.');
 } finally {
   if (server.exitCode === null) {
     server.kill();

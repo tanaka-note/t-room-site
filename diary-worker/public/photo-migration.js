@@ -25,6 +25,7 @@ export async function mountMigration(initialSession) {
   element('account').textContent = `保存先：${initialSession.accountDisplayName || initialSession.accountName} / ${initialSession.activeHouseholdId}`;
   let directory, selectedFiles, manifest, journal, running = false, stop = false;
   let databasePromise, exportUrl;
+  let degraded = false;
   let wakeLock;
   let checkpointQueue = Promise.resolve();
   const destination = { origin: location.origin, householdId: initialSession.activeHouseholdId,
@@ -122,11 +123,13 @@ export async function mountMigration(initialSession) {
       try {
         response = await fetch(`/diary/api${path}`, { ...request, signal: AbortSignal.timeout(body instanceof FormData ? 900000 : 60000) });
       } catch (error) {
+        degraded = true;
         if (attempt + 1 === attempts) throw new Error('通信が中断しました。保存結果を照合してから再開できます。');
         await new Promise(resolve => setTimeout(resolve, [1000, 3000, 7000][attempt]));
         continue;
       }
       if ((response.status === 408 || response.status === 429 || response.status >= 500) && attempt + 1 < attempts) {
+        degraded = true;
         const retryAfter = response.headers.get('Retry-After');
         const requestedWait = /^\d+$/.test(retryAfter || '') ? Number(retryAfter) * 1000 : Math.max(0, Date.parse(retryAfter) - Date.now()) || 0;
         if (requestedWait > 30000) throw new Error('サーバーが待機を求めています。時間を置いて再開してください。');
@@ -188,6 +191,7 @@ export async function mountMigration(initialSession) {
   });
   async function run(options) {
     stop = false;
+    degraded = false;
     setRunning(true);
     element('state').textContent = options.verifyOnly ? '照合中' : '取り込み中';
     try {
@@ -198,6 +202,7 @@ export async function mountMigration(initialSession) {
         checkpointQueue = Promise.resolve();
         try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
         const engine = new PhotoMigration({ manifest, journal, destination, api, readFile, saveJournal,
+          canParallel: () => !degraded && !navigator.connection?.saveData && !/(^|-)2g$/.test(navigator.connection?.effectiveType || ''),
           shouldStop: () => stop, onProgress: progress => {
             element('state').textContent = `${progress.date} ${progress.stage === 'uploading' ? `${progress.uploaded}/${progress.photos}枚` : progress.stage === 'verified' ? '照合済み' : '保存完了'} / 全体 ${refreshProgress()}/${manifest.days.length}日`;
             if (progress.stage !== 'uploading' || progress.uploaded % 10 === 0) log(element('state').textContent);
@@ -212,5 +217,5 @@ export async function mountMigration(initialSession) {
   element('test').addEventListener('click', () => void run({ maxDays: 1 }));
   element('start').addEventListener('click', () => void run({}));
   element('verify').addEventListener('click', () => void run({ verifyOnly: true }));
-  element('stop').addEventListener('click', () => { stop = true; element('state').textContent = '現在の画像の保存後に中断します。'; });
+  element('stop').addEventListener('click', () => { stop = true; element('state').textContent = '送信中の画像を保存してから中断します。'; });
 }

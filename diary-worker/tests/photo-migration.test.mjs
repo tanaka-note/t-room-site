@@ -11,8 +11,14 @@ const day = { date: '2025-01-01', title: '2025-01-01', requestId: '10000000-0000
   photos: [photo('20000000-0000-5000-8000-000000000001'), photo('20000000-0000-5000-8000-000000000002')] };
 const manifest = { version: 1, id: 'a'.repeat(64), year: 2025, timezone: 'Asia/Tokyo', days: [day] };
 const destination = { origin: 'https://diary.example', householdId: 'test-household', loginId: 'test@example.test', role: 'user' };
+const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+function parallelManifest(count = 3) {
+  const value = structuredClone(manifest);
+  value.days[0].photos = Array.from({ length: count }, (_, index) => photo(`20000000-0000-5000-8000-${String(index + 1).padStart(12, '0')}`));
+  return value;
+}
 
-function fixture() {
+function fixture(selectedManifest = manifest) {
   let journal;
   let entry;
   let failAfter;
@@ -58,7 +64,7 @@ function fixture() {
       return { photo: { id } };
     }
     if (options.method === 'PUT') {
-      assert.equal(entry.photos.length, day.photos.length, 'must not publish a partial day');
+      assert.equal(entry.photos.length, selectedManifest.days[0].photos.length, 'must not publish a partial day');
       assert.equal(options.body.revision, entry.revision);
       Object.assign(entry, options.body, { revision: entry.revision + 1 });
       if (failAfter === 'publish') { failAfter = null; throw new Error('lost publish response'); }
@@ -66,10 +72,11 @@ function fixture() {
     return { entry: structuredClone(entry) };
   }
   return {
+    api,
     get journal() { return journal; }, get entry() { return entry; }, get creates() { return creates; }, get uploads() { return uploads; },
     set failure(value) { failAfter = value; }, set unrelated(value) { unrelated = value; }, set session(value) { session = value; },
     resume() { stop = false; },
-    engine(overrides = {}) { return new PhotoMigration({ manifest, journal: structuredClone(journal), destination, api,
+    engine(overrides = {}) { return new PhotoMigration({ manifest: selectedManifest, journal: structuredClone(journal), destination, api, concurrency: 1,
       readFile: async () => bytes, saveJournal: async value => { journal = structuredClone(value); }, shouldStop: () => stop, ...overrides }); }
   };
 }
@@ -81,6 +88,82 @@ test('resume after lost create response does not create a second diary', async (
   await f.engine().run();
   assert.equal(f.creates, 1); assert.equal(f.uploads, 2); assert.equal(f.entry.content, photoContent(day));
   assert.equal(f.journal.days[day.date].status, 'complete');
+});
+
+test('three uploads can complete out of order while published content and durable IDs retain capture order', async () => {
+  const value = parallelManifest(); const f = fixture(value);
+  let active = 0, peak = 0; const completed = [];
+  const api = async (path, options = {}) => {
+    if (!path.endsWith('/photos') || options.method !== 'POST') return f.api(path, options);
+    const id = options.body.get('id');
+    active++; peak = Math.max(peak, active);
+    try {
+      await delay(id === value.days[0].photos[0].id ? 40 : 5);
+      const result = await f.api(path, options); completed.push(id); return result;
+    } finally { active--; }
+  };
+  await f.engine({ concurrency: 3, api }).run();
+  assert.equal(peak, 3); assert.equal(active, 0);
+  assert.notEqual(completed[0], value.days[0].photos[0].id);
+  assert.equal(f.entry.content, photoContent(value.days[0]));
+  assert.deepEqual(f.journal.days[day.date].uploaded, value.days[0].photos.map(photo => photo.id));
+});
+
+for (const [budget, canParallel, expected] of [[18, true, 2], [8, true, 1], [100, false, 1]]) {
+  test(`parallel transfer respects byte budget ${budget} and connection allowance ${canParallel}`, async () => {
+    const f = fixture(parallelManifest()); let active = 0, peak = 0;
+    const api = async (path, options = {}) => {
+      if (!path.endsWith('/photos') || options.method !== 'POST') return f.api(path, options);
+      active++; peak = Math.max(peak, active);
+      try { await delay(10); return await f.api(path, options); } finally { active--; }
+    };
+    await f.engine({ concurrency: 3, parallelBytes: budget, canParallel: () => canParallel, api }).run();
+    assert.equal(peak, expected); assert.equal(active, 0); assert.equal(f.entry.status, 'published');
+  });
+}
+
+test('stop drains every in-flight upload and checkpoint without launching another photo or publishing a partial day', async () => {
+  const value = parallelManifest(4); const f = fixture(value); f.failure = 'stop';
+  const api = async (path, options = {}) => {
+    if (path.endsWith('/photos') && options.method === 'POST') await delay(10);
+    return f.api(path, options);
+  };
+  await f.engine({ concurrency: 3, api }).run();
+  assert.equal(f.uploads, 3); assert.equal(f.journal.days[day.date].uploaded.length, 3);
+  assert.equal(f.entry.status, 'draft');
+  f.resume(); await f.engine({ concurrency: 3 }).run();
+  assert.equal(f.uploads, 4); assert.equal(f.entry.content, photoContent(value.days[0]));
+});
+
+test('parallel response loss drains other uploads before rejecting and reconciles all saved images on resume', async () => {
+  const value = parallelManifest(4); const f = fixture(value); let active = 0, failed = false;
+  const api = async (path, options = {}) => {
+    if (!path.endsWith('/photos') || options.method !== 'POST') return f.api(path, options);
+    active++;
+    try {
+      const first = options.body.get('id') === value.days[0].photos[0].id;
+      await delay(first ? 5 : 25);
+      const result = await f.api(path, options);
+      if (first && !failed) { failed = true; throw new Error('lost parallel response'); }
+      return result;
+    } finally { active--; }
+  };
+  await assert.rejects(f.engine({ concurrency: 3, api }).run(), /lost parallel response/);
+  assert.equal(active, 0); assert.equal(f.uploads, 3); assert.equal(f.entry.status, 'draft');
+  await f.engine({ concurrency: 3 }).run();
+  assert.equal(f.uploads, 4); assert.equal(f.entry.content, photoContent(value.days[0]));
+});
+
+test('parallel photo completions serialize durable snapshots so an older checkpoint cannot overwrite a newer one', async () => {
+  const f = fixture(parallelManifest()); let active = 0, peak = 0; const snapshots = [];
+  await f.engine({ concurrency: 3, saveJournal: async value => {
+    active++; peak = Math.max(peak, active);
+    await delay(5); snapshots.push(structuredClone(value)); active--;
+  } }).run();
+  assert.equal(peak, 1); assert.equal(active, 0);
+  const counts = snapshots.map(value => value.days[day.date]?.uploaded?.length || 0);
+  assert.deepEqual(counts, [...counts].sort((a, b) => a - b));
+  assert.equal(snapshots.at(-1).days[day.date].status, 'complete');
 });
 test('resume after lost photo response reconciles saved photos', async () => {
   const f = fixture(); f.failure = 'upload';
