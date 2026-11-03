@@ -147,6 +147,9 @@ try {
   await folder.waitForFunction(() => !document.getElementById("troom-calendar-dialog").open && document.getElementById("photo-save-dialog").open);
   assert.deepEqual(lists[0], { dateFrom: "2026-11-01", dateTo: "2026-11-30" });
   await folder.click('[data-date-picker-target="photo-save-from"]');
+  await folder.click("#troom-calendar-title");
+  await folder.click('[data-calendar-value="2026"]');
+  await folder.click('[data-calendar-value="2026-11"]');
   await folder.click('[data-calendar-value="2026-11-02"]');
   await folder.waitForFunction(() => document.getElementById("photo-save-from").value === "2026-11-02" && !document.getElementById("photo-save-start").disabled);
   assert.equal(lists.at(-1).dateFrom, "2026-11-02", "shared calendar selection refreshes the save range");
