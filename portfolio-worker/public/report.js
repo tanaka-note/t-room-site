@@ -51,17 +51,21 @@ function assetsByMarketValue() {
 
 function renderSummary() {
   const { marketValue: adjustedTotal, profit, returnRate } = reportData.summary;
+  const isLatest = reportData.period === reportData.history.at(-1)?.period;
+  document.querySelector(".summary-grid").classList.toggle("is-historical", !isLatest);
 
   document.querySelector("#principal-value").textContent = formatYen(reportData.basePrincipal);
   document.querySelector("#market-value").textContent = formatYen(adjustedTotal);
 
   const profitElement = document.querySelector("#profit-value");
-  profitElement.textContent = formatYen(profit, true);
-  profitElement.className = valueClass(profit);
+  profitElement.closest(".summary-card").hidden = !isLatest;
+  profitElement.textContent = isLatest ? formatYen(profit, true) : "";
+  profitElement.className = isLatest ? valueClass(profit) : "";
 
   const returnElement = document.querySelector("#return-value");
-  returnElement.textContent = formatPercent(returnRate, true);
-  returnElement.className = valueClass(returnRate);
+  returnElement.closest(".summary-card").hidden = !isLatest;
+  returnElement.textContent = isLatest ? formatPercent(returnRate, true) : "";
+  returnElement.className = isLatest ? valueClass(returnRate) : "";
 
   document.querySelector("#donut-total").textContent = formatYen(adjustedTotal);
   return adjustedTotal;
@@ -338,16 +342,12 @@ function renderHistoryTooltip(entry, x, y) {
   const frame = document.querySelector(".chart-frame-history");
   const canvas = document.querySelector("#history-chart");
   const marketValue = historyMarketValue(entry);
-  const profit = marketValue - entry.basePrincipal;
   const date = document.createElement("time");
   date.dateTime = entry.period;
   date.textContent = formatHistoryDateLong(entry.period);
   const value = document.createElement("strong");
   value.textContent = formatYen(marketValue);
-  const change = document.createElement("span");
-  change.className = valueClass(profit);
-  change.textContent = `損益 ${formatYen(profit, true)}`;
-  tooltip.replaceChildren(date, value, change);
+  tooltip.replaceChildren(date, value);
   const tooltipHalf = 84;
   const relativeX = canvas.offsetLeft + x;
   tooltip.style.left = `${Math.min(frame.clientWidth - tooltipHalf, Math.max(tooltipHalf, relativeX))}px`;
