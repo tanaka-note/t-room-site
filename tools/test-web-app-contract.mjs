@@ -92,6 +92,37 @@ for (const app of registry.apps) {
   if (app.twa) await access(resolve(workspace, app.twa));
 }
 
+// The app-list installer and the calculator page must describe the same app,
+// without letting the legacy installer claim every other PWA on this origin.
+const calculatorApp = registry.apps.find((app) => app.id === "calculator");
+const calculatorUrl = new URL(calculatorApp.publicUrls[0]);
+const calculatorManifestUrl = new URL("manifest.webmanifest", calculatorUrl);
+const legacyCalculatorManifestUrl = new URL("/calculator-install.webmanifest", calculatorUrl);
+const calculatorManifest = JSON.parse(await readFile(resolve(workspace, calculatorApp.manifest), "utf8"));
+const legacyCalculatorManifest = JSON.parse(await readFile(resolve(workspace, "calculator-install.webmanifest"), "utf8"));
+const installedCalculatorId = new URL("/apps/calculator/index.html?v=20260621-remake10", calculatorUrl).href;
+for (const [manifest, manifestUrl] of [
+  [calculatorManifest, calculatorManifestUrl],
+  [legacyCalculatorManifest, legacyCalculatorManifestUrl]
+]) {
+  const startUrl = new URL(manifest.start_url, manifestUrl);
+  const id = new URL(manifest.id || startUrl.href, startUrl);
+  const scope = new URL(manifest.scope, manifestUrl);
+  const covers = (value) => value.origin === scope.origin && value.pathname.startsWith(scope.pathname);
+  assert.equal(startUrl.href, installedCalculatorId, "既存電卓の起動URLを維持してください");
+  assert.equal(id.href, installedCalculatorId, "既存電卓の識別子を維持し、重複インストールを防いでください");
+  assert.equal(scope.href, calculatorUrl.href, `${manifestUrl.pathname}: 電卓の対象範囲を電卓配下に限定してください`);
+  assert(covers(startUrl), `${manifestUrl.pathname}: 起動URLが電卓の対象範囲外です`);
+  for (const app of registry.apps.filter((app) => app.id !== calculatorApp.id)) {
+    for (const publicUrl of app.publicUrls) {
+      assert(!covers(new URL(publicUrl)), `${manifestUrl.pathname}: 電卓が別アプリ ${app.id} のURLを含んでいます`);
+    }
+  }
+}
+const appListHtml = await readFile(resolve(workspace, "apps.html"), "utf8");
+assert.match(appListHtml, /<link\b[^>]*rel="manifest"[^>]*href="\.\/calculator-install\.webmanifest(?:\?[^"']*)?"/,
+  "既存電卓の更新元となるアプリ一覧のmanifest URLを維持してください");
+
 for (const excluded of registry.excludedHtml) {
   assert(excluded.reason, `${excluded.path}: 対象外理由がありません`);
   registeredHtml.add(excluded.path);
