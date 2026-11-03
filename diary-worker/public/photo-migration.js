@@ -13,15 +13,18 @@ export async function mountMigration(initialSession) {
   view.innerHTML = `<main class="migration-panel"><h1>2025年 写真移行</h1>
     <p id="migration-account"></p><p>指定したフォルダの画像を撮影日ごとにまとめ、日付をタイトルにして保存します。元のZIPは変更しません。</p>
     <button id="migration-folder">移行フォルダを選択</button>
+    <label>標準のフォルダー選択 <input id="migration-files" type="file" webkitdirectory multiple></label>
+    <p id="migration-storage">選択方法に応じて、フォルダーまたはこのブラウザーに進捗を保存します。</p>
     <p id="migration-summary" role="status">manifest.json がある package フォルダを選択してください。</p>
     <label>今回の終了日 <input id="migration-through" type="date" value="2025-12-31" min="2025-01-01" max="2025-12-31"></label>
     <button id="migration-test" disabled>未処理の1日分を取り込む</button><button id="migration-start" disabled>終了日まで取り込む</button>
     <button id="migration-verify" disabled>保存結果を照合</button><button id="migration-stop" disabled>中断する</button>
     <progress id="migration-progress" value="0" max="1"></progress><p id="migration-state" role="status">待機中</p>
-    <pre id="migration-log" aria-label="移行ログ"></pre><a href="/diary/">日記へ戻る</a></main>`;
+    <pre id="migration-log" aria-label="移行ログ"></pre><a id="migration-export" download="migration-progress.json" hidden>再開用の進捗ファイルを保存</a><p><a href="/diary/">日記へ戻る</a></p></main>`;
   const element = id => document.getElementById(`migration-${id}`);
   element('account').textContent = `保存先：${initialSession.accountDisplayName || initialSession.accountName} / ${initialSession.activeHouseholdId}`;
-  let directory, manifest, journal, running = false, stop = false;
+  let directory, selectedFiles, manifest, journal, running = false, stop = false;
+  let databasePromise, exportUrl;
   let wakeLock;
   let checkpointQueue = Promise.resolve();
   const destination = { origin: location.origin, householdId: initialSession.activeHouseholdId,
@@ -39,15 +42,65 @@ export async function mountMigration(initialSession) {
     for (const piece of pieces.slice(0, -1)) parent = await parent.getDirectoryHandle(piece);
     return parent.getFileHandle(pieces.at(-1), { create });
   }
-  async function readFile(path) { return (await (await fileHandle(path)).getFile()).arrayBuffer(); }
+  async function readFile(path) {
+    if (selectedFiles) {
+      const file = selectedFiles.get(path);
+      if (!file) throw new DOMException('ファイルが見つかりません。', 'NotFoundError');
+      return file.arrayBuffer();
+    }
+    return (await (await fileHandle(path)).getFile()).arrayBuffer();
+  }
   async function readJson(path) { return JSON.parse(new TextDecoder().decode(await readFile(path))); }
+  function database() {
+    if (!databasePromise) databasePromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open('diary-photo-migration-progress', 1);
+      request.onupgradeneeded = () => request.result.createObjectStore('journals');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error('進捗の保存先を開けません。別の移行タブを閉じてください。'));
+    });
+    return databasePromise;
+  }
+  function journalKey() { return `${manifest.id}:${JSON.stringify(destination)}`; }
+  async function browserJournal(value) {
+    const db = await database();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('journals', value === undefined ? 'readonly' : 'readwrite', { durability: 'strict' });
+      const store = transaction.objectStore('journals');
+      const request = value === undefined ? store.get(journalKey()) : store.put(value, journalKey());
+      transaction.oncomplete = () => resolve(value === undefined ? request.result || null : value);
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error || new Error('進捗を保存できませんでした。'));
+    });
+  }
+  function updateExport() {
+    if (!journal) return;
+    if (exportUrl) URL.revokeObjectURL(exportUrl);
+    exportUrl = URL.createObjectURL(new Blob([JSON.stringify(journal, null, 2)], { type: 'application/json' }));
+    element('export').href = exportUrl;
+    element('export').hidden = false;
+  }
+  async function loadJournal() {
+    let fileJournal;
+    try { fileJournal = await readJson('migration-progress.json'); }
+    catch (error) { if (error.name !== 'NotFoundError') throw error; }
+    const stored = await browserJournal();
+    for (const value of [fileJournal, stored].filter(Boolean)) new PhotoMigration({ manifest, journal: value, destination, api, readFile, saveJournal });
+    journal = !stored || (fileJournal?.checkpoint || 0) > (stored?.checkpoint || 0) ? fileJournal || null : stored;
+    updateExport();
+  }
   async function saveJournal(value) {
     checkpointQueue = checkpointQueue.then(async () => {
-      const handle = await fileHandle('migration-progress.json', true);
-      const stream = await handle.createWritable();
-      try { await stream.write(JSON.stringify(value, null, 2)); await stream.close(); }
-      catch (error) { await stream.abort().catch(() => {}); throw error; }
+      value.checkpoint = Math.max(value.checkpoint || 0, journal?.checkpoint || 0) + 1;
+      if (directory) {
+        const handle = await fileHandle('migration-progress.json', true);
+        const stream = await handle.createWritable();
+        try { await stream.write(JSON.stringify(value, null, 2)); await stream.close(); }
+        catch (error) { await stream.abort().catch(() => {}); throw error; }
+      }
+      await browserJournal(value);
       journal = value;
+      updateExport();
     });
     return checkpointQueue;
   }
@@ -93,7 +146,7 @@ export async function mountMigration(initialSession) {
   function setRunning(value) {
     running = value;
     view.dataset.troomUpdateBlock = value ? 'true' : 'false';
-    for (const name of ['folder', 'test', 'start', 'verify', 'through']) element(name).disabled = value || (!manifest && name !== 'folder');
+    for (const name of ['folder', 'files', 'test', 'start', 'verify', 'through']) element(name).disabled = value || (!manifest && !['folder', 'files'].includes(name));
     element('stop').disabled = !value;
     if (!value) document.dispatchEvent(new Event('troom:auto-update-ready'));
   }
@@ -103,14 +156,34 @@ export async function mountMigration(initialSession) {
     try {
       if (!window.showDirectoryPicker) throw new Error('PC版ChromeまたはEdgeで開いてください。');
       directory = await window.showDirectoryPicker({ mode: 'readwrite', id: 'diary-photo-migration-2025' });
-      manifest = validateManifest(await readJson('manifest.json'));
-      try { journal = await readJson('migration-progress.json'); }
-      catch (error) { if (error.name !== 'NotFoundError') throw error; journal = null; }
-      // No writes until a migration/verification button is explicitly selected.
-      new PhotoMigration({ manifest, journal, destination, api, readFile, saveJournal });
-      element('summary').textContent = `${manifest.days.length}日分 / ${manifest.days.reduce((n, day) => n + day.photos.length, 0)}枚。完了済み ${refreshProgress()}日。`;
-      element('state').textContent = '準備完了';
-      setRunning(false);
+      selectedFiles = null;
+      await prepareSelection();
+    } catch (error) { manifest = null; element('state').textContent = error.message; setRunning(false); }
+  });
+  async function prepareSelection() {
+    manifest = validateManifest(await readJson('manifest.json'));
+    await loadJournal();
+    new PhotoMigration({ manifest, journal, destination, api, readFile, saveJournal });
+    element('storage').textContent = directory ? '進捗をこのフォルダーとブラウザーに保存します。' : '進捗はこのブラウザーに保存します。再開時は同じChromeプロファイルで同じフォルダーを選択してください。写真本体はブラウザーへ永続保存しません。';
+    element('summary').textContent = `${manifest.days.length}日分 / ${manifest.days.reduce((n, day) => n + day.photos.length, 0)}枚。完了済み ${refreshProgress()}日。`;
+    element('state').textContent = '準備完了';
+    setRunning(false);
+  }
+  element('files').addEventListener('change', async event => {
+    try {
+      const files = [...event.target.files];
+      if (!files.length) return;
+      selectedFiles = new Map();
+      const root = files[0].webkitRelativePath.split('/')[0];
+      for (const file of files) {
+        const path = file.webkitRelativePath;
+        if (!path.startsWith(`${root}/`) || path.split('/').some(piece => !piece || piece === '.' || piece === '..')) throw new Error('フォルダーの指定が不正です。');
+        const relative = path.slice(root.length + 1);
+        if (selectedFiles.has(relative)) throw new Error('同じ名前のファイルが重複しています。');
+        selectedFiles.set(relative, file);
+      }
+      directory = null;
+      await prepareSelection();
     } catch (error) { manifest = null; element('state').textContent = error.message; setRunning(false); }
   });
   async function run(options) {
@@ -121,8 +194,7 @@ export async function mountMigration(initialSession) {
       await navigator.locks.request('diary-photo-migration-2025', { ifAvailable: true }, async lock => {
         if (!lock) throw new Error('別のタブで移行中です。');
         // Reload the durable journal after acquiring the lock, including when another tab finished.
-        try { journal = await readJson('migration-progress.json'); }
-        catch (error) { if (error.name !== 'NotFoundError') throw error; journal = null; }
+        await loadJournal();
         checkpointQueue = Promise.resolve();
         try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
         const engine = new PhotoMigration({ manifest, journal, destination, api, readFile, saveJournal,
