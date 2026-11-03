@@ -519,6 +519,7 @@ async function serveAsset(request, env, url, path) {
     ["/tlain-login.css", "/tlain-login.css"],
     ["/tlain-login.js", "/tlain-login.js"],
     ["/billing.js", "/billing.js"],
+    ["/pwa-install.js", "/pwa-install.js"],
     ["/password-login-audit.js", "/password-login-audit.js"],
     ["/troom-date-picker.css", "/troom-date-picker.css"],
     ["/troom-date-picker.js", "/troom-date-picker.js"]

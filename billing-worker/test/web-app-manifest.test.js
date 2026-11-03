@@ -73,18 +73,41 @@ test("billing serves the manifest for plain and versioned URLs without widening 
   assert.equal(calls.length, 3);
 });
 
-test("billing keeps shared automatic updates and provides no custom installation UI or prompt", () => {
+test("billing uses the shared installer while retaining automatic updates and PDF support", async () => {
   assert.match(html, /name="troom-app-build"/);
   assert.match(html, /name="troom-auto-update" content="enabled"/);
   assert.match(html, /src="\/assets\/pwa-auto-update\.js\?v=/);
   assert.doesNotMatch(html, /troom-service-worker/);
+  const app = registry.apps.find((item) => item.id === "billing");
+  assert.ok(app.assetCopies.some(item => item.source === "tools/shared/pwa-install.js" && item.copy === "billing-worker/public/pwa-install.js"));
+  assert.equal(await read("../public/pwa-install.js"), await read("../../tools/shared/pwa-install.js"));
+  const installerTag = html.match(/<script src="\.\/pwa-install\.js\?v=[^"]+"><\/script>/)?.[0];
+  assert.ok(installerTag, "capture installation events synchronously in the head");
+  assert.ok(html.indexOf(installerTag) < html.indexOf("</head>"));
+  assert.match(html, /id="install-app-button"[^>]*data-pwa-install[^>]*>ホームへ追加<\/button>/);
+  assert.match(html, /data-pwa-install-status role="status" aria-live="polite"/);
+  assert.match(html, /id="print-button"[^>]*\bhidden>/);
+  assert.match(script, /el\["print-button"\]\.addEventListener\("click", \(\) => window\.print\(\)\)/);
+  assert.match(styles, /@media print/);
   for (const source of [html, script]) {
     assert.doesNotMatch(source, /beforeinstallprompt|appinstalled|deferredPrompt|installPrompt|\.prompt\s*\(/i);
-    // The shared LINE gate mentions existing home-screen apps; it is not a
-    // Billing install affordance. Keep the prompt/handler checks on all source.
-    const billingUiSource = source === html ? source.replace(/<script data-tlain-browser-guard>[\s\S]*?<\/script>/g, "") : source;
-    assert.doesNotMatch(billingUiSource, /アプリをインストール|ホーム画面に追加|インストール/);
-    assert.doesNotMatch(source, /(?:id|class|data-[\w-]+)=["'][^"']*install/i);
     assert.doesNotMatch(source, /serviceWorker\s*\.\s*register\s*\(/);
+  }
+});
+
+test("billing serves its shared installer through the explicit asset allowlist", async () => {
+  const serveAsset = vm.runInNewContext(`(${worker.match(/async function serveAsset\([^]*?\n\}/)[0]})`, { Request, Response, Headers, URL });
+  const installer = await read("../public/pwa-install.js");
+  const env = { ASSETS: { async fetch(request) {
+    assert.equal(new URL(request.url).pathname, "/pwa-install.js");
+    return new Response(installer, { headers: { "Content-Type": "text/javascript" } });
+  } } };
+  for (const suffix of ["", "?v=billing-test"]) {
+    const url = new URL(`https://tanaka-note.com/billing/pwa-install.js${suffix}`);
+    const response = await serveAsset(new Request(url), env, url, "/pwa-install.js");
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("Content-Type"), "text/javascript");
+    assert.equal(await response.text(), installer);
+    assert.equal(response.headers.get("Set-Cookie"), null);
   }
 });
