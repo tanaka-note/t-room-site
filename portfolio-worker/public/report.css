@@ -158,6 +158,14 @@ table {
   border-left: 1px solid var(--line);
 }
 
+.summary-grid.is-historical {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.summary-card[hidden] {
+  display: none;
+}
+
 .summary-card {
   display: grid;
   align-content: center;
@@ -543,12 +551,6 @@ td {
   font-variant-numeric: tabular-nums;
 }
 
-.chart-tooltip span {
-  font-size: 0.68rem;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-}
-
 @media (max-width: 900px) {
   .summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -595,7 +597,7 @@ td {
     text-align: left;
   }
 
-  .summary-grid {
+  .summary-grid, .summary-grid.is-historical {
     grid-template-columns: 1fr;
   }
 
