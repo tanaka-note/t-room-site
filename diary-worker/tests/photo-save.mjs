@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { readPhotoSaveList } from "../src/photo-save.js";
-import { photoSaveMethod, readSaveRecord, savedFileNames, validSaveDate } from "../public/diary-photo-save.js";
+import { photoSaveMethod, photoSaveFolderName, readSaveRecord, savedFileNames, validSaveDate } from "../public/diary-photo-save.js";
 
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
 const normalizeFilterDate = value => {
@@ -56,6 +56,16 @@ assert.equal(validSaveDate("2028-02-29"), true);
 const now = Date.now();
 const record = { version: 1, from: "2026-01-01", to: "2026-11-30", ids: [id(1), id(2)], done: [id(1)], updatedAt: now };
 assert.deepEqual(readSaveRecord(JSON.stringify(record), now), record);
+assert.equal(photoSaveFolderName("2026-11-03", "2026-11-03"), "写真_2026-11-03");
+assert.equal(photoSaveFolderName(record.from, record.to), "写真_2026-01-01～2026-11-30");
+for (const folderName of [photoSaveFolderName(record.from, record.to), `${photoSaveFolderName(record.from, record.to)} (2)`]) {
+  const dated = { ...record, folderName };
+  assert.deepEqual(readSaveRecord(JSON.stringify(dated), now), dated, "PC folder checkpoints retain their generated directory name");
+}
+for (const folderName of ["../private", "写真_2026-01-01～2026-11-30/child", "写真_2026-01-01～2026-11-30 (1)",
+  "写真_2026-01-01～2026-11-30 (02)", "写真_2026-01-01～2026-11-30 (2)\\child", "写真_2026-02-01～2026-11-30", null]) {
+  assert.equal(readSaveRecord(JSON.stringify({ ...record, folderName }), now), null);
+}
 for (const patch of [{ ids: [id(1), id(1)] }, { done: [id(3)] }, { done: [id(1), id(1)] }, { ids: ["../secret"] }, { updatedAt: now - 8 * 86400000 }, { updatedAt: now + 1 }, { from: "2026-99-99" }]) {
   assert.equal(readSaveRecord(JSON.stringify({ ...record, ...patch }), now), null);
 }

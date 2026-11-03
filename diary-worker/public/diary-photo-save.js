@@ -21,6 +21,16 @@ export function validSaveDate(value) {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
+export function photoSaveFolderName(from, to) {
+  return from === to ? `写真_${from}` : `写真_${from}～${to}`;
+}
+
+function validFolderName(name, from, to) {
+  if (typeof name !== "string" || name.length > 180) return false;
+  const base = photoSaveFolderName(from, to);
+  return name === base || (name.startsWith(base) && /^ \((?:[2-9]|[1-9]\d+)\)$/.test(name.slice(base.length)));
+}
+
 // File names are only held in memory. Persist IDs and acknowledged progress,
 // never image bytes, diary text, credentials, directory handles or permissions.
 export function readSaveRecord(value, now = Date.now()) {
@@ -33,7 +43,9 @@ export function readSaveRecord(value, now = Date.now()) {
       || !Array.isArray(data.done) || new Set(data.done).size !== data.done.length) return null;
     const ids = new Set(data.ids);
     if (data.done.some(id => !ids.has(id))) return null;
-    return { version: 1, from: data.from, to: data.to, ids: data.ids, done: data.done, updatedAt: data.updatedAt };
+    if (data.folderName !== undefined && !validFolderName(data.folderName, data.from, data.to)) return null;
+    return { version: 1, from: data.from, to: data.to, ids: data.ids, done: data.done, updatedAt: data.updatedAt,
+      ...(data.folderName === undefined ? {} : { folderName: data.folderName }) };
   } catch { return null; }
 }
 
@@ -96,7 +108,9 @@ export function createPhotoSaveManager({ api, dialogs, getOwner, getDefaultRange
     const progress = job ? `${finished.size.toLocaleString()} / ${job.ids.length.toLocaleString()}枚・${formatBytes(totalSize)}` :
       photos.length ? `${photos.length.toLocaleString()}枚・${formatBytes(totalSize)}` : "";
     nodes.status.textContent = [progress, message, !storageAvailable ? "この環境では再開記録を保持できません。" : ""].filter(Boolean).join("　");
-    nodes.help.textContent = method === "folder" ? "選んだフォルダへ元画像を1枚ずつ保存します。同名ファイルは上書きしません。"
+    nodes.help.textContent = method === "folder" ? job && !job.folderName
+      ? "前回の保存先フォルダを選んでください。未完了の元画像を保存します。同名ファイルは上書きしません。"
+      : `保存先の親フォルダを選んでください。その中の「${job?.folderName || photoSaveFolderName(nodes.from.value, nodes.to.value)}」へ元画像を保存します。新規保存で同名フォルダがある場合は連番にします。`
       : method === "share" ? "写真を1枚ずつ保存します。端末の保存画面で保存し、保存できたことを確認して次へ進んでください。元ファイルをそのまま残す場合は「ファイルに保存」を選んでください。"
       : "写真を1枚ずつダウンロードします。保存できたことを確認して次へ進んでください。フォルダへまとめて保存する場合はPC版Chrome・Edgeをご利用ください。";
   }
@@ -190,6 +204,30 @@ export function createPhotoSaveManager({ api, dialogs, getOwner, getDefaultRange
       if ((await handle.getFile()).size !== photo.originalSize) throw new Error("保存した画像のサイズが一致しません。未完了分から再開してください。");
     } catch (error) { await writable.abort().catch(() => {}); throw error; }
   }
+  async function targetDirectory(parent, version) {
+    // Old checkpoints wrote directly to the picked directory; keep their layout.
+    if (job && !job.folderName) return { handle: parent };
+    if (job?.folderName) {
+      const handle = await parent.getDirectoryHandle(job.folderName);
+      assertCurrent(version);
+      return { handle, folderName: job.folderName };
+    }
+    const base = photoSaveFolderName(nodes.from.value, nodes.to.value);
+    let folderName = base;
+    for (let n = 2; ; n++) {
+      assertCurrent(version);
+      try { await parent.getDirectoryHandle(folderName); }
+      catch (error) {
+        if (error.name === "NotFoundError") break;
+        if (error.name !== "TypeMismatchError") throw error;
+      }
+      folderName = numberedName(base, n);
+    }
+    assertCurrent(version);
+    const handle = await parent.getDirectoryHandle(folderName, { create: true });
+    assertCurrent(version);
+    return { handle, folderName };
+  }
   async function run(version) {
     try {
       if (method === "folder") {
@@ -254,16 +292,20 @@ export function createPhotoSaveManager({ api, dialogs, getOwner, getDefaultRange
     const version = ++epoch;
     working = true; message = "保存を準備しています…"; render();
     try {
+      let folderName;
       if (method === "folder") {
         // The picker also requires user activation; call it before a fetch/await.
         const picked = window.showDirectoryPicker({ mode: "readwrite", id: "diary-photo-save" });
-        directory = await picked; assertCurrent(version); fallbackAvailable = false;
+        const parent = await picked; assertCurrent(version);
+        const target = await targetDirectory(parent, version); assertCurrent(version);
+        directory = target.handle; folderName = target.folderName; fallbackAvailable = false;
       }
-      if (!job) { job = { version: 1, from: nodes.from.value, to: nodes.to.value, ids: photos.map(photo => photo.id) }; finished = new Set(); persist(); }
+      if (!job) { job = { version: 1, from: nodes.from.value, to: nodes.to.value, ids: photos.map(photo => photo.id),
+        ...(folderName ? { folderName } : {}) }; finished = new Set(); persist(); }
       controller = new AbortController(); phase = "running"; render();
       await run(version);
     } catch (error) {
-      if (current(version)) { working = false; fallbackAvailable = method === "folder" && error.name !== "AbortError"; message = error.name === "AbortError" ? "保存先の選択を閉じました。" : "フォルダに保存できませんでした。再試行するか「1枚ずつダウンロードする」をお試しください。"; render(); }
+      if (current(version)) { working = false; fallbackAvailable = method === "folder" && error.name !== "AbortError"; message = error.name === "AbortError" ? "保存先の選択を閉じました。" : job?.folderName && error.name === "NotFoundError" ? "前回の写真フォルダが見つかりません。前回選んだ親フォルダを指定してください。" : "フォルダに保存できませんでした。再試行するか「1枚ずつダウンロードする」をお試しください。"; render(); }
     }
   }
   function reset() {

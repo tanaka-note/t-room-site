@@ -63,16 +63,42 @@ async function setup(method, profile = "windows") {
   const context = await browser.newContext({ viewport: { width: touch ? 390 : 1280, height: 900 }, isMobile: touch, hasTouch: touch, userAgent: agents[profile], serviceWorkers: "block", acceptDownloads: true });
   contexts.push(context);
   await context.route("**/*", route => route.request().url().startsWith(origin) ? route.continue() : route.abort());
-  await context.addInitScript(({ method }) => {
-    window.__files = { "original.jpg": [88] }; window.__shares = []; window.__shareResult = "ok"; window.__pickerActivated = false; window.__pickerError = null; window.__shareSupported = true;
-    const directory = { async getFileHandle(name, options) {
-      if (!options?.create && !(name in window.__files)) throw new DOMException("missing", "NotFoundError");
-      return { async createWritable() {
-        const chunks = [];
-        return new WritableStream({ write(chunk) { chunks.push(...chunk); }, close() { window.__files[name] = chunks; } });
-      }, async getFile() { return new File([new Uint8Array(window.__files[name])], name); } };
-    } };
-    Object.defineProperty(window, "showDirectoryPicker", { configurable: true, value: method === "folder" ? () => { window.__pickerActivated = navigator.userActivation.isActive; return window.__pickerError ? Promise.reject(new DOMException("picker fixture", window.__pickerError)) : Promise.resolve(directory); } : undefined });
+  await context.addInitScript(({ method, folderApiAvailable }) => {
+    // Synthetic filesystem contents survive reload, just as real disk files do.
+    window.__files = JSON.parse(sessionStorage.getItem("fixture-files") || '{"original.jpg":[88]}');
+    window.__directories = JSON.parse(sessionStorage.getItem("fixture-directories") || '[""]');
+    window.__directoryCalls = []; window.__pickedFolder = ""; window.__directoryError = null; window.__pickerCalls = 0;
+    window.__shares = []; window.__shareResult = "ok"; window.__pickerActivated = false; window.__pickerError = null; window.__shareSupported = true;
+    window.__persistFileSystem = () => {
+      sessionStorage.setItem("fixture-files", JSON.stringify(window.__files));
+      sessionStorage.setItem("fixture-directories", JSON.stringify(window.__directories));
+    };
+    function directoryAt(path) {
+      const child = name => path ? `${path}/${name}` : name;
+      return {
+        async getDirectoryHandle(name, options) {
+          window.__directoryCalls.push({ path, name, create: Boolean(options?.create) });
+          const target = child(name);
+          if (target in window.__files) throw new DOMException("file", "TypeMismatchError");
+          if (!window.__directories.includes(target)) {
+            if (!options?.create) throw new DOMException("missing", "NotFoundError");
+            if (window.__directoryError) throw new DOMException("denied", window.__directoryError);
+            window.__directories.push(target); window.__persistFileSystem();
+          }
+          return directoryAt(target);
+        },
+        async getFileHandle(name, options) {
+          const target = child(name);
+          if (window.__directories.includes(target)) throw new DOMException("directory", "TypeMismatchError");
+          if (!options?.create && !(target in window.__files)) throw new DOMException("missing", "NotFoundError");
+          return { async createWritable() {
+            const chunks = [];
+            return new WritableStream({ write(chunk) { chunks.push(...chunk); }, close() { window.__files[target] = chunks; window.__persistFileSystem(); } });
+          }, async getFile() { return new File([new Uint8Array(window.__files[target])], name); } };
+        }
+      };
+    }
+    Object.defineProperty(window, "showDirectoryPicker", { configurable: true, value: folderApiAvailable ? () => { window.__pickerCalls++; window.__pickerActivated = navigator.userActivation.isActive; return window.__pickerError ? Promise.reject(new DOMException("picker fixture", window.__pickerError)) : Promise.resolve(directoryAt(window.__pickedFolder)); } : undefined });
     Object.defineProperty(navigator, "canShare", { configurable: true, value: method === "share" ? () => window.__shareSupported : undefined });
     Object.defineProperty(navigator, "share", { configurable: true, value: method === "share" ? data => {
       const active = navigator.userActivation.isActive;
@@ -82,7 +108,7 @@ async function setup(method, profile = "windows") {
         if (window.__shareResult === "fail") throw new DOMException("blocked", "NotAllowedError");
       });
     } : undefined });
-  }, { method });
+  }, { method, folderApiAvailable: method === "folder" || touch });
   const page = await context.newPage(); page.on("pageerror", error => errors.push(error.message));
   await page.goto(`${origin}/diary/`);
   await page.waitForSelector("#app-view:not([hidden])");
@@ -97,7 +123,10 @@ async function open(page) {
   await page.click("#photo-save-button");
   await page.waitForFunction(() => document.getElementById("photo-save-dialog").open && !document.getElementById("photo-save-start").disabled);
 }
-const text = async (page, phrase) => page.waitForFunction(phrase => document.getElementById("photo-save-status").textContent.includes(phrase), phrase);
+const text = async (page, phrase) => {
+  try { await page.waitForFunction(phrase => document.getElementById("photo-save-status").textContent.includes(phrase), phrase); }
+  catch (error) { error.message += `\nExpected: ${phrase}\nActual: ${await page.locator("#photo-save-status").textContent()}`; throw error; }
+};
 const stored = page => page.evaluate(() => JSON.parse(Object.entries(localStorage).find(([key]) => key.startsWith("troom-diary-photo-save-v1:"))?.[1] || "null"));
 async function logout(page) {
   await page.click('[data-close-dialog="photo-save-dialog"]');
@@ -158,6 +187,13 @@ try {
   await folder.click("#photo-save-button");
   await folder.waitForFunction(() => !document.getElementById("photo-save-start").disabled);
   if (engine === chromium) {
+    const periodFolder = "写真_2026-11-02～2026-11-30";
+    await folder.evaluate(name => {
+      window.__directories.push(name);
+      window.__files[`${name}/keep.jpg`] = [77];
+      window.__files[`${name} (2)`] = [66];
+      window.__persistFileSystem();
+    }, periodFolder);
     heldId = photoId(2);
     await folder.click("#photo-save-start");
     await text(folder, "1 / 12枚");
@@ -170,8 +206,15 @@ try {
     await text(folder, "保存が完了");
     const output = await folder.evaluate(() => window.__files);
     assert.deepEqual(output["original.jpg"], [88], "existing file is untouched");
-    assert.equal(Object.keys(output).length, 13);
-    for (const [name, bytes] of Object.entries(output)) if (name !== "original.jpg") assert.deepEqual(bytes, [...raw], "no resize, ZIP or EXIF conversion");
+    assert.deepEqual(output[`${periodFolder}/keep.jpg`], [77]);
+    assert.deepEqual(output[`${periodFolder} (2)`], [66]);
+    const exportName = `${periodFolder} (3)`;
+    const exported = Object.entries(output).filter(([name]) => name.startsWith(exportName + "/"));
+    assert.equal(Object.keys(output).length, 15);
+    assert.equal(exported.length, 12, "all originals are written inside one new dated folder");
+    for (const [, bytes] of exported) assert.deepEqual(bytes, [...raw], "no resize, ZIP or EXIF conversion");
+    assert.deepEqual(await folder.evaluate(() => window.__directories), ["", periodFolder, exportName]);
+    assert.equal((await stored(folder)).folderName, exportName);
     assert.equal(await folder.evaluate(() => window.__pickerActivated), true);
     assert.equal((await stored(folder)).done.length, 12);
     assert.equal(await folder.evaluate(() => document.dispatchEvent(new Event("troom:before-auto-update", { cancelable: true }))), true);
@@ -183,10 +226,17 @@ try {
     await resume.click("#photo-save-pause"); releaseOriginal(); heldId = null;
     const checkpoint = await stored(resume);
     assert.equal(checkpoint.done.length, 1);
-    assert.deepEqual(Object.keys(checkpoint).sort(), ["version", "from", "to", "ids", "done", "updatedAt"].sort());
+    assert.deepEqual(Object.keys(checkpoint).sort(), ["version", "from", "to", "ids", "done", "updatedAt", "folderName"].sort());
+    assert.equal(checkpoint.folderName, "写真_2026-11-01～2026-11-30");
+    await resume.evaluate(() => { window.__pickedFolder = "other-parent"; });
+    await resume.click("#photo-save-start"); await text(resume, "前回の写真フォルダが見つかりません");
+    assert.equal((await stored(resume)).done.length, 1);
+    assert.equal(await resume.evaluate(() => window.__directoryCalls.filter(call => call.path === "other-parent" && call.create).length), 0);
     await resume.reload(); await open(resume); await text(resume, "1 / 12枚");
     await resume.click("#photo-save-start"); await text(resume, "保存が完了");
     assert.equal(originals.filter(id => id === photoId(1)).length, 1);
+    assert.equal(await resume.evaluate(() => window.__directoryCalls.filter(call => call.create).length), 0, "resume reuses the generated folder without creating another");
+    assert.equal(await resume.evaluate(name => Object.keys(window.__files).filter(path => path.startsWith(name + "/")).length, checkpoint.folderName), 12);
     await logout(resume);
     sessionName = "another-account";
     await resume.reload(); await open(resume);
@@ -205,6 +255,60 @@ try {
     await expired.reload(); await open(expired);
     await expired.click("#photo-save-start"); await text(expired, "保存が完了");
     await expired.context().close();
+
+    // A one-day export has a single date in its folder name.
+    const day = await setup("folder");
+    await day.click("#photo-save-to");
+    await day.locator('#date-wheel-day [data-value="1"]').click();
+    await day.click("#date-wheel-done");
+    await day.waitForFunction(() => !document.getElementById("photo-save-start").disabled);
+    await day.click("#photo-save-start"); await text(day, "保存が完了");
+    assert.equal((await stored(day)).folderName, "写真_2026-11-01");
+    assert.equal(await day.evaluate(() => Object.keys(window.__files).filter(path => path.startsWith("写真_2026-11-01/")).length), 12);
+    await day.context().close();
+
+    // Use actual browser filesystem handles as well as the permission fixtures.
+    const filesystem = await setup("folder");
+    await filesystem.evaluate(() => Object.defineProperty(window, "showDirectoryPicker", {
+      value: () => navigator.storage.getDirectory(), configurable: true
+    }));
+    await filesystem.click("#photo-save-start"); await text(filesystem, "保存が完了");
+    const actualFiles = await filesystem.evaluate(async () => {
+      const parent = await navigator.storage.getDirectory();
+      const folders = []; for await (const [name] of parent.entries()) folders.push(name);
+      const target = await parent.getDirectoryHandle("写真_2026-11-01～2026-11-30");
+      const files = [];
+      for await (const [name, handle] of target.entries()) files.push({ name, bytes: [...new Uint8Array(await (await handle.getFile()).arrayBuffer())] });
+      return { folders, files };
+    });
+    assert.deepEqual(actualFiles.folders, ["写真_2026-11-01～2026-11-30"]);
+    assert.equal(actualFiles.files.length, 12);
+    assert.ok(actualFiles.files.every(file => JSON.stringify(file.bytes) === JSON.stringify([...raw])));
+    await filesystem.context().close();
+
+    // Older checkpoints retain their direct-to-folder layout on resume.
+    const legacy = await setup("folder"); heldId = photoId(2);
+    await legacy.click("#photo-save-start"); await text(legacy, "1 / 12枚");
+    await legacy.click("#photo-save-pause"); releaseOriginal(); heldId = null;
+    await legacy.evaluate(raw => {
+      const key = Object.keys(localStorage).find(key => key.startsWith("troom-diary-photo-save-v1:"));
+      const previous = JSON.parse(localStorage.getItem(key)); delete previous.folderName;
+      localStorage.setItem(key, JSON.stringify(previous));
+      window.__files = { "original.jpg": raw }; window.__directories = [""]; window.__persistFileSystem();
+    }, [...raw]);
+    await legacy.context().addInitScript(() => {
+      // Simulate an old checkpoint after the current page's pagehide persistence.
+      for (const key of Object.keys(localStorage).filter(key => key.startsWith("troom-diary-photo-save-v1:"))) {
+        const previous = JSON.parse(localStorage.getItem(key)); delete previous.folderName;
+        localStorage.setItem(key, JSON.stringify(previous));
+      }
+    });
+    await legacy.reload(); await open(legacy);
+    await legacy.click("#photo-save-start"); await text(legacy, "保存が完了");
+    assert.equal(await legacy.evaluate(() => window.__directoryCalls.length), 0);
+    assert.equal(await legacy.evaluate(() => Object.keys(window.__files).length), 12);
+    assert.equal(Object.hasOwn(await stored(legacy), "folderName"), false);
+    await legacy.context().close();
   } else {
     await folder.context().close();
   }
@@ -239,6 +343,8 @@ try {
     await share.click("#photo-save-start"); await text(share, "元画像を1枚準備");
     assert.equal((await stored(share)).done.length, 1);
     assert.ok(await share.locator("#photo-save-dialog").evaluate(dialog => dialog.scrollWidth <= dialog.clientWidth));
+    assert.equal(Object.hasOwn(await stored(share), "folderName"), false);
+    assert.equal(await share.evaluate(() => window.__pickerCalls + window.__directoryCalls.length), 0, "iPhone never selects or creates a folder even if the API exists");
     // Failure offers the alternate method, preserving acknowledged progress.
     await share.evaluate(() => { window.__shareResult = "fail"; });
     await share.click("#photo-save-start"); await text(share, "保存画面を開けませんでした");
@@ -285,6 +391,8 @@ try {
     assert.equal(downloads.length, 12);
     assert.equal(new Set(downloads.map(download => download.suggestedFilename())).size, 12, "same-name originals remain distinct");
     assert.equal((await stored(fallback)).done.length, 12);
+    assert.equal(Object.hasOwn(await stored(fallback), "folderName"), false);
+    assert.equal(await fallback.evaluate(() => window.__pickerCalls + window.__directoryCalls.length), 0, "individual downloads never enter folder handling");
     await fallback.context().close();
   }
 
@@ -307,6 +415,13 @@ try {
 
   // A folder permission failure offers individual downloads; cancel does not.
   if (engine === chromium) {
+    const creationDenied = await setup("folder");
+    await creationDenied.evaluate(() => { window.__directoryError = "NotAllowedError"; });
+    await creationDenied.click("#photo-save-start"); await text(creationDenied, "フォルダに保存できませんでした");
+    assert.equal(await stored(creationDenied), null);
+    assert.equal(originals.length, 0, "a failed folder creation never starts downloading images");
+    assert.deepEqual(await creationDenied.evaluate(() => window.__directories), [""]);
+    await creationDenied.context().close();
     const denied = await setup("folder");
     await denied.evaluate(() => { window.__pickerError = "AbortError"; });
     await denied.click("#photo-save-start"); await text(denied, "保存先の選択を閉じました");
