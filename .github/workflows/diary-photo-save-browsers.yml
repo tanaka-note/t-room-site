@@ -1,0 +1,73 @@
+name: Diary photo save browsers
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/diary-photo-save-browsers.yml'
+      - 'diary-worker/public/diary-photo-save.js'
+      - 'diary-worker/public/diary.js'
+      - 'diary-worker/public/diary.css'
+      - 'diary-worker/public/index.html'
+      - 'diary-worker/tests/browser/photo-save.mjs'
+      - 'diary-worker/tests/photo-save.mjs'
+      - 'diary-worker/tests/date-input-platform-ui.mjs'
+      - 'diary-worker/tests/date-wheel-dismiss-ui.mjs'
+      - 'diary-worker/package.json'
+      - 'diary-worker/pnpm-lock.yaml'
+      - 'tools/browser-trace.cjs'
+permissions:
+  contents: read
+concurrency:
+  group: diary-photo-save-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  photo-save:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            engine: chromium
+            channel: chrome
+            package: playwright
+          - os: macos-15
+            engine: webkit
+            channel: ''
+            package: playwright-webkit
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: '11.19.0'
+      - name: Install diary test dependencies
+        working-directory: diary-worker
+        run: pnpm install --ignore-workspace --frozen-lockfile --ignore-scripts --config.strict-dep-builds=false
+      - name: Install browser
+        working-directory: diary-worker
+        run: node node_modules/${{ matrix.package }}/cli.js install ${{ matrix.channel || matrix.engine }}
+      - name: Verify device routing and date input contracts
+        working-directory: diary-worker
+        run: |
+          node tests/photo-save.mjs
+          node tests/date-input-platform-ui.mjs
+          node tests/date-wheel-dismiss-ui.mjs
+      - name: Verify originals, saving, calendar and recovery
+        env:
+          TROOM_BROWSER: ${{ matrix.engine }}
+          PLAYWRIGHT_PACKAGE: ${{ matrix.package }}
+          TROOM_CHROMIUM_CHANNEL: ${{ matrix.channel }}
+          TROOM_TRACE_DIR: tmp/verify-artifacts/photo-save
+        run: node --require ./tools/browser-trace.cjs diary-worker/tests/browser/photo-save.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: failure()
+        with:
+          name: diary-photo-save-${{ matrix.os }}
+          path: tmp/verify-artifacts/photo-save/
+          if-no-files-found: ignore
+          retention-days: 5

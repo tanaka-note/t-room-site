@@ -27,8 +27,8 @@ assert.equal(calls.blurred, 1, "field clicks must keep the non-editable input un
 assert.equal(calls.openedWith, target, "the existing wheel must receive the tapped input");
 assert.match(script, /for \(const input of \[elements\.dateFrom, elements\.dateTo\]\) \{\s*bindDateInput\(input\);/);
 assert.match(script, /bindDateInput\(elements\.entryDate\)/);
-assert.equal((html.match(/data-date-picker-target=/g) || []).length, 3);
-assert.equal((html.match(/data-date-picker-mode="date"/g) || []).length, 3);
+assert.equal((html.match(/data-date-picker-target=/g) || []).length, 5);
+assert.equal((html.match(/data-date-picker-mode="date"/g) || []).length, 5);
 assert.equal((html.match(/type="text" inputmode="none" readonly[^>]*pattern="\\d\{4\}-\\d\{2\}-\\d\{2\}"/g) || []).length, 3);
 assert.match(pickerScript, /button\.addEventListener\("click", openFromButton\)/);
 assert.match(pickerScript, /target\.dispatchEvent\(new Event\("input", \{ bubbles: true \}\)\)/);
@@ -39,6 +39,6 @@ assert.match(pickerStyle, /\.date-picker-button \{/);
 assert.match(pickerStyle, /padding-right: 52px/);
 assert.doesNotMatch(html, /type="date"|type="month"/);
 assert.doesNotMatch(script, /showPicker|openNativeDatePicker|nativeDatePickerTarget/);
-assert.doesNotMatch(style, /calendar-picker-indicator|date-picker-button|date-input-shell/);
+assert.doesNotMatch(style, /calendar-picker-indicator|^\.date-picker-button\s*\{/m);
 
 process.stdout.write("Diary shared calendar and bottom wheel input contract test passed.\n");

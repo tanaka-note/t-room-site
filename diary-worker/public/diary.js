@@ -98,6 +98,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     dateDraft: null,
     dateWheelTarget: null,
     dateWheelTimers: {},
+    dateWheelScrollVersion: 0,
     searchTimer: null,
     searchComposing: false,
     entriesAbortController: null,
@@ -1585,7 +1586,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       guard: () => !state.photoDeleteBusy,
       onClose: () => { state.deleteMode = null; state.photoDeleteTarget = null; }
     });
-    dialogs.register("date-wheel-dialog", { backdrop: applyDateWheel, onClose: () => { state.dateWheelTarget = null; } });
+    dialogs.register("date-wheel-dialog", { backdrop: applyDateWheel, onClose: () => {
+      for (const timer of Object.values(state.dateWheelTimers)) window.clearTimeout(timer);
+      state.dateWheelTarget = null;
+    } });
   }
 
   function requestEditorClose() {
@@ -2877,7 +2881,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     try {
       if (!photoSaverPromise) {
         photoSaverPromise = import(new URL(`diary-photo-save.js${scriptUrl.search}`, scriptUrl).href).then(module => {
-          photoSaver = module.createPhotoSaveManager({ api, dialogs, formatBytes, onNotice: showToast,
+          photoSaver = module.createPhotoSaveManager({ api, dialogs, formatBytes, bindDateInput, onNotice: showToast,
             getOwner: () => activeSessionContext && JSON.stringify([activeSessionContext, state.activeHouseholdId]),
             getDefaultRange: () => {
               const month = state.photoMonth || currentJapanMonth();
@@ -3309,7 +3313,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function fillDateWheel(column, values, selected, suffix) {
-    const scrollToken = String((Number(column.dataset.settingScrollToken) || 0) + 1);
+    const scrollToken = String(++state.dateWheelScrollVersion);
     column.dataset.settingScroll = "true";
     column.dataset.settingScrollToken = scrollToken;
     column.replaceChildren(...values.map((value, index) => {
@@ -3326,7 +3330,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     const selectedIndex = Math.max(0, values.indexOf(selected));
     window.requestAnimationFrame(() => {
       if (column.dataset.settingScrollToken !== scrollToken) return;
-      column.scrollTop = selectedIndex * 44;
+      column.scrollTo({ top: selectedIndex * 44, behavior: "instant" });
       window.setTimeout(() => {
         if (column.dataset.settingScrollToken !== scrollToken) return;
         delete column.dataset.settingScroll;
@@ -3339,6 +3343,11 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     column.addEventListener("click", (event) => {
       const option = event.target.closest(".date-wheel-option");
       if (!option) return;
+      window.clearTimeout(state.dateWheelTimers[key]);
+      // A delayed initial position or smooth-scroll intermediate value must not
+      // replace a tapped day before the user presses Done.
+      delete column.dataset.settingScrollToken;
+      delete column.dataset.settingScroll;
       const value = Number(option.dataset.value);
       if (state.dateDraft) {
         state.dateDraft[key] = value;
@@ -3348,7 +3357,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       column.querySelectorAll(".date-wheel-option").forEach((item) => {
         item.setAttribute("aria-selected", String(item === option));
       });
-      column.scrollTo({ top: Number(option.dataset.index) * 44, behavior: "smooth" });
+      column.scrollTo({ top: Number(option.dataset.index) * 44, behavior: "instant" });
     });
     column.addEventListener("wheel", (event) => {
       if (!event.deltaY) return;
