@@ -8,7 +8,7 @@ const script = readFileSync(`${root}/public/diary.js`, "utf8");
 
 assert.ok(script.includes('dialogs.register("date-wheel-dialog", { backdrop: applyDateWheel'));
 assert.match(script, /column\.addEventListener\("wheel", \(event\) => \{/);
-assert.match(script, /state\.dateDraft\[key\] = value;[\s\S]*updateDateWheelValue\(\);[\s\S]*column\.scrollTo\(\{ top: Number\(option\.dataset\.index\) \* 44, behavior: "smooth" \}\);/);
+assert.match(script, /state\.dateDraft\[key\] = value;[\s\S]*updateDateWheelValue\(\);[\s\S]*column\.scrollTo\(\{ top: Number\(option\.dataset\.index\) \* 44, behavior: "instant" \}\);/);
 assert.match(script, /event\.preventDefault\(\);/);
 assert.match(script, /const direction = event\.deltaY > 0 \? 1 : -1;/);
 assert.match(script, /column\.scrollTop = clamp\(visibleIndex \+ direction, 0, options\.length - 1\) \* 44;/);

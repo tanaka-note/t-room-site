@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { readPhotoSaveList } from "../src/photo-save.js";
-import { readSaveRecord, savedFileNames, validSaveDate } from "../public/diary-photo-save.js";
+import { photoSaveMethod, readSaveRecord, savedFileNames, validSaveDate } from "../public/diary-photo-save.js";
 
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
 const normalizeFilterDate = value => {
@@ -65,3 +65,21 @@ assert.deepEqual(savedFileNames(["photo.JPG", "photo.JPG", "PHOTO.jpg", "../CON.
 const longName = savedFileNames([{ fileName: "x".repeat(250) + ".heic" }])[0];
 assert.ok(longName.length <= 180 && longName.endsWith(".heic"));
 console.log("Album save: date snapshot, access boundaries, unified search, resume validation and safe file names passed.");
+
+// Device classification must not use viewport width or touch alone: Windows
+// touch PCs still save folders, Android/iPad desktop mode never do.
+const folderBrowser = { showDirectoryPicker() {} };
+const sharing = { share() {}, canShare: () => true };
+for (const [device, browser, expected] of [
+  [{ userAgent: "Windows NT 10.0", maxTouchPoints: 10 }, folderBrowser, "folder"],
+  [{ userAgent: "Android", ...sharing }, folderBrowser, "browser"],
+  [{ userAgentData: { mobile: true } }, folderBrowser, "browser"],
+  [{ userAgent: "iPhone", ...sharing }, folderBrowser, "share"],
+  [{ userAgent: "iPhone CriOS", ...sharing }, {}, "share"],
+  [{ userAgent: "Macintosh", platform: "MacIntel", maxTouchPoints: 5, ...sharing }, folderBrowser, "share"],
+  [{ userAgent: "Macintosh Safari", ...sharing }, {}, "browser"],
+  [{ userAgent: "iPhone" }, {}, "browser"],
+  [{ userAgent: "iPhone", ...sharing, canShare: () => false }, {}, "browser"],
+  [{ userAgent: "iPhone", ...sharing, canShare: () => { throw new Error("blocked"); } }, {}, "browser"]
+]) assert.equal(photoSaveMethod(browser, device), expected);
+console.log("Album save device routing: Windows touch PC, Android, iPhone Safari/Chrome, iPad desktop mode and unsupported APIs passed.");
