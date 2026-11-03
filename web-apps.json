@@ -43,6 +43,7 @@
       "publicUrls": ["https://tanaka-note.com/apps/calculator/"],
       "entrypoints": ["apps/calculator/index.html"],
       "buildRoots": ["apps/calculator"],
+      "assetCopies": [{ "source": "tools/shared/pwa-install.js", "copy": "apps/calculator/pwa-install.js" }],
       "buildMode": "content-hash",
       "serviceWorker": "apps/calculator/sw.js",
       "serviceWorkerUrl": "./sw.js",
@@ -623,6 +624,10 @@
       "deployCwd": "portfolio-worker",
       "deployCommand": "pnpm run deploy",
       "assetCopies": [
+        {
+          "source": "tools/shared/pwa-install.js",
+          "copy": "portfolio-worker/public/pwa-install.js"
+        },
         {
           "source": "diary-worker/public/dialog-navigation.js",
           "copy": "portfolio-worker/public/dialog-navigation.js"

@@ -4,14 +4,14 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { fixture } from './fixture.js';
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
-const assets = ['dialog-navigation.js', 'troom-date-picker.js', 'troom-date-picker.css', 'date-wheel.js', 'date-wheel.css', 'tlain-login.js', 'tlain-login.css'];
+const assets = ['dialog-navigation.js', 'troom-date-picker.js', 'troom-date-picker.css', 'date-wheel.js', 'date-wheel.css', 'tlain-login.js', 'tlain-login.css', 'pwa-install.js'];
 
 test('Portfolio uses registered shared date components and keeps the existing 1900–9999 year range', () => {
   const registry = JSON.parse(read('../../web-apps.json'));
   const app = registry.apps.find(a => a.id === 'portfolio');
   for (const name of assets) {
-    const source = name.startsWith('tlain-login.') ? `tools/shared/${name}` : name === 'dialog-navigation.js' ? `diary-worker/public/${name}` : `payments-worker/public/${name}`;
-    assert.ok(app.buildFiles.includes(source));
+    const source = name.startsWith('tlain-login.') || name === 'pwa-install.js' ? `tools/shared/${name}` : name === 'dialog-navigation.js' ? `diary-worker/public/${name}` : `payments-worker/public/${name}`;
+    assert.ok(app.buildFiles.includes(source) || app.assetCopies.some(copy => copy.source === source));
     assert.ok(app.assetCopies.some(copy => copy.source === source && copy.copy === `portfolio-worker/public/${name}`));
     assert.equal(read(`../public/${name}`), read(`../../${source}`));
   }

@@ -6,6 +6,7 @@ import { verifyPasskeyLogin } from './passkey-login.browser.mjs';
 import { pickDate, verifyDatePickers } from './date-picker.browser.mjs';
 import { verifyPrincipalEditor } from './principal.browser.mjs';
 import { fixture } from './fixture.js';
+import { verifyDirectPwaInstall } from '../../tools/pwa-install-browser-check.mjs';
 const require=createRequire(import.meta.url),{chromium}=require('../../diary-worker/node_modules/playwright');
 const owner=fixture(),viewer=fixture('viewer');await owner.login();await viewer.login();
 const publicRoot=new URL('../public/',import.meta.url),root=new URL('../../',import.meta.url);
@@ -36,6 +37,11 @@ try{
   assert.equal(await page.locator('#app-message').textContent(),'','Initial render failed');
   assert.match(await page.locator('#report-updated').textContent(),/2026年10月31日/);assert.equal(await page.locator('#holdings-body tr').count(),6);assert.deepEqual(await page.locator('.holdings-panel th').allTextContents(),['銘柄名','時価総額']);
   assert.match(await page.locator('#market-value').textContent(),/1,168,000/);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  assert.equal(await page.locator('[data-pwa-install]').count(), 1);
+  assert.equal(await page.locator('#logout-button').evaluate(button => button.nextElementSibling?.hasAttribute('data-pwa-install')), true);
+  const logout = await page.locator('#logout-button').boundingBox(), install = await page.locator('[data-pwa-install]').boundingBox();
+  assert.ok(Math.abs(logout.y - install.y) < 2 && install.x > logout.x && install.x + install.width <= width);
+  if(width===1440) await verifyDirectPwaInstall(page);
   await page.locator('#edit-toggle').click();await page.locator('#asset-editors [data-field=amount]').first().fill('500000');assert.match(await page.locator('#editor-total').textContent(),/1,400,000/);
   if(width===1440){
    const before=await page.locator('#history-chart').evaluate(canvas=>canvas.toDataURL());

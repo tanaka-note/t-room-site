@@ -142,3 +142,4 @@ const staticAssetsBuilder = await readFile(resolve(workspace, "tools/prepare-sta
 assert.match(staticAssetsBuilder, /publicRootFiles\s*=\s*new Set\(\["robots\.txt"\]\)/, "robots.txtを静的公開成果物へ含めてください");
 
 process.stdout.write(`Web自動更新contract: ${registry.apps.length}アプリ・${registeredHtml.size} HTMLを確認しました。\n`);
+await import('./test-pwa-install.mjs');
