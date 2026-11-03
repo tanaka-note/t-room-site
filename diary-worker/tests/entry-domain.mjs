@@ -7,6 +7,16 @@ const domain = createDiaryEntryDomain({ HttpError, basePath: '/diary' });
 const valid = { entryDate: '2026-10-07', title: '日記', content: '本文', tags: [' 写真 ', '写真', '旅行'], weather: 'sunny' };
 const invalid = action => assert.throws(action, error => error instanceof HttpError && error.status === 400);
 
+test('entry and photo identifiers accept v4 and stable migration v5, with RFC variant validation', () => {
+  const migrationId = '20000000-0000-5000-8000-000000000001';
+  assert.equal(domain.isUuid('20000000-0000-4000-8000-000000000001'), true);
+  assert.equal(domain.isUuid(migrationId), true);
+  assert.deepEqual(domain.parsePhotoIdList([migrationId, migrationId.toUpperCase()]), [migrationId]);
+  for (const invalidId of [migrationId.replace('-5000-', '-0000-'), migrationId.replace('-8000-', '-7000-'), `${migrationId}/original`, 'invalid']) {
+    assert.equal(domain.isUuid(invalidId), false);
+  }
+});
+
 test('published entries normalize tags and reject invalid dates, weather and empty text', () => {
   assert.deepEqual(domain.validateEntryInput(valid).tags, ['写真', '旅行']);
   invalid(() => domain.validateEntryInput({ ...valid, entryDate: '2026-02-30' }));

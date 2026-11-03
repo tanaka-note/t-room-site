@@ -1,4 +1,5 @@
 import { passkeyFixtureArgs, diaryFixtureLogin } from "./passkey-fixture.mjs";
+import { PhotoMigration } from "../public/photo-migration-core.js";
 import { randomBytes } from 'node:crypto';
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
@@ -868,6 +869,48 @@ try {
   const restoredScopes = queryLocalDatabase(`SELECT COUNT(*) AS count FROM diary_trash_scopes WHERE entry_id = ${restoreEntry.id}`);
   assert.equal(Number(restoredScopes[0].count), 0);
 
+  const migrationSession = (await jsonRequest('/session', { cookie: wifeCookie })).result;
+  const migrationPhotoId = '20000000-0000-5000-8000-000000000001';
+  const migrationBytes = new Uint8Array([1, 2, 3, 4]);
+  const migrationManifest = { version: 1, id: 'b'.repeat(64), year: 2025, timezone: 'Asia/Tokyo', days: [{
+    date: '2025-01-01', title: '2025-01-01', requestId: '10000000-0000-5000-8000-000000000000', photos: [{
+      id: migrationPhotoId, date: '2025-01-01', timestamp: 1735700400, fileName: 'migration.png', mimeType: 'image/png', width: 2, height: 2,
+      ...Object.fromEntries(['original', 'display', 'thumbnail'].map(key => [key, {
+        path: `photos/${migrationPhotoId}/${key}.${key === 'original' ? 'png' : 'webp'}`,
+        bytes: migrationBytes.length, sha256: createHash('sha256').update(migrationBytes).digest('hex')
+      }]))
+    }]
+  }] };
+  let migrationJournal;
+  const migration = new PhotoMigration({ manifest: migrationManifest,
+    destination: { origin, householdId: migrationSession.activeHouseholdId, loginId: migrationSession.loginId, role: migrationSession.role },
+    readFile: async () => migrationBytes,
+    saveJournal: async value => { migrationJournal = structuredClone(value); },
+    api: async (path, { method = 'GET', body } = {}) => {
+      const response = await fetch(`${origin}/diary/api${path}`, {
+        method, headers: { Cookie: wifeCookie, 'X-Diary-Request': '1', ...(body instanceof FormData || body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+        body: body instanceof FormData ? body : body === undefined ? undefined : JSON.stringify(body)
+      });
+      const result = await response.json();
+      assert.equal(response.status, 200, `${method} ${path}: ${JSON.stringify(result)}`);
+      return result;
+    }
+  });
+  await migration.run();
+  assert.equal(migrationJournal.days['2025-01-01'].status, 'complete');
+  const migrationEntryId = migrationJournal.days['2025-01-01'].entryId;
+  await migration.run();
+  await migration.run({ verifyOnly: true });
+  const migrationEntry = (await jsonRequest(`/entries/${migrationEntryId}`, { cookie: wifeCookie })).result.entry;
+  assert.equal(migrationEntry.status, 'published');
+  assert.equal(migrationEntry.title, '2025-01-01');
+  assert.equal(migrationEntry.content, `[[写真:${migrationPhotoId}]]`);
+  assert.deepEqual(migrationEntry.photos.map(photo => photo.id), [migrationPhotoId]);
+  const migrationOriginal = await fetch(`${origin}${migrationEntry.photos[0].originalUrl}`, { headers: { Cookie: wifeCookie } });
+  assert.equal(migrationOriginal.status, 200);
+  assert.deepEqual(new Uint8Array(await migrationOriginal.arrayBuffer()), migrationBytes);
+  assert.equal(Number(queryLocalDatabase(`SELECT COUNT(*) AS count FROM diary_entries WHERE client_request_id = '${migrationManifest.days[0].requestId}'`)[0].count), 1);
+  console.log('PhotoMigration uses stable v5 IDs through real Worker create, stage, commit, publish, replay and original download.');
   process.stdout.write("Diary photo integration test passed.\n");
 } finally {
   if (server.exitCode === null) {
