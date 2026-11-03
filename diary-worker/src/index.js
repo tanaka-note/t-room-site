@@ -1,6 +1,7 @@
 import { foregroundSessionActivity, serviceRollingSession, renewServiceSession, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
 import { createDiaryEntryDomain } from "./entry-domain.js";
 import { deleteAlbumPhoto } from "./photo-deletion.js";
+import { readPhotoSaveList } from "./photo-save.js";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
@@ -336,6 +337,10 @@ async function handleApi(request, env, url, path, context, getSession, timing) {
 
   if (path === "/api/photos/meta" && request.method === "GET") {
     return listPhotoMeta(env, session);
+  }
+
+  if (path === "/api/photos/save-list" && request.method === "GET") {
+    return json(await readPhotoSaveList(url, env, session, { normalizeFilterDate, HttpError }));
   }
 
   if (path === "/api/photo-upload-sessions" && request.method === "POST") {
@@ -816,12 +821,13 @@ async function listPhotos(url, env, session) {
     conditions.push(`(
       instr(e.title, ?) > 0
       OR instr(e.content, ?) > 0
+      OR instr(p.file_name, ?) > 0
       OR EXISTS (
         SELECT 1 FROM diary_tags photo_tag
         WHERE photo_tag.entry_id = e.id AND instr(photo_tag.tag, ?) > 0
       )
     )`);
-    bindings.push(entryQuery, entryQuery, entryQuery);
+    bindings.push(entryQuery, entryQuery, entryQuery, entryQuery);
   }
   if (month) {
     // The ASCII month prefix interval preserves the old match (even legacy values),

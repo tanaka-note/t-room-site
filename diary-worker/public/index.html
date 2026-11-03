@@ -61,8 +61,8 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#50647d">
-  <meta name="troom-app-build" content="diary-9b9c56403261">
-  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-9b9c56403261">
+  <meta name="troom-app-build" content="diary-be40bf10d4ba">
+  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-be40bf10d4ba">
   <meta name="troom-auto-update" content="enabled">
   <meta name="application-name" content="日記">
   <meta name="mobile-web-app-capable" content="yes">
@@ -70,13 +70,13 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="日記">
   <title>日記</title>
-  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-9b9c56403261">
+  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-be40bf10d4ba">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64-v4.png?v=5">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon-v3.png?v=4">
-  <link rel="stylesheet" href="/diary/diary.css?v=diary-9b9c56403261">
-  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-9b9c56403261">
-  <link rel="stylesheet" href="/diary/tlain-login.css?v=diary-9b9c56403261">
-  <script src="/diary/tlain-login.js?v=diary-9b9c56403261" defer></script>
+  <link rel="stylesheet" href="/diary/diary.css?v=diary-be40bf10d4ba">
+  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-be40bf10d4ba">
+  <link rel="stylesheet" href="/diary/tlain-login.css?v=diary-be40bf10d4ba">
+  <script src="/diary/tlain-login.js?v=diary-be40bf10d4ba" defer></script>
 </head>
 <body>
   <main id="boot-view" class="login-shell tlain-login-view" aria-label="日記を準備中" aria-busy="true">
@@ -461,7 +461,7 @@
       <div class="camera-roll-filters">
         <label>
           <span>タグ・内容検索</span>
-          <span class="auxiliary-search-field"><input id="photo-entry-search" type="search" maxlength="100" placeholder="タグ・日記名・本文"><button class="diary-search-clear" type="button" data-clear-search="photo-entry-search" aria-label="アルバムの検索キーワードをクリア">×</button></span>
+          <span class="auxiliary-search-field"><input id="photo-entry-search" type="search" maxlength="100" placeholder="タグ・日記名・本文・画像ファイル名"><button class="diary-search-clear" type="button" data-clear-search="photo-entry-search" aria-label="アルバムの検索キーワードをクリア">×</button></span>
         </label>
         <label>
           <span>年月</span>
@@ -469,14 +469,48 @@
             <option value="">すべて</option>
           </select>
         </label>
-        <label>
-          <span>ファイル名検索</span>
-          <span class="auxiliary-search-field"><input id="photo-file-name-search" type="search" maxlength="100" placeholder="画像ファイル名"><button class="diary-search-clear" type="button" data-clear-search="photo-file-name-search" aria-label="ファイル名の検索キーワードをクリア">×</button></span>
-        </label>
+        <button id="photo-save-button" class="primary-button" type="button" aria-haspopup="dialog" aria-controls="photo-save-dialog">まとめて保存</button>
       </div>
       <p id="camera-roll-status" class="diary-search-status" aria-live="polite"></p>
       <div id="camera-roll-grid" class="camera-roll-grid"></div>
       <button id="camera-roll-more" class="secondary-button load-more-button" type="button" hidden>さらに表示</button>
+    </section>
+  </dialog>
+
+  <dialog id="photo-save-dialog" class="entry-dialog photo-save-dialog" aria-labelledby="photo-save-title">
+    <section class="entry-detail">
+      <header class="dialog-head">
+        <h2 id="photo-save-title">まとめて保存</h2>
+        <button class="icon-button" type="button" data-close-dialog="photo-save-dialog" aria-label="閉じる">×</button>
+      </header>
+      <div class="photo-save-fields">
+        <label for="photo-save-from">開始日
+          <span class="date-input-shell">
+            <input id="photo-save-from" type="text" inputmode="none" readonly aria-haspopup="dialog" aria-controls="troom-calendar-dialog">
+            <button class="date-picker-button" type="button" data-date-picker-target="photo-save-from" data-date-picker-mode="date" aria-label="保存する開始日をカレンダーから選ぶ">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v3M17 3v3M4.5 9h15M6 5h12a2 2 0 0 1 2 2v12H4V7a2 2 0 0 1 2-2Z"/></svg>
+            </button>
+          </span>
+        </label>
+        <label for="photo-save-to">終了日
+          <span class="date-input-shell">
+            <input id="photo-save-to" type="text" inputmode="none" readonly aria-haspopup="dialog" aria-controls="troom-calendar-dialog">
+            <button class="date-picker-button" type="button" data-date-picker-target="photo-save-to" data-date-picker-mode="date" aria-label="保存する終了日をカレンダーから選ぶ">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v3M17 3v3M4.5 9h15M6 5h12a2 2 0 0 1 2 2v12H4V7a2 2 0 0 1 2-2Z"/></svg>
+            </button>
+          </span>
+        </label>
+        <label class="photo-save-method" for="photo-save-method">保存方法<select id="photo-save-method"></select></label>
+      </div>
+      <p id="photo-save-help" class="field-help"></p>
+      <p class="field-help">この画面を閉じても処理は続きます。アプリやブラウザの終了・画面ロックで停止した場合は、再度「まとめて保存」を開いて未完了分を再開できます。再開記録は7日間保持します。</p>
+      <p id="photo-save-status" class="diary-search-status" role="status" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button id="photo-save-reset" class="quiet-button" type="button" hidden>期間を選び直す</button>
+        <button id="photo-save-pause" class="secondary-button" type="button" hidden>一時停止</button>
+        <button id="photo-save-retry" class="secondary-button" type="button" hidden>この分を再試行</button>
+        <button id="photo-save-start" class="primary-button" type="button" disabled>保存を開始</button>
+      </div>
     </section>
   </dialog>
 
@@ -538,8 +572,8 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/assets/pwa-auto-update.js?v=diary-9b9c56403261" defer></script>
-  <script src="/security/passkey-client.js?v=diary-9b9c56403261" defer></script>
-  <script src="/diary/diary-bootstrap.js?v=diary-9b9c56403261" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=diary-be40bf10d4ba" defer></script>
+  <script src="/security/passkey-client.js?v=diary-be40bf10d4ba" defer></script>
+  <script src="/diary/diary-bootstrap.js?v=diary-be40bf10d4ba" defer></script>
 </body>
 </html>
