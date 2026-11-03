@@ -44,15 +44,15 @@ bootstrapもrequestごとに現在のSecurity状態を検証し、同じGET requ
 
 「まとめて保存」の日付欄は日記と同じ年・月・日のホイール、アイコンはT-lain共通の月間カレンダーで指定し、日記の日付の開始日・終了日を含める。年月・検索条件とは独立して、その期間の閲覧可能な公開済み写真を対象にする。`GET /api/photos/save-list`は同じhousehold/session権限で画像ID・元ファイル名・MIME・サイズだけを1回のSQLで確定し、写真本体やR2 keyを返さない。元画像の取得は各回に従来の認可を通し、再圧縮やZIP作成を行わない。
 
-保存方法の選択欄は設けず、端末と対応機能から自動選択する。PC版Chrome/Edge等の保存先フォルダを選べる環境では、一度選んだ通常フォルダへ各元画像をストリームで書き込み、サイズ確認後に進捗を更新する。同名ファイルは上書きしない。スマホ判定はUA/UA Client HintsとiPadのデスクトップUAを考慮し、画面幅やタッチ対応だけでは判定しない。AndroidはフォルダAPIが存在しても個別ダウンロードを使う。
+保存方法の選択欄は設けず、端末と対応機能から自動選択する。PC版Chrome/Edge等の保存先フォルダを選べる環境では、選んだ親フォルダの中に「写真_開始日～終了日」（同日は「写真_日付」）を新規作成し、その中へ各元画像をストリームで書き込む。同名のフォルダ・ファイルが存在する場合は連番を付けた別フォルダを作り、既存の内容は上書きしない。サイズ確認後に進捗を更新する。新しいPC保存の再開記録には生成したfolderNameも保持し、再開時は同じ親フォルダ内の既存フォルダを使う。フォルダが見つからない場合は停止し、別の場所へ残りだけを自動保存しない。folderNameのない旧記録は、従来どおり選んだフォルダへ直接保存して既存の保存場所を維持する。スマホ判定はUA/UA Client HintsとiPadのデスクトップUAを考慮し、画面幅やタッチ対応だけでは判定しない。AndroidはフォルダAPIが存在しても個別ダウンロードを使う。
 
 iPhone/iPadはファイル共有に対応していれば元画像を1枚だけ準備し、次のタップでOSの保存画面へ渡す。Android、共有非対応のiPhone、フォルダ保存非対応のPC（Safari等）は元画像を1枚準備し、次のタップでBlob URLからダウンロードする。連続した自動クリックや全画像のメモリ保持を避け、実際に保存できたことを利用者が確認した後だけ進捗を更新し、次の1枚を準備する。Blob URLは保存確認・再試行・中断・ログアウト時に破棄する。元画像の取得失敗・401ではダウンロードや保存済み扱いに進めない。
 
 通常は期間・枚数・容量・保存ボタンと簡潔な操作案内を表示し、フォルダ・共有のエラー時だけ「1枚ずつダウンロードする」を案内する。保存先選択や共有画面のキャンセルでは自動的に別方式へ切り替えない。PC Safari等では通常フォルダへの一括保存APIが使えないため、個別保存とPC版Chrome/Edgeの案内を表示する。OSの保存画面・保存先での追加操作は残り、写真アプリへの直接保存や無操作の連続保存は保証しない。元ファイルを維持したい場合はOS保存画面でファイルとして保存する。
 
-画面の閉じる・戻るは処理中止と分離する。タブやPWAの終了・OSによる停止後の継続は保証せず、再起動時は未完了ファイルから利用者が再開する。再開記録は所有するログイン状態・householdごとのlocalStorageへ7日間、期間・写真ID・確認済みIDだけを保存する。画像本体、本文、ファイル名、鍵、Cookie、フォルダ権限は永続保存しない。容量制限等で記録できない場合は画面に表示する。ログアウト・セッション失効・household切替で処理とメモリを破棄し、新しい認証状態へ記録や処理結果を渡さない。準備中・保存中・共有待ちの画像がある間は自動更新を延期する。
+画面の閉じる・戻るは処理中止と分離する。タブやPWAの終了・OSによる停止後の継続は保証せず、再起動時は未完了ファイルから利用者が再開する。再開記録は所有するログイン状態・householdごとのlocalStorageへ7日間、期間・写真ID・確認済みIDとPCで生成した写真フォルダ名だけを保存する。画像本体、本文、ファイル名、鍵、Cookie、フォルダ権限は永続保存しない。容量制限等で記録できない場合は画面に表示する。ログアウト・セッション失効・household切替で処理とメモリを破棄し、新しい認証状態へ記録や処理結果を渡さない。準備中・保存中・共有待ちの画像がある間は自動更新を延期する。
 
-`pnpm run test:photo-save`で期間境界、household/下書き/ゴミ箱の除外、統合検索、再開記録、ファイル名衝突、Chromium/WebKitのローカルfixtureでWindows/Android/iPhone Safari・Chromeの端末条件、日付欄のホイール・確定・キャンセルとアイコンのカレンダー、閉じる・元bytes・再開・共有キャンセル・保存確認・エラー時の代替・個別ダウンロードを検証する。`PLAYWRIGHT_PACKAGE=playwright-webkit TROOM_BROWSER=webkit node tests/browser/photo-save.mjs`でWebKitを実行できる。共用Playwright 1.56.1のWebKitでは既存画面の連続reloadがクラッシュするため、Safari検証専用の`playwright-core` 1.64.1（別名`playwright-webkit`）を使い、他サービスが使う共用版は変更しない。PRの`Diary photo save browsers`ではWindowsのChromeとmacOSのWebKitで同じ操作試験を実行する。フォルダAPIは対応するChromiumで検証し、WebKitではSafariの個別保存・再開・別アカウントの分離を検証する。共有APIとフォルダ選択はブラウザfixtureで模擬しており、iPhone/Androidの実機OS保存画面・画面ロックを代替しない。
+`pnpm run test:photo-save`で期間境界、household/下書き/ゴミ箱の除外、統合検索、再開記録、ファイル名衝突、Chromium/WebKitのローカルfixtureでWindows/Android/iPhone Safari・Chromeの端末条件、日付欄のホイール・確定・キャンセルとアイコンのカレンダー、閉じる・元bytes・再開・共有キャンセル・保存確認・エラー時の代替・個別ダウンロードを検証する。`PLAYWRIGHT_PACKAGE=playwright-webkit TROOM_BROWSER=webkit node tests/browser/photo-save.mjs`でWebKitを実行できる。共用Playwright 1.56.1のWebKitでは既存画面の連続reloadがクラッシュするため、Safari検証専用の`playwright-core` 1.64.1（別名`playwright-webkit`）を使い、他サービスが使う共用版は変更しない。PRの`Diary photo save browsers`ではWindowsのChromeとmacOSのWebKitで同じ操作試験を実行する。フォルダAPIは対応するChromiumで検証し、WebKitではSafariの個別保存・再開・別アカウントの分離を検証する。共有APIとフォルダ選択はブラウザfixtureで模擬し、PCの子フォルダ作成と元画像の書込みは実際のブラウザ内ファイルシステム（OPFS）でも検証する。iPhone/Androidの実機OS保存画面・画面ロックを代替しない。
 
 ## 写真の送信と復旧
 
