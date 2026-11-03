@@ -52,7 +52,7 @@ iPhone/iPadはファイル共有に対応していれば元画像を1枚だけ�
 
 画面の閉じる・戻るは処理中止と分離する。タブやPWAの終了・OSによる停止後の継続は保証せず、再起動時は未完了ファイルから利用者が再開する。再開記録は所有するログイン状態・householdごとのlocalStorageへ7日間、期間・写真ID・確認済みIDだけを保存する。画像本体、本文、ファイル名、鍵、Cookie、フォルダ権限は永続保存しない。容量制限等で記録できない場合は画面に表示する。ログアウト・セッション失効・household切替で処理とメモリを破棄し、新しい認証状態へ記録や処理結果を渡さない。準備中・保存中・共有待ちの画像がある間は自動更新を延期する。
 
-`pnpm run test:photo-save`で期間境界、household/下書き/ゴミ箱の除外、統合検索、再開記録、ファイル名衝突、Chromium/WebKitのローカルfixtureでWindows/Android/iPhone Safari・Chromeの端末条件、日付欄のホイール・確定・キャンセルとアイコンのカレンダー、閉じる・元bytes・再開・共有キャンセル・保存確認・エラー時の代替・個別ダウンロードを検証する。`TROOM_BROWSER=webkit node tests/browser/photo-save.mjs`でWebKitを実行できる。共有APIとフォルダ選択はブラウザfixtureで模擬しており、iPhone/Androidの実機OS保存画面・画面ロックを代替しない。
+`pnpm run test:photo-save`で期間境界、household/下書き/ゴミ箱の除外、統合検索、再開記録、ファイル名衝突、Chromium/WebKitのローカルfixtureでWindows/Android/iPhone Safari・Chromeの端末条件、日付欄のホイール・確定・キャンセルとアイコンのカレンダー、閉じる・元bytes・再開・共有キャンセル・保存確認・エラー時の代替・個別ダウンロードを検証する。`PLAYWRIGHT_PACKAGE=playwright-webkit TROOM_BROWSER=webkit node tests/browser/photo-save.mjs`でWebKitを実行できる。共用Playwright 1.56.1のWebKitでは既存画面の連続reloadがクラッシュするため、Safari検証専用の`playwright-core` 1.64.1（別名`playwright-webkit`）を使い、他サービスが使う共用版は変更しない。PRの`Diary photo save browsers`ではWindowsのChromeとmacOSのWebKitで同じ操作試験を実行する。フォルダAPIは対応するChromiumで検証し、WebKitではSafariの個別保存・再開・別アカウントの分離を検証する。共有APIとフォルダ選択はブラウザfixtureで模擬しており、iPhone/Androidの実機OS保存画面・画面ロックを代替しない。
 
 ## 写真の送信と復旧
 

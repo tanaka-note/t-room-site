@@ -13,6 +13,7 @@ on:
       - 'diary-worker/tests/date-wheel-dismiss-ui.mjs'
       - 'diary-worker/package.json'
       - 'diary-worker/pnpm-lock.yaml'
+      - 'tools/browser-trace.cjs'
 permissions:
   contents: read
 concurrency:
@@ -27,9 +28,11 @@ jobs:
           - os: windows-latest
             engine: chromium
             channel: chrome
+            package: playwright
           - os: macos-15
             engine: webkit
             channel: ''
+            package: playwright-webkit
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
@@ -47,7 +50,7 @@ jobs:
         run: pnpm install --ignore-workspace --frozen-lockfile --ignore-scripts --config.strict-dep-builds=false
       - name: Install browser
         working-directory: diary-worker
-        run: pnpm exec playwright install ${{ matrix.channel || matrix.engine }}
+        run: node node_modules/${{ matrix.package }}/cli.js install ${{ matrix.channel || matrix.engine }}
       - name: Verify device routing and date input contracts
         working-directory: diary-worker
         run: |
@@ -57,6 +60,7 @@ jobs:
       - name: Verify originals, saving, calendar and recovery
         env:
           TROOM_BROWSER: ${{ matrix.engine }}
+          PLAYWRIGHT_PACKAGE: ${{ matrix.package }}
           TROOM_CHROMIUM_CHANNEL: ${{ matrix.channel }}
           TROOM_TRACE_DIR: tmp/verify-artifacts/photo-save
         run: node --require ./tools/browser-trace.cjs diary-worker/tests/browser/photo-save.mjs

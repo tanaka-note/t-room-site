@@ -98,6 +98,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     dateDraft: null,
     dateWheelTarget: null,
     dateWheelTimers: {},
+    dateWheelScrollVersion: 0,
     searchTimer: null,
     searchComposing: false,
     entriesAbortController: null,
@@ -3312,7 +3313,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function fillDateWheel(column, values, selected, suffix) {
-    const scrollToken = String((Number(column.dataset.settingScrollToken) || 0) + 1);
+    const scrollToken = String(++state.dateWheelScrollVersion);
     column.dataset.settingScroll = "true";
     column.dataset.settingScrollToken = scrollToken;
     column.replaceChildren(...values.map((value, index) => {
@@ -3329,7 +3330,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     const selectedIndex = Math.max(0, values.indexOf(selected));
     window.requestAnimationFrame(() => {
       if (column.dataset.settingScrollToken !== scrollToken) return;
-      column.scrollTop = selectedIndex * 44;
+      column.scrollTo({ top: selectedIndex * 44, behavior: "instant" });
       window.setTimeout(() => {
         if (column.dataset.settingScrollToken !== scrollToken) return;
         delete column.dataset.settingScroll;

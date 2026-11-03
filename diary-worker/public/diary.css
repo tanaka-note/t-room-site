@@ -2050,7 +2050,7 @@ button:disabled {
   height: 220px;
   overflow-y: auto;
   padding: 88px 0;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
   scroll-snap-type: y mandatory;
   scrollbar-width: none;
   overscroll-behavior: contain;

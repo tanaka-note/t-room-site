@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { extname } from "node:path";
-import { chromium, webkit } from "playwright";
+const { chromium, webkit } = await import(process.env.PLAYWRIGHT_PACKAGE || (process.env.TROOM_BROWSER === "webkit" ? "playwright-webkit" : "playwright"));
 import { createDiaryFixtureServer } from "./bootstrap-fixture.mjs";
 
 const publicRoot = new URL("../../public/", import.meta.url);
@@ -99,9 +99,19 @@ async function open(page) {
 }
 const text = async (page, phrase) => page.waitForFunction(phrase => document.getElementById("photo-save-status").textContent.includes(phrase), phrase);
 const stored = page => page.evaluate(() => JSON.parse(Object.entries(localStorage).find(([key]) => key.startsWith("troom-diary-photo-save-v1:"))?.[1] || "null"));
+async function logout(page) {
+  await page.click('[data-close-dialog="photo-save-dialog"]');
+  await page.waitForFunction(() => !document.getElementById("photo-save-dialog").open);
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.getElementById("camera-roll-dialog").open);
+  await page.click("#logout-button");
+  await page.waitForSelector("#login-view:not([hidden])");
+}
+
 try {
-  // Folder writes stay independent of both album dialogs and preserve raw bytes.
-  const folder = await setup("folder");
+  // Both engines verify date inputs and modal history; only Chromium exercises
+  // the folder API that desktop Safari does not provide.
+  const folder = await setup(engine === chromium ? "folder" : "browser", engine === chromium ? "windows" : "safari");
   assert.equal(await folder.locator("#photo-save-button").textContent(), "まとめて保存");
   assert.equal(await folder.locator("#photo-file-name-search").count(), 0);
   assert.match(await folder.locator("#photo-entry-search").getAttribute("placeholder"), /画像ファイル名/);
@@ -144,56 +154,73 @@ try {
   await folder.waitForFunction(() => !document.getElementById("photo-save-dialog").open && document.getElementById("camera-roll-dialog").open);
   await folder.click("#photo-save-button");
   await folder.waitForFunction(() => !document.getElementById("photo-save-start").disabled);
-  heldId = photoId(2);
-  await folder.click("#photo-save-start");
-  await text(folder, "1 / 12枚");
-  await folder.click('[data-close-dialog="photo-save-dialog"]');
-  await folder.waitForFunction(() => !document.getElementById("photo-save-dialog").open);
-  await folder.keyboard.press("Escape");
-  await folder.waitForFunction(() => !document.getElementById("camera-roll-dialog").open);
-  assert.equal(await folder.evaluate(() => document.dispatchEvent(new Event("troom:before-auto-update", { cancelable: true }))), false);
-  releaseOriginal(); heldId = null;
-  await text(folder, "保存が完了");
-  const output = await folder.evaluate(() => window.__files);
-  assert.deepEqual(output["original.jpg"], [88], "existing file is untouched");
-  assert.equal(Object.keys(output).length, 13);
-  for (const [name, bytes] of Object.entries(output)) if (name !== "original.jpg") assert.deepEqual(bytes, [...raw], "no resize, ZIP or EXIF conversion");
-  assert.equal(await folder.evaluate(() => window.__pickerActivated), true);
-  assert.equal((await stored(folder)).done.length, 12);
-  assert.equal(await folder.evaluate(() => document.dispatchEvent(new Event("troom:before-auto-update", { cancelable: true }))), true);
-  await folder.context().close();
+  if (engine === chromium) {
+    heldId = photoId(2);
+    await folder.click("#photo-save-start");
+    await text(folder, "1 / 12枚");
+    await folder.click('[data-close-dialog="photo-save-dialog"]');
+    await folder.waitForFunction(() => !document.getElementById("photo-save-dialog").open);
+    await folder.keyboard.press("Escape");
+    await folder.waitForFunction(() => !document.getElementById("camera-roll-dialog").open);
+    assert.equal(await folder.evaluate(() => document.dispatchEvent(new Event("troom:before-auto-update", { cancelable: true }))), false);
+    releaseOriginal(); heldId = null;
+    await text(folder, "保存が完了");
+    const output = await folder.evaluate(() => window.__files);
+    assert.deepEqual(output["original.jpg"], [88], "existing file is untouched");
+    assert.equal(Object.keys(output).length, 13);
+    for (const [name, bytes] of Object.entries(output)) if (name !== "original.jpg") assert.deepEqual(bytes, [...raw], "no resize, ZIP or EXIF conversion");
+    assert.equal(await folder.evaluate(() => window.__pickerActivated), true);
+    assert.equal((await stored(folder)).done.length, 12);
+    assert.equal(await folder.evaluate(() => document.dispatchEvent(new Event("troom:before-auto-update", { cancelable: true }))), true);
+    await folder.context().close();
 
-  // Reload keeps only acknowledged IDs; previously completed originals are skipped.
-  const resume = await setup("folder"); heldId = photoId(2);
-  await resume.click("#photo-save-start"); await text(resume, "1 / 12枚");
-  await resume.click("#photo-save-pause"); releaseOriginal(); heldId = null;
-  const checkpoint = await stored(resume);
-  assert.equal(checkpoint.done.length, 1);
-  assert.deepEqual(Object.keys(checkpoint).sort(), ["version", "from", "to", "ids", "done", "updatedAt"].sort());
-  await resume.reload(); await open(resume); await text(resume, "1 / 12枚");
-  await resume.click("#photo-save-start"); await text(resume, "保存が完了");
-  assert.equal(originals.filter(id => id === photoId(1)).length, 1);
-  sessionName = "another-account";
-  await resume.reload(); await open(resume);
-  assert.match(await resume.locator("#photo-save-start").textContent(), /保存を開始/);
-  assert.doesNotMatch(await resume.locator("#photo-save-status").textContent(), /12 \/ 12/);
-  await resume.context().close();
+    // Reload keeps only acknowledged IDs; previously completed originals are skipped.
+    const resume = await setup("folder"); heldId = photoId(2);
+    await resume.click("#photo-save-start"); await text(resume, "1 / 12枚");
+    await resume.click("#photo-save-pause"); releaseOriginal(); heldId = null;
+    const checkpoint = await stored(resume);
+    assert.equal(checkpoint.done.length, 1);
+    assert.deepEqual(Object.keys(checkpoint).sort(), ["version", "from", "to", "ids", "done", "updatedAt"].sort());
+    await resume.reload(); await open(resume); await text(resume, "1 / 12枚");
+    await resume.click("#photo-save-start"); await text(resume, "保存が完了");
+    assert.equal(originals.filter(id => id === photoId(1)).length, 1);
+    await logout(resume);
+    sessionName = "another-account";
+    await resume.reload(); await open(resume);
+    assert.match(await resume.locator("#photo-save-start").textContent(), /保存を開始/);
+    assert.doesNotMatch(await resume.locator("#photo-save-status").textContent(), /12 \/ 12/);
+    await resume.context().close();
 
-  // A revoked session stops the queue and retains only resumable metadata.
-  const expired = await setup("folder"); failId = photoId(1);
-  await expired.click("#photo-save-start");
-  await expired.waitForSelector("#login-view:not([hidden])");
-  assert.equal(originals.length, 1);
-  assert.equal((await stored(expired)).done.length, 0);
-  assert.equal(await expired.locator("#photo-save-dialog").evaluate(dialog => dialog.open), false);
-  failId = null;
-  await expired.reload(); await open(expired);
-  await expired.click("#photo-save-start"); await text(expired, "保存が完了");
-  await expired.context().close();
+    // A revoked session stops the queue and retains only resumable metadata.
+    const expired = await setup("folder"); failId = photoId(1);
+    await expired.click("#photo-save-start");
+    await expired.waitForSelector("#login-view:not([hidden])");
+    assert.equal(originals.length, 1);
+    assert.equal((await stored(expired)).done.length, 0);
+    assert.equal(await expired.locator("#photo-save-dialog").evaluate(dialog => dialog.open), false);
+    failId = null;
+    await expired.reload(); await open(expired);
+    await expired.click("#photo-save-start"); await text(expired, "保存が完了");
+    await expired.context().close();
+  } else {
+    await folder.context().close();
+  }
 
   // iPhone Safari and iPhone Chrome both hand off exactly one original per tap.
   for (const profile of ["iphone", "iphoneChrome"]) {
     const share = await setup("share", profile);
+    // Touch input uses the same wheel and preserves cancellation semantics.
+    await share.locator("#photo-save-to").tap();
+    await share.locator('#date-wheel-day [data-value="29"]').tap();
+    await share.locator("#date-wheel-done").tap();
+    await share.waitForFunction(() => !document.getElementById("date-wheel-dialog").open);
+    assert.equal(await share.locator("#photo-save-to").inputValue(), "2026-11-29");
+    await share.locator("#photo-save-to").tap();
+    await share.locator('#date-wheel-day [data-value="15"]').tap();
+    await share.locator("#date-wheel-cancel").tap();
+    await share.waitForFunction(() => !document.getElementById("date-wheel-dialog").open);
+    assert.equal(await share.locator("#photo-save-to").inputValue(), "2026-11-29");
+    await share.waitForFunction(() => !document.getElementById("photo-save-start").disabled);
     await share.click("#photo-save-start"); await text(share, "元画像を1枚準備");
     assert.equal(await share.evaluate(() => window.__shares.length), 0);
     await share.evaluate(() => { window.__shareResult = "cancel"; });
@@ -219,6 +246,16 @@ try {
     await share.click("#photo-save-start");
     assert.deepEqual(await readFile(await (await download).path()), raw);
     assert.equal((await stored(share)).done.length, 1);
+    // Reload retries an unacknowledged image, never the previously saved one.
+    await share.reload(); await open(share);
+    await share.click("#photo-save-start"); await text(share, "元画像を1枚準備");
+    assert.equal((await stored(share)).done.length, 1);
+    await share.click("#photo-save-start"); await text(share, "実際に保存できたこと");
+    assert.equal((await share.evaluate(() => window.__shares))[0].files[0].name, "original (2).jpg");
+    await logout(share);
+    sessionName = "another-account";
+    await share.reload(); await open(share);
+    assert.match(await share.locator("#photo-save-start").textContent(), /保存を開始/);
     await share.context().close();
   }
 
@@ -236,12 +273,14 @@ try {
       await fallback.click("#photo-save-start");
       const download = await downloaded;
       assert.deepEqual(await readFile(await download.path()), raw);
-      assert.equal(download.suggestedFilename(), i === 0 ? "original.jpg" : i === 1 ? "original (2).jpg" : `original-${i + 1}.jpg`);
+      const expectedName = i === 0 ? "original.jpg" : i === 1 ? "original (2).jpg" : `original-${i + 1}.jpg`;
+      assert.ok([expectedName, expectedName.replaceAll(" ", "_")].includes(download.suggestedFilename()), "browser/OS filename sanitization preserves the image name and extension");
       assert.equal((await stored(fallback)).done.length, i);
       await fallback.click("#photo-save-start");
       await text(fallback, i === photos.length - 1 ? "全画像の保存確認が完了" : "元画像を1枚準備");
     }
     assert.equal(downloads.length, 12);
+    assert.equal(new Set(downloads.map(download => download.suggestedFilename())).size, 12, "same-name originals remain distinct");
     assert.equal((await stored(fallback)).done.length, 12);
     await fallback.context().close();
   }
@@ -264,17 +303,19 @@ try {
   await mobileExpired.context().close();
 
   // A folder permission failure offers individual downloads; cancel does not.
-  const denied = await setup("folder");
-  await denied.evaluate(() => { window.__pickerError = "AbortError"; });
-  await denied.click("#photo-save-start"); await text(denied, "保存先の選択を閉じました");
-  assert.equal(await denied.locator("#photo-save-fallback").isVisible(), false);
-  await denied.evaluate(() => { window.__pickerError = "NotAllowedError"; });
-  await denied.click("#photo-save-start"); await text(denied, "フォルダに保存できませんでした");
-  await denied.click("#photo-save-fallback");
-  await denied.click("#photo-save-start"); await text(denied, "元画像を1枚準備");
-  await denied.context().close();
+  if (engine === chromium) {
+    const denied = await setup("folder");
+    await denied.evaluate(() => { window.__pickerError = "AbortError"; });
+    await denied.click("#photo-save-start"); await text(denied, "保存先の選択を閉じました");
+    assert.equal(await denied.locator("#photo-save-fallback").isVisible(), false);
+    await denied.evaluate(() => { window.__pickerError = "NotAllowedError"; });
+    await denied.click("#photo-save-start"); await text(denied, "フォルダに保存できませんでした");
+    await denied.click("#photo-save-fallback");
+    await denied.click("#photo-save-start"); await text(denied, "元画像を1枚準備");
+    await denied.context().close();
+  }
   assert.deepEqual(errors, []);
-  console.log(`Album save browser (${engine.name()}): Windows folder writes, Android/iPhone/Safari profiles, date field wheels/calendar, close/back, update guard, resume, account isolation, cancel/acknowledgement, error fallback and individual original downloads passed.`);
+  console.log(`Album save browser (${engine.name()}): ${engine === chromium ? "Windows folder writes, " : ""}Android/iPhone/Safari profiles, date field wheels/calendar, close/back, update guard, resume, account isolation, cancel/acknowledgement, error fallback and individual original downloads passed.`);
 } finally {
   releaseOriginal?.();
   await Promise.all(contexts.map(context => context.close().catch(() => {})));

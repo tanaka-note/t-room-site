@@ -6,7 +6,7 @@ const dir = process.env.TROOM_TRACE_DIR;
 if (dir) {
   mkdirSync(dir, { recursive: true });
   const inventory = process.env.VERIFY_TARGET === 'inventory' || /(?:^|[\\/])inventory-worker[\\/]/.test(process.argv[1] || '');
-  const playwright = createRequire(join(__dirname, inventory ? '../inventory-worker/package.json' : '../diary-worker/package.json'))('playwright');
+  const playwright = createRequire(join(__dirname, inventory ? '../inventory-worker/package.json' : '../diary-worker/package.json'))(process.env.PLAYWRIGHT_PACKAGE || 'playwright');
   let sequence = 0;
   for (const name of ['chromium', 'firefox', 'webkit']) {
     const engine = playwright[name];

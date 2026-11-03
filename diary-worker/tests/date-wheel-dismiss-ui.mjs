@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const script = readFileSync(`${root}/public/diary.js`, "utf8");
+const style = readFileSync(`${root}/public/diary.css`, "utf8");
 
 assert.ok(script.includes('dialogs.register("date-wheel-dialog", { backdrop: applyDateWheel'));
 assert.match(script, /column\.addEventListener\("wheel", \(event\) => \{/);
@@ -19,3 +20,5 @@ assert.match(script, /if \(column\.dataset\.settingScroll === "true"\) return;/,
   "programmatic initial positioning must not overwrite the selected date");
 
 process.stdout.write("Diary date wheel dismissal and exact one-step mouse scrolling contract test passed.\n");
+
+assert.match(style, /\.date-wheel-column\s*\{[^}]*scroll-behavior: auto;/);
