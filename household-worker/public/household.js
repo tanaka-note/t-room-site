@@ -8,7 +8,7 @@
   const nav = TroomDialogNavigation.create({key:'troomHouseholdDialogs'});
   let data={accounts:[],transactions:[],categories:[],snapshots:[],historical:[]}, revision=0, session=null, busy=false, activity=Date.now(), confirmation=null, restoreFile=null, categoryEditing=null;
   const editors=new Map(), channel=typeof BroadcastChannel==='function'?new BroadcastChannel('household-ledger'):null;
-  let sessionGeneration=0,expiryTimer=null,cleanupPlan=null,visibleEntries=200,entryCriteria='';
+  let sessionGeneration=0,expiryTimer=null,cleanupPlan=null,visibleEntries=200,entryCriteria='',entryType='expense';
   const pendingRequests=new Set(),downloadUrls=new Set();
   const discarded=()=>Object.assign(new Error('ログイン状態が変わりました。'),{discarded:true});
   function currentGeneration(generation){if(generation!==sessionGeneration)throw discarded();}
@@ -67,7 +67,7 @@
     sessionGeneration++;clearTimeout(expiryTimer);expiryTimer=null;
     for(const controller of pendingRequests)controller.abort();pendingRequests.clear();
     for(const url of downloadUrls)URL.revokeObjectURL(url);downloadUrls.clear();
-    session=null;revision=0;visibleEntries=200;entryCriteria='';data={accounts:[],transactions:[],categories:[],snapshots:[],historical:[]};assetPoints=[];chartPeriod='all';
+    session=null;revision=0;visibleEntries=200;entryCriteria='';entryType='expense';data={accounts:[],transactions:[],categories:[],snapshots:[],historical:[]};assetPoints=[];chartPeriod='all';
     confirmation=restoreFile=categoryEditing=editingAccount=cleanupPlan=null;$('maintenance-summary').textContent='';$('maintenance-apply').hidden=true;
     nav.reset();for(const dialog of document.querySelectorAll('dialog[open]'))dialog.close();
     for(const form of document.querySelectorAll('#app-view form,dialog form'))form.reset();
@@ -174,7 +174,9 @@
   function renderTransactions(){
     const period=$('period').value,year=$('period-mode').value==='year',prefix=year?period.slice(0,4):period,query=$('search').value.normalize('NFKC').toLocaleLowerCase();
     const rows=data.transactions.filter(t=>{const c=categoryFor(t);return t.date.startsWith(prefix)&&(!$('category-filter').value||c?.parent===$('category-filter').value)&&      (!query||(t.description+' '+t.notes+' '+(c?.parent||'')+' '+(c?.name||'')).normalize('NFKC').toLocaleLowerCase().includes(query));}).sort((a,b)=>a.date.localeCompare(b.date)||(a.registrationOrder??0)-(b.registrationOrder??0)||a.id.localeCompare(b.id));
-    const criteria=JSON.stringify([prefix,query,$('category-filter').value]);if(criteria!==entryCriteria){visibleEntries=200;entryCriteria=criteria;}
+    const entryCount=rows.filter(t=>t.type===entryType).length;
+    for(const b of document.querySelectorAll('[data-entry-type]'))b.setAttribute('aria-pressed',String(b.dataset.entryType===entryType));
+    const criteria=JSON.stringify([prefix,query,$('category-filter').value,entryType]);if(criteria!==entryCriteria){visibleEntries=200;entryCriteria=criteria;}
     let index=0,income=0,expense=0;const groups=new Map(),root=$('entries'),fragment=document.createDocumentFragment();
     for(const t of rows){const c=categoryFor(t),legacy=t.type==='transfer';if(!legacy){
         if(t.type==='income')income+=t.amount;else expense+=t.amount;
@@ -184,12 +186,12 @@
         if(!group.children.has(childKey))group.children.set(childKey,{name:c?.name||'その他',total:0});
         group.children.get(childKey).total+=t.amount;
       }
-      if(index++>=visibleEntries)continue;
+      if(t.type!==entryType||index++>=visibleEntries)continue;
       const tr=el('tr');tr.dataset.id=t.id;cell(tr,t.date);cell(tr,t.description||'（内容なし）','description');cell(tr,legacy?'過去の振替（集計外）':(c?.parent||'その他')+' / '+(c?.name||'その他'));cell(tr,(t.type==='income'?'＋':t.type==='expense'?'−':'')+money(t.amount),'numeric');cell(tr,t.notes,'notes');
       if(session?.role==='owner'){const actions=cell(tr,undefined,'row-actions');if(!legacy)actions.append(button('編集',()=>openEntry(t)));actions.append(button('削除',()=>{const expected=revision,id=crypto.randomUUID();ask('この明細を削除しますか？',t.date+'\n'+t.description+'\n'+money(t.amount),()=>mutate('transaction.delete',{id:t.id},expected,id));},'danger'));}
       ['日付','内容','分類','金額','メモ','操作'].forEach((label,i)=>{if(tr.cells[i])tr.cells[i].dataset.label=label;});fragment.append(tr);
     }
-    root.replaceChildren(fragment);$('more-entries').hidden=rows.length<=visibleEntries;$('entry-display').textContent=rows.length?`${Math.min(rows.length,visibleEntries)} / ${rows.length}件を表示`:'';$('income').textContent=money(income);$('expense').textContent=money(expense);$('net').textContent=money(income-expense);$('empty-entries').hidden=rows.length>0;$('entry-count').textContent=rows.length+'件';renderCategorySummary(groups,income,expense);
+    root.replaceChildren(fragment);$('more-entries').hidden=entryCount<=visibleEntries;$('entry-display').textContent=entryCount?`${Math.min(entryCount,visibleEntries)} / ${entryCount}件を表示`:'';$('income').textContent=money(income);$('expense').textContent=money(expense);$('net').textContent=money(income-expense);$('empty-entries').hidden=entryCount>0;$('entry-count').textContent=rows.length+'件';renderCategorySummary(groups,income,expense);
   }
   function renderAccounts(){const root=$('accounts');root.replaceChildren();let total=0;for(const a of data.accounts){if(!a.archived)total+=totals(a);const card=el('article',undefined,'panel account-card'),header=el('header'),title=el('div');title.append(el('h3',a.name),el('span',`${a.type}${a.archived?'・保管済み':''}`,'muted small'));header.append(title);if(session?.role==='owner')header.append(button('編集',()=>openAccount(a)));card.append(header,el('p',money(totals(a)),'total'),el('p',a.balances?.length?`${a.balances.at(-1).date} 時点`:'基準日未入力','muted small'));for(const i of a.items){const row=el('div',undefined,'item');row.append(el('span',i.name),el('strong',money(i.amount)));card.append(row);}root.append(card);}$('current-assets').textContent=money(total);$('empty-accounts').hidden=data.accounts.length>0;}
   function points(){return assetPoints;}
@@ -215,6 +217,7 @@
   function render(){options($('category-filter'),[...new Set(visibleCategories().map(c=>c.parent))].map(p=>[p,p]),'すべて');renderTransactions();renderAccounts();renderAssets();renderCategories();showView();}
   function showView(){const view=['transactions','accounts','assets','settings'].includes(location.hash.slice(1))?location.hash.slice(1):'transactions';for(const page of document.querySelectorAll('.page'))page.hidden=page.id!==`view-${view}`;for(const b of document.querySelectorAll('[data-view]')){if(b.dataset.view===view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');}if(view==='assets')assetChart.resize();}
   for(const b of document.querySelectorAll('[data-view]'))b.onclick=()=>{if(location.hash!==`#${b.dataset.view}`)history.pushState({...history.state,householdView:b.dataset.view},'',`#${b.dataset.view}`);showView();};window.addEventListener('popstate',showView);
+  for(const b of document.querySelectorAll('[data-entry-type]'))b.onclick=()=>{if(busy||entryType===b.dataset.entryType)return;entryType=b.dataset.entryType;renderTransactions();};
   $('more-entries').onclick=()=>{visibleEntries+=200;renderTransactions();};
   $('period').value=today().slice(0,7);for(const id of ['period','period-mode','category-filter'])$(id).onchange=renderTransactions;$('search').oninput=renderTransactions;
   function resetCategory(){categoryEditing=null;$('category-form').reset();$('category-form').querySelector('[type=submit]').textContent='中項目を追加';$('category-cancel').hidden=true;}
