@@ -211,6 +211,10 @@
         {
           "source": "tools/shared/tlain-login.js",
           "copy": "billing-worker/public/tlain-login.js"
+        },
+        {
+          "source": "tools/shared/pwa-install.js",
+          "copy": "billing-worker/public/pwa-install.js"
         }
       ]
     },

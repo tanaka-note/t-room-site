@@ -62,16 +62,17 @@
   <title>請求書管理システム</title>
   <meta name="application-name" content="請求書管理システム">
   <meta name="theme-color" content="#577263">
-  <link rel="manifest" href="/billing/manifest.webmanifest?v=billing-1519aed8cc18">
-  <link rel="stylesheet" href="./billing.css?v=billing-1519aed8cc18">
-  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-1519aed8cc18">
-  <script src="./troom-date-picker.js?v=billing-1519aed8cc18" defer></script>
-  <script src="/diary/dialog-navigation.js?v=billing-1519aed8cc18" defer></script>
-  <script src="./billing.js?v=billing-1519aed8cc18" defer></script>
-  <meta name="troom-app-build" content="billing-1519aed8cc18">
+  <link rel="manifest" href="/billing/manifest.webmanifest?v=billing-f3f495485885">
+  <script src="./pwa-install.js?v=billing-f3f495485885"></script>
+  <link rel="stylesheet" href="./billing.css?v=billing-f3f495485885">
+  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-f3f495485885">
+  <script src="./troom-date-picker.js?v=billing-f3f495485885" defer></script>
+  <script src="/diary/dialog-navigation.js?v=billing-f3f495485885" defer></script>
+  <script src="./billing.js?v=billing-f3f495485885" defer></script>
+  <meta name="troom-app-build" content="billing-f3f495485885">
   <meta name="troom-auto-update" content="enabled">
-  <link rel="stylesheet" href="/billing/tlain-login.css?v=billing-1519aed8cc18">
-  <script src="/billing/tlain-login.js?v=billing-1519aed8cc18" defer></script>
+  <link rel="stylesheet" href="/billing/tlain-login.css?v=billing-f3f495485885">
+  <script src="/billing/tlain-login.js?v=billing-f3f495485885" defer></script>
 </head>
 <body>
   <main>
@@ -127,10 +128,13 @@
             <option value="payment_notice">支払通知書</option>
           </select>
         </label>
-        <button id="print-button" class="button secondary" type="button">この月をPDF保存</button>
+        <button id="install-app-button" class="button secondary" data-pwa-install type="button">ホームへ追加</button>
+        <button id="print-button" class="button secondary" type="button" hidden>この月をPDF保存</button>
         <button id="new-entry-button" class="button primary owner-only" type="button" hidden>明細を追加</button>
         <button id="logs-button" class="button ghost owner-only" type="button" hidden>アカウント管理</button>
       </div>
+
+      <p id="install-app-message" class="install-message no-print" data-pwa-install-status role="status" aria-live="polite" hidden></p>
 
       <section id="report" class="report" aria-live="polite" aria-busy="false">
         <p id="summary-status" class="empty-message" role="status" hidden></p>
@@ -192,7 +196,7 @@
         </span>
       </div>
       <label>区分<select id="entry-category" required></select></label>
-      <label id="entry-description-label">内容<input id="entry-description" type="text" maxlength="100" required></label>
+      <label>金額（1円単位）<input id="entry-amount" type="text" inputmode="numeric" maxlength="16" autocomplete="off" required></label>
       <label id="settlement-direction-label" hidden>入金者
         <select id="settlement-direction">
           <option value="incoming">相手（発行先の本人）</option>
@@ -207,7 +211,7 @@
         </select>
       </label>
       <label id="other-direction-label" hidden>その他の扱い<select id="other-direction"><option value="plus">請求</option><option value="minus">減額</option></select></label>
-      <label>金額（1円単位）<input id="entry-amount" type="text" inputmode="numeric" maxlength="16" autocomplete="off" required></label>
+      <label id="entry-description-label">内容<input id="entry-description" type="text" maxlength="100" required></label>
       <label>備考<textarea id="entry-note" rows="3" maxlength="500"></textarea></label>
       <p id="entry-error" class="error-message" role="alert"></p>
       <div class="dialog-actions"><button class="button secondary" type="button" data-close-dialog="entry-dialog">キャンセル</button><button class="button primary" type="submit">保存</button></div>
@@ -260,7 +264,7 @@
       <div class="logs-wrap"><table><thead><tr><th>日時</th><th>操作</th><th>操作した人</th><th>対象者</th></tr></thead><tbody id="logs-body"></tbody></table></div>
     </div>
   </dialog>
-  <script src="/security/passkey-client.js?v=billing-1519aed8cc18" defer></script>
-  <script src="/assets/pwa-auto-update.js?v=billing-1519aed8cc18" defer></script>
+  <script src="/security/passkey-client.js?v=billing-f3f495485885" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=billing-f3f495485885" defer></script>
 </body>
 </html>
