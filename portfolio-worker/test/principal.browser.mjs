@@ -34,7 +34,7 @@ export async function verifyPrincipalEditor(browser, url, routeApi) {
       await page.locator('#report-app').waitFor({ state: 'visible' });
       await verifyHistoryTooltips(page, (await f.state()).history);
       await page.locator('#edit-toggle').click();
-      assert.equal(await page.locator('#base-principal').inputValue(), '1000000');
+      assert.equal(await page.locator('#base-principal').inputValue(), '1,000,000');
       await page.locator('#base-principal').fill('800,000');
       await pickDate(page, 'record-date', '2026-11-01');
       await page.waitForFunction(() => document.querySelector('#editor-note').textContent.includes('新しい日付'));
@@ -75,7 +75,7 @@ export async function verifyPrincipalEditor(browser, url, routeApi) {
       await pickDate(page, 'view-date', '2026-10-30');
       await page.locator('#profit-value').waitFor({ state: 'hidden' });
       await page.locator('#edit-toggle').click();
-      assert.equal(await page.locator('#base-principal').inputValue(), '800000');
+      assert.equal(await page.locator('#base-principal').inputValue(), '800,000');
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       f.setActive(false);
       await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));

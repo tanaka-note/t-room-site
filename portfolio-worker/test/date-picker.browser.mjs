@@ -49,7 +49,7 @@ export async function verifyDatePickers(browser, url, routeApi) {
       await wheel.locator('#date-wheel-day').press('ArrowUp');
       await wheel.locator('#date-wheel-cancel').click(); await wheel.waitFor({ state: 'hidden' });
       assert.equal(await page.locator('#record-date').inputValue(), '2026-10-31');
-      assert.equal(await page.locator('#base-principal').inputValue(), '800000');
+      assert.equal(await page.locator('#base-principal').inputValue(), '800,000');
       await page.locator('#record-date').click(); await wheel.waitFor({ state: 'visible' });
       await page.keyboard.press('Escape'); await wheel.waitFor({ state: 'hidden' });
       await page.locator('#record-date').click(); await wheel.waitFor({ state: 'visible' });
@@ -67,7 +67,7 @@ export async function verifyDatePickers(browser, url, routeApi) {
       assert.equal(await page.locator('#editor-panel').isVisible(), true);
       await pickDate(page, 'record-date', '2028-02-29');
       await page.waitForFunction(() => document.querySelector('#editor-note').textContent.includes('新しい日付'));
-      assert.equal(await page.locator('#base-principal').inputValue(), '800000');
+      assert.equal(await page.locator('#base-principal').inputValue(), '800,000');
       await page.locator('#record-date').click(); await wheel.waitFor({ state: 'visible' });
       await page.waitForFunction(() => !document.querySelector('#date-wheel-day').dataset.settingScroll);
       await wheel.locator('#date-wheel-day').press('ArrowUp');

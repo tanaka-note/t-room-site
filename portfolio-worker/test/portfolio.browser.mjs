@@ -4,6 +4,7 @@ import { readFileSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { verifyPasskeyLogin } from './passkey-login.browser.mjs';
 import { pickDate, verifyDatePickers } from './date-picker.browser.mjs';
+import { verifyMoneyInputs } from './money-input.browser.mjs';
 import { verifyPrincipalEditor } from './principal.browser.mjs';
 import { fixture } from './fixture.js';
 import { verifyDirectPwaInstall } from '../../tools/pwa-install-browser-check.mjs';
@@ -31,6 +32,7 @@ try{
  await verifyPasskeyLogin(browser, url, await owner.state());
  await verifyDatePickers(browser, url, routeApi);
  await verifyPrincipalEditor(browser, url, routeApi);
+ await verifyMoneyInputs(browser, url, routeApi);
  for(const width of [1440,390,320]){
   const context=await browser.newContext({viewport:{width,height:1000}}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',dialog=>dialog.accept());await routeApi(page,owner);await page.goto(url);await page.locator('#report-app').waitFor({state:'visible'});
   await page.waitForFunction(()=>document.querySelector('#history-period').textContent.includes('2026') || document.querySelector('#app-message').textContent);
