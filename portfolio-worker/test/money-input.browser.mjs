@@ -28,6 +28,8 @@ export async function verifyMoneyInputs(browser,url,routeApi) {
    await amount.fill('0');assert.equal(await amount.inputValue(),'0');assert.equal(await amount.evaluate(el=>el.checkValidity()),true);
    await amount.evaluate(el=>{el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));el.value='１２３４５６７';el.dispatchEvent(new InputEvent('input',{bubbles:true,isComposing:true}));});assert.equal(await amount.inputValue(),'１２３４５６７');
    await amount.dispatchEvent('compositionend');assert.equal(await amount.inputValue(),'1,234,567');
+   await amount.evaluate(el=>{el.value='1,2９34,567';el.setSelectionRange(4,4);el.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:'９'}));});assert.equal(await amount.inputValue(),'12,934,567');
+   await amount.fill('1234567');
    await principal.fill('2000000');assert.equal(await principal.inputValue(),'2,000,000');await amount.blur();assert.equal(await amount.inputValue(),'1,234,567');
    await page.locator('#save-button').click();await page.waitForFunction(()=>document.querySelector('#app-message').textContent.includes('保存しました'));
    const saved=await f.state();assert.equal(saved.metadata.basePrincipal,2000000);assert.equal(saved.record.assets[0].marketValue,1234567);

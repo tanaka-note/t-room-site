@@ -127,7 +127,7 @@ $('editor-form').addEventListener('paste', event => {
   } catch (error) { input.setCustomValidity(error.message); input.reportValidity(); }
 });
 $('editor-form').addEventListener('compositionend', event => {
-  if (isMoneyInput(event.target)) { formatMoneyInput(event.target); markDirty(); updateTotal(); }
+  if (isMoneyInput(event.target)) { formatMoneyInput(event.target, /^[0-9０-９]+$/.test(event.data || '')); markDirty(); updateTotal(); }
 });
 $('editor-form').addEventListener('focusout', event => { if (isMoneyInput(event.target)) formatMoneyInput(event.target); });
 function collectDraft() {
