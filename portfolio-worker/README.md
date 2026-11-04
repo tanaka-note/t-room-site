@@ -1,6 +1,6 @@
 # 資産運用報告（編集対応）
 
-新URLは `https://tanaka-note.com/asset-report/`。旧 `asset-report-k7m4q9x2/` は変更しない。トップページのテーマ一覧に入口を置く。記事一覧・検索インデックスへは追加しない。HTMLとHTTPヘッダーの両方でnoindexとする。
+新URLは `https://tanaka-note.com/asset-report/`。旧 `asset-report-k7m4q9x2/` は公開停止し、新URLへ転送する（[停止仕様](../docs/asset-report.md)）。トップページのテーマ一覧に入口を置く。記事一覧・検索インデックスへは追加しない。HTMLとHTTPヘッダーの両方でnoindexとする。
 
 ## データと計算
 
@@ -36,7 +36,7 @@
 4. CIが成功した最新mainのclean checkoutで、Portfolio対象のverify/buildとbuild freshnessを確認して新Workerを公開する。routeは `/asset-report` と `/asset-report/*` だけに限定する。
 5. HTMLのcontent build、公開中version、未認証APIの401、noindexを読み戻す。Security Centerの候補は管理者・閲覧者の2件であることを確認する。実利用者への権限付与は行わない。
 
-切り戻しは新URLのrouteまたは新Workerを停止し、旧サイトを継続利用する。新規D1・記録・訂正履歴を削除しない。Securityの既存利用者を解除せず、既存サービスを維持する。
+切り戻しはPortfolioの既存versionへ戻す。公開停止済みの旧静的ページへは戻さない。新規D1・記録・訂正履歴を削除しない。Securityの既存利用者を解除せず、既存サービスを維持する。
 
 ## 検証
 
