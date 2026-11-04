@@ -4,27 +4,27 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 const source = readFileSync(new URL('../public/diary.js', import.meta.url), 'utf8');
 
-test('album month options group total and monthly photo counts while retaining selection', async () => {
+test('album month filter retains selection and the total/monthly photo counts', async () => {
   for (const [months, labels] of [
-    [[], ['すべて（0）']],
-    [[{ value: '2026-10', count: 0 }], ['すべて（0）', '2026年10月（0）']],
-    [[{ value: '2026-10', count: 999 }], ['すべて（999）', '2026年10月（999）']],
-    [[{ value: '2026-10', count: 1000 }], ['すべて（1,000）', '2026年10月（1,000）']],
+    [[], ['すべて（0枚）']],
+    [[{ value: '2026-10', count: 0 }], ['すべて（0枚）', '2026年10月（0枚）']],
+    [[{ value: '2026-10', count: 999 }], ['すべて（999枚）', '2026年10月（999枚）']],
+    [[{ value: '2026-10', count: 1000 }], ['すべて（1,000枚）', '2026年10月（1,000枚）']],
     [[{ value: '2026-10', count: '1234' }, { value: '2026-09', count: 423 }],
-      ['すべて（1,657）', '2026年10月（1,234）', '2026年9月（423）']]
+      ['すべて（1,657枚）', '2026年10月（1,234枚）', '2026年9月（423枚）']]
   ]) {
     const state = { photoMonth: months[0]?.value || '', photoOrder: 'oldest' };
     const elements = {
-      photoMonthFilter: { replaceChildren(...options) { this.options = options; } },
+      photoMonthFilter: {}, dateWheelDialog: { open: false },
       photoSortButton: { setAttribute() {} }
     };
     const api = async path => { assert.equal(path, '/photos/meta'); return { months }; };
     const load = new Function('state', 'elements', 'api', 'document', 'sessionGeneration',
-      ['loadPhotoMeta', 'createOption', 'formatMonth', 'updatePhotoSortButton'].map(body).join('\n')
+      ['loadPhotoMeta', 'renderPhotoMonthFilter', 'photoCountLabel', 'formatMonth', 'updatePhotoSortButton'].map(body).join('\n')
         + '\nreturn loadPhotoMeta;')(state, elements, api, { createElement: () => ({}) }, 0);
     await load();
-    assert.deepEqual(elements.photoMonthFilter.options.map(option => option.textContent), labels);
-    assert.deepEqual(elements.photoMonthFilter.options.map(option => option.value), ['', ...months.map(item => item.value)]);
+    assert.equal(elements.photoMonthFilter.textContent, labels[months.length ? 1 : 0]);
+    assert.deepEqual([...state.photoMonthCounts], months.map(item => [item.value, Number(item.count)]));
     assert.equal(elements.photoMonthFilter.value, state.photoMonth);
     assert.equal(elements.photoSortButton.hidden, !state.photoMonth);
   }

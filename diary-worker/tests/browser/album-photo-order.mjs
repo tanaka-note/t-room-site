@@ -1,3 +1,4 @@
+import { selectAlbumMonth } from "./album-month-fixture.mjs";
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
@@ -27,7 +28,9 @@ const server = createDiaryFixtureServer(async (request, response) => {
     if (path === '/meta') return json(response, { months: [{ value: '2026-10', count: 1 }], tags: [], draftCount: 0 });
     if (path === '/entries') return json(response, { entries: [entry], hasMore: false });
     if (path === '/entries/1') return json(response, { entry });
-    if (path === '/photos/meta') return json(response, { months: [{ value: '2026-10', count: 60 }] });
+    if (path === '/photos/meta') return json(response, { months: [
+      { value: '2026-10', count: 60 }, { value: '2025-10', count: 4 }, { value: '2025-11', count: 1234 }
+    ] });
     if (path === '/photos') {
       requests.push(Object.fromEntries(url.searchParams));
       const oldest = url.searchParams.get('month') && url.searchParams.get('order') === 'oldest';
@@ -88,10 +91,57 @@ try {
       await page.waitForSelector('#entry-dialog', { state: 'hidden' });
       await page.click('#camera-roll-button');
       await waitFirst(60);
+      await page.waitForFunction(() => document.getElementById('photo-month-filter').textContent === 'すべて（1,298枚）');
+      assert.equal(await page.locator('#photo-month-filter svg').count(), 0, 'no calendar icon');
+      const requestCount = requests.length;
+      await page.locator('#photo-month-filter').focus();
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('#date-wheel-dialog[open]');
+      assert.equal(await page.locator('#date-wheel-title').textContent(), '年月を選択');
+      assert.equal(await page.locator('#date-wheel-day').isVisible(), false);
+      assert.equal(await page.locator('#date-wheel-all').textContent(), 'すべて（1,298枚）');
+      assert.equal(await page.locator('#date-wheel-month .date-wheel-option').count(), 12);
+      await page.locator('#date-wheel-year [data-value="2026"]').click();
+      await page.waitForFunction(() => document.querySelector('#date-wheel-year').dataset.settingScroll !== 'true');
+      const counts = () => page.locator('#date-wheel-month .date-wheel-count').allTextContents();
+      assert.deepEqual(await counts(), Array.from({ length: 12 }, (_, i) => i === 9 ? '60枚' : '0枚'));
+      const monthTop = await page.locator('#date-wheel-month').evaluate(node => node.scrollTop);
+      // Multiple scroll events leave all 12 counts intact until the year settles.
+      assert.equal(await page.evaluate(() => {
+        const column = document.getElementById('date-wheel-year');
+        for (const year of [2024, 2025]) {
+          column.scrollTop = (year - 1900) * 44;
+          column.dispatchEvent(new Event('scroll'));
+        }
+        return document.getElementById('date-wheel-month').dataset.countYear;
+      }), '2026');
+      await page.waitForFunction(() => document.getElementById('date-wheel-month').dataset.countYear === '2025');
+      assert.deepEqual(await counts(), Array.from({ length: 12 }, (_, i) => i === 9 ? '4枚' : i === 10 ? '1,234枚' : '0枚'));
+      assert.equal(await page.locator('#date-wheel-month').evaluate(node => node.scrollTop), monthTop);
+      assert.equal(await page.locator('#date-wheel-all').textContent(), 'すべて（1,298枚）');
+      assert.equal(requests.length, requestCount, 'browsing years never fetches photos');
+      await page.locator('#date-wheel-year [data-value="2024"]').click();
+      assert.deepEqual(await counts(), Array(12).fill('0枚'), 'an empty year retains all 12 selectable months');
+      assert.equal(await page.locator('#date-wheel-month button:disabled').count(), 0);
+      await page.locator('#date-wheel-year [data-value="2025"]').click();
+      if (process.env.TROOM_ALBUM_SCREENSHOT_DIR) {
+        await mkdir(process.env.TROOM_ALBUM_SCREENSHOT_DIR, { recursive: true });
+        await page.screenshot({ path: join(process.env.TROOM_ALBUM_SCREENSHOT_DIR, `month-picker-${name}.png`) });
+      }
+      await page.click('#date-wheel-cancel');
+      await page.waitForFunction(() => !document.getElementById('date-wheel-dialog').open);
+      assert.equal(await page.locator('#photo-month-filter').evaluate(node => node.value), '');
+      assert.equal(await page.locator('#photo-month-filter').evaluate(node => node === document.activeElement), true);
+      assert.equal(requests.length, requestCount, 'cancel does not filter');
+      await page.click('#photo-month-filter');
+      await page.waitForSelector('#date-wheel-dialog[open]');
+      await page.evaluate(() => history.back());
+      await page.waitForFunction(() => !document.getElementById('date-wheel-dialog').open);
+      assert.equal(await page.locator('#camera-roll-dialog').evaluate(node => node.open), true);
       assert.equal(await page.locator('#photo-sort-button').isVisible(), false);
       assert.equal(requests.at(-1).order, undefined);
       await Promise.all([page.waitForResponse(r => r.url().includes('/api/photos?') && r.url().includes('month=2026-10')),
-        page.selectOption('#photo-month-filter', '2026-10')]);
+        selectAlbumMonth(page, '2026-10')]);
       await waitFirst(1);
       assert.equal(requests.at(-1).order, 'oldest');
       assert.equal(await page.locator('#photo-sort-button').getAttribute('aria-pressed'), 'true');
@@ -135,11 +185,11 @@ try {
       assert.equal((await order())[0], 60);
       await page.click('#photo-sort-button');
       await waitFirst(1);
-      await page.selectOption('#photo-month-filter', '');
+      await selectAlbumMonth(page, '');
       await waitFirst(60);
       assert.equal(await page.locator('#photo-sort-button').isVisible(), false);
       assert.equal(requests.at(-1).order, undefined);
-      await page.selectOption('#photo-month-filter', '2026-10');
+      await selectAlbumMonth(page, '2026-10');
       await waitFirst(1);
       assert.equal(requests.at(-1).order, 'oldest');
       assert.equal(requests.at(-1).offset, '0');
