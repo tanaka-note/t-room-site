@@ -159,6 +159,7 @@ function addRow(asset) {
 }
 function openDraft(record, basePrincipal = dataset.metadata.basePrincipal) {
   draft = clone(record); markDirty(false); setMoneyInput($('base-principal'), basePrincipal); $('record-date').value = record.period; $('record-time').value = record.time || '';
+  $('legacy-total').setCustomValidity('');
   $('asset-editors').replaceChildren(); $('legacy-total-label').hidden = record.assets !== null; $('add-asset').hidden = record.assets === null;
   $('editor-note').textContent = record.assets === null ? '移行済みの過去記録には銘柄別データがないため、この日は控除前の合計額を修正します。' : '評価額を編集すると合計を自動計算します。新しい日付を指定すると、その日の記録として保存できます。';
   if (record.assets === null) setMoneyInput($('legacy-total'), record.rawMarketValue); else record.assets.forEach(addRow);

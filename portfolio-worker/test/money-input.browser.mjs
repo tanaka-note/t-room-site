@@ -35,6 +35,11 @@ export async function verifyMoneyInputs(browser,url,routeApi) {
    await pickDate(page,'view-date','2026-10-30');await page.waitForFunction(()=>document.querySelector('.holdings-panel').hidden);await page.locator('#edit-toggle').click();
    const legacy=page.locator('#legacy-total');assert.equal(await legacy.inputValue(),'1,100,000');await legacy.fill('1234567');assert.equal(await legacy.inputValue(),'1,234,567');assert.match(await page.locator('#editor-total').textContent(),/1,234,567/);
    await page.locator('#save-button').click();await page.waitForFunction(()=>document.querySelector('#app-message').textContent.includes('保存しました'));assert.equal((await f.state()).history.find(r=>r.period==='2026-10-30').rawMarketValue,1234567);
+   // An invalid old total must not block saving another date where that field is hidden.
+   await page.locator('#edit-toggle').click();await legacy.fill('12,34');await page.locator('#cancel-edit').click();
+   await pickDate(page,'view-date','2026-10-31');await page.locator('#edit-toggle').click();
+   assert.equal(await legacy.evaluate(el=>el.validity.valid),true);
+   await page.locator('#save-button').click();await page.waitForFunction(()=>document.querySelector('#app-message').textContent.includes('保存しました'));
   } finally {await context.close();f.close();}
  }
  console.log('Money input grouping, caret edits, deletion, paste validation, composition and integer saves passed at 1440/390/320px.');
