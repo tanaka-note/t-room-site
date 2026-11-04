@@ -25,6 +25,8 @@ export async function runDialogs(service) {
   let writes = 0, releaseSave;
   let albumSize = 96, failAlbumOffset = -1, pauseAlbumOffset = -1, releaseAlbum;
   const albumRequests = [];
+  const auditRequests = [];
+  let holdAudit = false, releaseAudit;
   const delayedPhotos = new Set(), pendingPhotos = new Map(), photoWaiters = new Map(), photoRequests = new Map();
   const waitForPhoto = id => pendingPhotos.has(id) ? Promise.resolve() : new Promise(resolve => photoWaiters.set(id, resolve));
   const releasePhoto = id => { pendingPhotos.get(id)?.(); pendingPhotos.delete(id); };
@@ -60,7 +62,12 @@ export async function runDialogs(service) {
       if (path === '/session') return json(response, { authenticated: true, role: 'owner', accountId: account.id, accountName: 'fixture' });
       if (path === '/accounts') return json(response, { accounts: [account] });
       if (path === '/summary') return json(response, { account, month: url.searchParams.get('month'), entries: [], settlements: [settlement], settlementTotals: { incomingYen: 100, outgoingYen: 0 }, openingBalanceYen: 0, closingBalanceYen: 100 });
-      if (path === '/audit-logs') return json(response, { logs: [] });
+      if (path === '/audit-logs') {
+        const accountId = url.searchParams.get('accountId'); auditRequests.push(accountId);
+        if (accountId && holdAudit) { holdAudit = false; await new Promise(resolve => { releaseAudit = resolve; }); }
+        return json(response, { logs: Array.from({ length: 80 }, () => ({ occurredAt: '2026-11-01T00:00:00Z',
+          eventType: 'entry.create', actorName: 'fixture', targetName: accountId ? 'filtered-audit' : 'all-audit' })) });
+      }
       if (request.method !== 'GET') {
         writes++;
         await new Promise(resolveSave => { releaseSave = resolveSave; });
@@ -562,10 +569,39 @@ export async function runDialogs(service) {
         await page.keyboard.press('Escape');
         await closed('entry-dialog');
         await back('settlements-dialog');
-        await page.click('#logs-button');
-        await opened('logs-dialog');
-        await page.locator('[data-close-dialog="logs-dialog"]').click();
-        await closed('logs-dialog');
+        for (const close of ['button', 'escape', 'back', 'backdrop']) {
+          await page.click('#logs-button'); await opened('logs-dialog');
+          await page.selectOption('#logs-account-filter', account.id);
+          await page.waitForFunction(() => document.getElementById('logs-body').textContent.includes('filtered-audit'));
+          await page.locator('#logs-dialog .logs-wrap').evaluate(node => { node.scrollTop = 200; });
+          if (close === 'button') await page.locator('[data-close-dialog="logs-dialog"]').click();
+          else if (close === 'escape') await page.keyboard.press('Escape');
+          else if (close === 'back') await back('logs-dialog');
+          else await background('logs-dialog');
+          await closed('logs-dialog');
+          assert.equal(await page.locator('#logs-account-filter').inputValue(), '');
+          assert.equal(await page.locator('#logs-body tr').count(), 0);
+          if (close === 'back') await page.evaluate(() => history.forward());
+          else await page.click('#logs-button');
+          await opened('logs-dialog');
+          await page.waitForFunction(() => document.getElementById('logs-body').textContent.includes('all-audit'));
+          assert.equal(auditRequests.at(-1), null);
+          assert.equal(await page.locator('#logs-dialog .logs-wrap').evaluate(node => node.scrollTop), 0);
+          await page.locator('[data-close-dialog="logs-dialog"]').click(); await closed('logs-dialog');
+        }
+        await page.click('#logs-button'); await opened('logs-dialog');
+        holdAudit = true; releaseAudit = null;
+        await page.selectOption('#logs-account-filter', account.id);
+        while (!releaseAudit) await new Promise(resolve => setTimeout(resolve, 10));
+        await page.keyboard.press('Escape'); await closed('logs-dialog');
+        await page.click('#logs-button'); await opened('logs-dialog');
+        await page.waitForFunction(() => document.getElementById('logs-body').textContent.includes('all-audit'));
+        const staleAudit = page.waitForResponse(response => response.url().includes('/audit-logs?') && response.url().includes('accountId='));
+        releaseAudit(); await staleAudit;
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        assert.equal(await page.locator('#logs-account-filter').inputValue(), '');
+        assert.doesNotMatch(await page.locator('#logs-body').textContent(), /filtered-audit/);
+        await page.locator('[data-close-dialog="logs-dialog"]').click(); await closed('logs-dialog');
         await page.click('#new-entry-button');
         await opened('entry-dialog');
         await page.fill('#entry-description', 'fixture');

@@ -195,6 +195,48 @@ try {
       assert.equal(requests.at(-1).offset, '0');
       assert.equal(await page.locator('#photo-sort-button').isVisible(), true);
       assert.equal(await page.locator('#photo-sort-button').getAttribute('aria-pressed'), 'true');
+      // Closing the album clears its own filters; closing a child must not.
+      for (const close of ['button', 'escape', 'back', 'backdrop']) {
+        await page.fill('#photo-entry-search', 'reset-fixture');
+        await page.waitForResponse(response => response.url().includes('entryQuery=reset-fixture'));
+        await page.click('#photo-sort-button'); await waitFirst(60);
+        await page.locator('#camera-roll-grid button').first().click();
+        await page.waitForSelector('#photo-viewer-dialog[open]');
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(() => !document.getElementById('photo-viewer-dialog').open);
+        assert.equal(await page.locator('#photo-entry-search').inputValue(), 'reset-fixture');
+        assert.equal(await page.locator('#photo-month-filter').evaluate(node => node.value), '2026-10');
+        const card = await page.locator('#camera-roll-grid button').first().elementHandle();
+        await page.locator('#camera-roll-dialog').evaluate(node => { node.scrollTop = 200; });
+        if (close === 'button') await page.click('[data-close-dialog="camera-roll-dialog"]');
+        else if (close === 'escape') await page.keyboard.press('Escape');
+        else if (close === 'back') await page.evaluate(() => history.back());
+        else {
+          const rect = await page.locator('#camera-roll-dialog').boundingBox();
+          if (options.hasTouch) await page.touchscreen.tap(rect.x / 2, rect.y + 20);
+          else await page.mouse.click(rect.x / 2, rect.y + 20);
+        }
+        await page.waitForFunction(() => !document.getElementById('camera-roll-dialog').open);
+        assert.equal(await page.locator('#photo-entry-search').inputValue(), '');
+        assert.equal(await page.locator('#photo-month-filter').evaluate(node => node.value), '');
+        assert.equal(await card.evaluate(node => node.isConnected), false);
+        await page.click('#camera-roll-button'); await waitFirst(60);
+        assert.equal(await page.locator('#photo-sort-button').isVisible(), false);
+        assert.equal(await page.locator('#camera-roll-dialog').evaluate(node => node.scrollTop), 0);
+        assert.equal(requests.at(-1).month, undefined);
+        assert.equal(requests.at(-1).entryQuery, undefined);
+        assert.equal(requests.at(-1).offset, '0');
+        await selectAlbumMonth(page, '2026-10'); await waitFirst(1);
+      }
+      await page.fill('#photo-entry-search', 'reset-fixture');
+      await page.waitForResponse(response => response.url().includes('entryQuery=reset-fixture'));
+      await page.evaluate(() => history.back());
+      await page.waitForFunction(() => !document.getElementById('camera-roll-dialog').open);
+      await page.evaluate(() => history.forward());
+      await page.waitForSelector('#camera-roll-dialog[open]'); await waitFirst(60);
+      assert.equal(await page.locator('#photo-month-filter').evaluate(node => node.value), '');
+      assert.equal(await page.locator('#photo-entry-search').inputValue(), '');
+      assert.equal(await page.locator('#camera-roll-dialog').evaluate(node => node.scrollTop), 0);
       assert.deepEqual(errors, []);
       console.log(`Album order ${name}: oldest monthly default, toggle, pagination, viewer, return and stale responses passed.`);
     } finally { if (releaseStale) { releaseStale(); releaseStale = null; } await context.close(); }

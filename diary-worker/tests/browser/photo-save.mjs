@@ -51,6 +51,7 @@ const executablePath = engine === chromium ? [process.env.TROOM_CHROMIUM_EXECUTA
   "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Microsoft/Edge/Application/msedge.exe"].find(p => p && existsSync(p)) : undefined;
 const browser = await engine.launch({ headless: true, ...(engine === chromium && process.env.TROOM_CHROMIUM_CHANNEL ? { channel: process.env.TROOM_CHROMIUM_CHANNEL } : executablePath ? { executablePath } : {}) });
 const contexts = [], errors = [];
+const closeDecisions = new WeakMap(), closePrompts = new WeakMap();
 const agents = {
   windows: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/141.0.0.0 Safari/537.36",
   android: "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/141.0.0.0 Mobile Safari/537.36",
@@ -70,6 +71,8 @@ async function setup(method, profile = "windows") {
     window.__directories = JSON.parse(sessionStorage.getItem("fixture-directories") || '[""]');
     window.__directoryCalls = []; window.__pickedFolder = ""; window.__directoryError = null; window.__pickerCalls = 0;
     window.__shares = []; window.__shareResult = "ok"; window.__pickerActivated = false; window.__pickerError = null; window.__shareSupported = true;
+    window.__holdWrite = false; window.__releaseWrite = null;
+    window.__holdShare = false; window.__releaseShare = null;
     window.__persistFileSystem = () => {
       sessionStorage.setItem("fixture-files", JSON.stringify(window.__files));
       sessionStorage.setItem("fixture-directories", JSON.stringify(window.__directories));
@@ -94,7 +97,10 @@ async function setup(method, profile = "windows") {
           if (!options?.create && !(target in window.__files)) throw new DOMException("missing", "NotFoundError");
           return { async createWritable() {
             const chunks = [];
-            return new WritableStream({ write(chunk) { chunks.push(...chunk); }, close() { window.__files[target] = chunks; window.__persistFileSystem(); } });
+            return new WritableStream({ write(chunk) { chunks.push(...chunk); }, async close() {
+              if (window.__holdWrite) await new Promise(resolve => { window.__releaseWrite = resolve; });
+              window.__files[target] = chunks; window.__persistFileSystem();
+            } });
           }, async getFile() { return new File([new Uint8Array(window.__files[target])], name); } };
         }
       };
@@ -103,14 +109,17 @@ async function setup(method, profile = "windows") {
     Object.defineProperty(navigator, "canShare", { configurable: true, value: method === "share" ? () => window.__shareSupported : undefined });
     Object.defineProperty(navigator, "share", { configurable: true, value: method === "share" ? data => {
       const active = navigator.userActivation.isActive;
-      return Promise.all(data.files.map(async file => ({ name: file.name, type: file.type, bytes: [...new Uint8Array(await file.arrayBuffer())] }))).then(files => {
+      return Promise.all(data.files.map(async file => ({ name: file.name, type: file.type, bytes: [...new Uint8Array(await file.arrayBuffer())] }))).then(async files => {
         window.__shares.push({ active, files });
+        if (window.__holdShare) await new Promise(resolve => { window.__releaseShare = resolve; });
         if (window.__shareResult === "cancel") throw new DOMException("cancel", "AbortError");
         if (window.__shareResult === "fail") throw new DOMException("blocked", "NotAllowedError");
       });
     } : undefined });
   }, { method, folderApiAvailable: method === "folder" || touch });
   const page = await context.newPage(); page.on("pageerror", error => errors.push(error.message));
+  closePrompts.set(page, []);
+  page.on("dialog", dialog => { closePrompts.get(page).push(dialog.message()); return closeDecisions.get(page) === false ? dialog.dismiss() : dialog.accept(); });
   await page.goto(`${origin}/diary/`);
   await page.waitForSelector("#app-view:not([hidden])");
   await open(page);
@@ -187,6 +196,10 @@ try {
   await folder.waitForFunction(() => !document.getElementById("photo-save-dialog").open && document.getElementById("camera-roll-dialog").open);
   await folder.click("#photo-save-button");
   await folder.waitForFunction(() => !document.getElementById("photo-save-start").disabled);
+  assert.equal(await folder.locator('#photo-save-from').inputValue(), '2026-11-01', 'Back resets the range on reopening');
+  await folder.click('#photo-save-from');
+  await folder.locator('#date-wheel-day [data-value="2"]').click(); await folder.click('#date-wheel-done');
+  await folder.waitForFunction(() => !document.getElementById('photo-save-start').disabled);
   if (engine === chromium) {
     const periodFolder = "写真_2026-11-02～2026-11-30";
     await folder.evaluate(name => {
@@ -198,10 +211,10 @@ try {
     heldId = photoId(2);
     await folder.click("#photo-save-start");
     await text(folder, "1 / 12枚");
+    closeDecisions.set(folder, false);
     await folder.click('[data-close-dialog="photo-save-dialog"]');
-    await folder.waitForFunction(() => !document.getElementById("photo-save-dialog").open);
-    await folder.keyboard.press("Escape");
-    await folder.waitForFunction(() => !document.getElementById("camera-roll-dialog").open);
+    assert.equal(await folder.locator('#photo-save-dialog').evaluate(dialog => dialog.open), true, 'declining leaves the save running');
+    assert.match(closePrompts.get(folder).at(-1), /再開情報を破棄/);
     assert.equal(await folder.evaluate(() => document.dispatchEvent(new Event("troom:before-auto-update", { cancelable: true }))), false);
     releaseOriginal(); heldId = null;
     await text(folder, "保存が完了");
@@ -218,8 +231,48 @@ try {
     assert.equal((await stored(folder)).folderName, exportName);
     assert.equal(await folder.evaluate(() => window.__pickerActivated), true);
     assert.equal((await stored(folder)).done.length, 12);
-    assert.equal(await folder.evaluate(() => document.dispatchEvent(new Event("troom:before-auto-update", { cancelable: true }))), true);
+    assert.equal(await folder.evaluate(() => document.dispatchEvent(new Event("troom:before-auto-update", { cancelable: true }))), false, 'an open dialog still protects auto-update');
+    await folder.click('[data-close-dialog="photo-save-dialog"]');
+    await folder.waitForFunction(() => !document.getElementById('photo-save-dialog').open);
+    assert.equal(await stored(folder), null, 'closing a completed save clears its checkpoint');
+    assert.deepEqual(await folder.evaluate(() => window.__files), output, 'resetting never removes saved files');
+    await folder.keyboard.press('Escape');
+    await folder.waitForFunction(() => !document.getElementById('camera-roll-dialog').open);
+    assert.equal(await folder.evaluate(() => document.dispatchEvent(new Event('troom:before-auto-update', { cancelable: true }))), true);
     await folder.context().close();
+
+    // A confirmed close aborts the pending original and never advances the queue.
+    const aborting = await setup('folder'); heldId = photoId(2);
+    await aborting.click('#photo-save-start'); await text(aborting, '1 / 12枚');
+    await aborting.keyboard.press('Escape');
+    await aborting.waitForFunction(() => !document.getElementById('photo-save-dialog').open);
+    assert.equal(await stored(aborting), null);
+    const requestsAtClose = originals.length;
+    releaseOriginal(); heldId = null;
+    await aborting.click('#photo-save-button');
+    await aborting.waitForFunction(() => !document.getElementById('photo-save-start').disabled);
+    assert.equal(originals.length, requestsAtClose, 'opening does not resume originals');
+    assert.equal(await aborting.locator('#photo-save-start').textContent(), '保存を開始');
+    assert.equal(await aborting.locator('#photo-save-from').inputValue(), '2026-11-01');
+    assert.equal(await aborting.evaluate(() => Object.keys(window.__files).filter(name => name.includes('/')).length), 1);
+    assert.equal(await aborting.locator('#photo-month-filter').evaluate(node => node.value), '2026-11');
+    await aborting.context().close();
+
+    // If the OS is finalizing a file, keep the screen open until that write settles.
+    const writing = await setup('folder');
+    await writing.evaluate(() => { window.__holdWrite = true; });
+    await writing.click('#photo-save-start');
+    await writing.waitForFunction(() => typeof window.__releaseWrite === 'function');
+    await writing.click('[data-close-dialog="photo-save-dialog"]');
+    assert.equal(await writing.locator('#photo-save-dialog').evaluate(dialog => dialog.open), true);
+    assert.equal(await writing.locator('#photo-save-start').isDisabled(), true);
+    const writingRequests = originals.length;
+    await writing.evaluate(() => { window.__holdWrite = false; window.__releaseWrite(); });
+    await writing.waitForFunction(() => !document.getElementById('photo-save-dialog').open);
+    assert.equal(await stored(writing), null);
+    assert.equal(originals.length, writingRequests);
+    assert.equal(await writing.evaluate(() => Object.keys(window.__files).filter(name => name.includes('/')).length), 1);
+    await writing.context().close();
 
     // Reload keeps only acknowledged IDs; previously completed originals are skipped.
     const resume = await setup("folder"); heldId = photoId(2);
@@ -314,6 +367,73 @@ try {
     await folder.context().close();
   }
 
+  // All explicit dismissals discard prepared/resumable work. Back cancellation
+  // must keep the owned history entry, input and prepared file intact.
+  for (const close of ['button', 'escape', 'back', 'backdrop']) {
+    const dismissing = await setup('browser', 'android');
+    await dismissing.click('#photo-save-start'); await text(dismissing, '元画像を1枚準備');
+    const dismiss = async () => {
+      if (close === 'button') await dismissing.click('[data-close-dialog="photo-save-dialog"]');
+      else if (close === 'escape') await dismissing.keyboard.press('Escape');
+      else if (close === 'back') await dismissing.evaluate(() => history.back());
+      else {
+        const box = await dismissing.locator('#photo-save-dialog').boundingBox();
+        await dismissing.touchscreen.tap(Math.max(1, box.x / 2), box.y + 20);
+      }
+    };
+    if (close === 'back') {
+      closeDecisions.set(dismissing, false);
+      const prompt = dismissing.waitForEvent('dialog'); await dismiss(); await prompt;
+      await dismissing.waitForFunction(() => document.getElementById('photo-save-dialog').open && history.state?.troomDiaryDialogs?.stack.at(-1)?.id === 'photo-save-dialog');
+      assert.equal((await stored(dismissing)).done.length, 0);
+      closeDecisions.set(dismissing, true);
+    }
+    await dismiss();
+    await dismissing.waitForFunction(() => !document.getElementById('photo-save-dialog').open);
+    assert.equal(await stored(dismissing), null);
+    assert.equal(await dismissing.locator('#photo-month-filter').evaluate(node => node.value), '2026-11');
+    if (close === 'back') await dismissing.evaluate(() => history.forward());
+    else await dismissing.click('#photo-save-button');
+    await dismissing.waitForFunction(() => document.getElementById('photo-save-dialog').open && !document.getElementById('photo-save-start').disabled);
+    assert.equal(await dismissing.locator('#photo-save-start').textContent(), '保存を開始');
+    assert.equal(await dismissing.locator('#photo-save-from').inputValue(), '2026-11-01');
+    assert.equal(await stored(dismissing), null);
+    if (close === 'button') {
+      await dismissing.click('[data-close-dialog="photo-save-dialog"]');
+      await dismissing.waitForFunction(() => !document.getElementById('photo-save-dialog').open);
+      await selectAlbumMonth(dismissing, '2024-02');
+      await dismissing.click('#photo-save-button');
+      await dismissing.waitForFunction(() => !document.getElementById('photo-save-start').disabled);
+      assert.equal(await dismissing.locator('#photo-save-from').inputValue(), '2024-02-01');
+      assert.equal(await dismissing.locator('#photo-save-to').inputValue(), '2024-02-29');
+      await dismissing.keyboard.press('Escape');
+      await dismissing.waitForFunction(() => !document.getElementById('photo-save-dialog').open);
+      await dismissing.keyboard.press('Escape');
+      await dismissing.waitForFunction(() => !document.getElementById('camera-roll-dialog').open);
+      await dismissing.click('#camera-roll-button'); await dismissing.click('#photo-save-button');
+      await dismissing.waitForFunction(() => !document.getElementById('photo-save-start').disabled);
+      const month = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit' }).format(new Date());
+      const [year, number] = month.split('-').map(Number);
+      assert.equal(await dismissing.locator('#photo-save-from').inputValue(), `${month}-01`);
+      assert.equal(await dismissing.locator('#photo-save-to').inputValue(), `${month}-${new Date(Date.UTC(year, number, 0)).getUTCDate()}`);
+    }
+    await dismissing.context().close();
+  }
+
+  if (engine === chromium) {
+    const native = await setup('share', 'iphone');
+    await native.click('#photo-save-start'); await text(native, '元画像を1枚準備');
+    await native.evaluate(() => { window.__holdShare = true; });
+    await native.click('#photo-save-start');
+    await native.waitForFunction(() => typeof window.__releaseShare === 'function');
+    await native.click('[data-close-dialog="photo-save-dialog"]');
+    assert.equal(await native.locator('#photo-save-dialog').evaluate(dialog => dialog.open), true, 'wait for an already-open native save sheet');
+    await native.evaluate(() => { window.__releaseShare(); });
+    await native.waitForFunction(() => !document.getElementById('photo-save-dialog').open);
+    assert.equal(await stored(native), null, 'late native completion cannot recreate a discarded checkpoint');
+    await native.context().close();
+  }
+
   // iPhone Safari and iPhone Chrome both hand off exactly one original per tap.
   for (const profile of ["iphone", "iphoneChrome"]) {
     const share = await setup("share", profile);
@@ -379,7 +499,11 @@ try {
     assert.equal(downloads.length, 0, "preparation does not attempt an unactivated download");
     assert.equal(await fallback.evaluate(() => window.__pickerActivated), false);
     for (let i = 0; i < photos.length; i++) {
-      const downloaded = fallback.waitForEvent("download");
+      const downloaded = fallback.waitForEvent("download").catch(async error => {
+        error.message += `\n${JSON.stringify({ profile, i, status: await fallback.locator('#photo-save-status').textContent(),
+          button: await fallback.locator('#photo-save-start').textContent(), checkpoint: await stored(fallback) })}`;
+        throw error;
+      });
       await fallback.click("#photo-save-start");
       const download = await downloaded;
       assert.deepEqual(await readFile(await download.path()), raw);

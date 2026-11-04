@@ -79,6 +79,8 @@ export function createPhotoSaveManager({ api, dialogs, getOwner, getDefaultRange
   let owner = "", epoch = 0, controller, job = null, photos = [], finished = new Set(), batch = [], files = [];
   let phase = "idle", working = false, loading = false, message = "", directory, storageAvailable = true, totalSize = 0;
   let method = photoSaveMethod(), fallbackAvailable = false, downloadUrl = null;
+  let closing = false;
+  const operations = new Set();
   function clearFiles() {
     if (downloadUrl) URL.revokeObjectURL(downloadUrl);
     downloadUrl = null; files = []; batch = [];
@@ -92,19 +94,24 @@ export function createPhotoSaveManager({ api, dialogs, getOwner, getDefaultRange
     try { localStorage.setItem(key(), JSON.stringify({ ...job, done: [...finished], updatedAt: Date.now() })); }
     catch { storageAvailable = false; }
   }
+  function discardRecord() {
+    if (owner) { try { localStorage.removeItem(key()); } catch { storageAvailable = false; } }
+  }
   function render() {
-    nodes.from.disabled = nodes.to.disabled = Boolean(job) || working;
-    for (const button of nodes.dialog.querySelectorAll("[data-date-picker-target]")) button.disabled = Boolean(job) || working;
+    nodes.from.disabled = nodes.to.disabled = Boolean(job) || working || closing;
+    for (const button of nodes.dialog.querySelectorAll("[data-date-picker-target]")) button.disabled = Boolean(job) || working || closing;
     nodes.fallback.hidden = !fallbackAvailable;
-    nodes.fallback.disabled = working || loading;
+    nodes.fallback.disabled = working || loading || closing;
     nodes.start.hidden = phase === "done";
-    nodes.start.disabled = loading || working || phase === "unavailable" || (!job && !photos.length);
+    nodes.start.disabled = loading || working || closing || phase === "unavailable" || (!job && !photos.length);
     nodes.start.textContent = working ? "処理中…" : phase === "ready" ? "この写真を保存"
       : phase === "confirm" ? "保存できたので次へ" : job ? "未完了分を再開" : "保存を開始";
     nodes.pause.hidden = !working;
+    nodes.pause.disabled = closing;
     nodes.retry.hidden = phase !== "confirm";
+    nodes.retry.disabled = working || closing;
     nodes.reset.hidden = !job;
-    nodes.reset.disabled = working;
+    nodes.reset.disabled = working || closing;
     const progress = job ? `${finished.size.toLocaleString()} / ${job.ids.length.toLocaleString()}枚・${formatBytes(totalSize)}` :
       photos.length ? `${photos.length.toLocaleString()}枚・${formatBytes(totalSize)}` : "";
     nodes.status.textContent = [progress, message, !storageAvailable ? "この環境では再開記録を保持できません。" : ""].filter(Boolean).join("　");
@@ -115,12 +122,14 @@ export function createPhotoSaveManager({ api, dialogs, getOwner, getDefaultRange
       : "写真を1枚ずつダウンロードします。保存できたことを確認して次へ進んでください。フォルダへまとめて保存する場合はPC版Chrome・Edgeをご利用ください。";
   }
   function suspend() {
-    persist(); epoch++; controller?.abort(); controller = null;
-    working = loading = false; directory = null; clearFiles(); job = null; photos = []; totalSize = 0; finished = new Set(); owner = "";
+    if (closing) discardRecord(); else persist();
+    epoch++; controller?.abort(); controller = null;
+    working = loading = closing = false; directory = null; clearFiles(); job = null; photos = []; totalSize = 0; finished = new Set(); owner = "";
     method = photoSaveMethod(); fallbackAvailable = false;
     phase = "idle"; message = ""; render();
   }
   function pause() {
+    if (closing) return;
     epoch++; controller?.abort(); controller = null; working = loading = false;
     phase = job ? "paused" : "idle"; clearFiles();
     message = "一時停止しました。未完了分から再開できます。"; persist(); render();
@@ -149,7 +158,7 @@ export function createPhotoSaveManager({ api, dialogs, getOwner, getDefaultRange
       if (current(version)) { message = error.message; if (job) phase = "unavailable"; }
     } finally { if (current(version)) { loading = false; render(); } }
   }
-  async function open() {
+  function prepareOpen() {
     if (!owner || owner !== getOwner()) {
       suspend(); owner = getOwner(); storageAvailable = true;
       try { job = readSaveRecord(localStorage.getItem(key())); } catch { storageAvailable = false; }
@@ -158,9 +167,47 @@ export function createPhotoSaveManager({ api, dialogs, getOwner, getDefaultRange
       const range = job || getDefaultRange();
       nodes.from.value = range.from; nodes.to.value = range.to;
     }
-    dialogs.open("photo-save-dialog");
+  }
+  async function open() {
+    prepareOpen();
+    if (!dialogs.open("photo-save-dialog")) return;
+    nodes.dialog.scrollTop = 0;
     render();
     if (!working && phase !== "ready" && phase !== "confirm") await loadList();
+  }
+  function restore() {
+    if (closing || working || !getOwner()) return false;
+    prepareOpen();
+    render();
+    void loadList();
+    requestAnimationFrame(() => { nodes.dialog.scrollTop = 0; });
+    return true;
+  }
+  function canClose() {
+    if (closing) return false;
+    if ((working || files.length || pending().length) && !window.confirm("保存を中断して閉じますか？未完了分の再開情報を破棄します。保存済みの写真ファイルは残ります。")) return false;
+    if (!operations.size) return true;
+    // Invalidate callbacks first, then wait for the writable stream / native
+    // handoff to settle before closing. Nothing may write after the screen closes.
+    closing = true;
+    const version = ++epoch;
+    controller?.abort(); clearFiles();
+    message = "保存を中断しています…"; render();
+    void Promise.allSettled([...operations]).then(() => {
+      if (!current(version) || !closing) return;
+      working = false;
+      void dialogs.close("photo-save-dialog", { force: true });
+    });
+    return false;
+  }
+  function onClose() {
+    epoch++; controller?.abort(); controller = null;
+    discardRecord();
+    owner = ""; job = null; finished = new Set(); photos = []; totalSize = 0;
+    working = loading = closing = false; directory = null; clearFiles();
+    method = photoSaveMethod(); fallbackAvailable = false; phase = "idle"; message = "";
+    const range = getDefaultRange(); nodes.from.value = range.from; nodes.to.value = range.to;
+    nodes.dialog.scrollTop = 0; render();
   }
   function chooseBatch() {
     const id = pending()[0];
@@ -309,7 +356,7 @@ export function createPhotoSaveManager({ api, dialogs, getOwner, getDefaultRange
     }
   }
   function reset() {
-    if (working) return;
+    if (working || closing) return;
     try { localStorage.removeItem(key()); } catch { storageAvailable = false; }
     epoch++; controller?.abort(); job = null; finished = new Set(); clearFiles(); directory = null;
     method = photoSaveMethod(); fallbackAvailable = false;
@@ -324,10 +371,14 @@ export function createPhotoSaveManager({ api, dialogs, getOwner, getDefaultRange
     clearFiles(); directory = null; method = "browser"; fallbackAvailable = false;
     phase = job ? "paused" : "idle"; message = "写真を1枚ずつダウンロードします。"; render();
   });
-  nodes.start.addEventListener("click", () => { void start(); });
+  nodes.start.addEventListener("click", () => {
+    if (closing) return;
+    const operation = start(); operations.add(operation);
+    operation.then(() => operations.delete(operation), () => operations.delete(operation));
+  });
   nodes.pause.addEventListener("click", pause);
   nodes.retry.addEventListener("click", () => { clearFiles(); phase = "paused"; message = "未確認の分を再試行できます。重複保存にご注意ください。"; render(); });
   nodes.reset.addEventListener("click", reset);
   window.addEventListener("pagehide", () => { if (owner) pause(); });
-  return { open, suspend, get busy() { return working || files.length > 0; } };
+  return { open, restore, canClose, onClose, suspend, get busy() { return working || closing || files.length > 0; } };
 }
