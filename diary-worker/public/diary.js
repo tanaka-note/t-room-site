@@ -128,6 +128,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     photoEntryQuery: "",
     photoMonth: "",
     photoMonthCounts: null,
+    albumVisit: 0,
     photoOrder: "newest",
     photoRequestId: 0,
     photoLoading: false,
@@ -1562,14 +1563,29 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       },
       onClose: finishEntryClose
     });
-    dialogs.register("camera-roll-dialog", { scrollRoots: () => [], restore: canView, onClose: finishCameraRollClose });
-    dialogs.register("photo-save-dialog", { restore: canView });
+    dialogs.register("camera-roll-dialog", {
+      scrollRoots: () => [],
+      restore: () => {
+        if (!canView()) return false;
+        void loadCameraRoll();
+        window.requestAnimationFrame(() => { elements.cameraRollDialog.scrollTop = 0; });
+        return true;
+      },
+      onClose: finishCameraRollClose
+    });
+    dialogs.register("photo-save-dialog", {
+      guard: () => photoSaver?.canClose() ?? true,
+      restore: () => canView() && Boolean(photoSaver?.restore()),
+      onClose: () => photoSaver?.onClose()
+    });
     dialogs.register("photo-viewer-dialog", {
       scrollRoots: () => [],
       guard: () => !state.photoDeleteBusy,
-      capture: () => ({ photos: state.viewerPhotos, index: state.viewerIndex, photoId: state.viewerPhotos[state.viewerIndex]?.id }),
+      capture: () => ({ photos: state.viewerPhotos, index: state.viewerIndex, photoId: state.viewerPhotos[state.viewerIndex]?.id,
+        albumVisit: elements.cameraRollDialog.open ? state.albumVisit : null }),
       restore: saved => {
         if (!canView() || !photoViewer) return false;
+        if (saved.albumVisit != null && saved.albumVisit !== state.albumVisit) return false;
         removeDeletedPhotos(saved.photos);
         if (!saved.photos.length) return false;
         state.viewerPhotos = saved.photos;
@@ -2911,20 +2927,27 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function openCameraRoll() {
-    updatePhotoSortButton();
     dialogs.open("camera-roll-dialog");
+    elements.cameraRollDialog.scrollTop = 0;
+    await loadCameraRoll();
+  }
+
+  async function loadCameraRoll() {
+    const visit = state.albumVisit;
+    updatePhotoSortButton();
     elements.cameraRollStatus.textContent = "写真を読み込んでいます...";
     try {
       await Promise.all([loadPhotoMeta(), loadPhotos(true)]);
     } catch (error) {
-      elements.cameraRollStatus.textContent = error.message;
+      if (visit === state.albumVisit && elements.cameraRollDialog.open) elements.cameraRollStatus.textContent = error.message;
     }
   }
 
   async function loadPhotoMeta() {
     const generation = sessionGeneration;
+    const visit = state.albumVisit;
     const result = await api("/photos/meta");
-    if (generation !== sessionGeneration) return;
+    if (generation !== sessionGeneration || visit !== state.albumVisit) return;
     state.photoMonthCounts = new Map((result.months || []).map(item => [item.value, Number(item.count || 0)]));
     renderPhotoMonthFilter();
     if (elements.dateWheelDialog.open && state.dateWheelMode === "month") renderPhotoMonthCounts();
@@ -3226,8 +3249,21 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function finishCameraRollClose() {
     viewerOpenRequest += 1;
     cancelCameraRollLoad();
+    state.albumVisit++;
+    state.photoMonth = "";
+    state.photoEntryQuery = "";
+    state.photoOrder = "newest";
+    state.photos = [];
+    state.photoOffset = 0;
+    state.photoHasMore = false;
+    elements.photoEntrySearch.value = "";
+    renderPhotoMonthFilter();
+    updatePhotoSortButton();
+    elements.cameraRollGrid.replaceChildren();
+    elements.cameraRollStatus.textContent = "";
+    elements.cameraRollMore.hidden = true;
+    elements.cameraRollDialog.scrollTop = 0;
     if (elements.cameraRollDialog.open) elements.cameraRollDialog.close();
-
   }
 
   function closePhotoViewerDialog(afterClose = null) {
