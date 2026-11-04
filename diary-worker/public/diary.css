@@ -1729,7 +1729,8 @@ button:disabled {
 }
 
 .camera-roll-filters input,
-.camera-roll-filters select {
+.camera-roll-filters select,
+#photo-month-filter {
   width: 100%;
   min-height: 44px;
   border: 1px solid var(--line);
@@ -1738,6 +1739,8 @@ button:disabled {
   color: var(--ink);
   background: #fff;
 }
+
+#photo-month-filter { text-align: left; }
 
 .camera-roll-grid {
   display: grid;
@@ -2016,6 +2019,40 @@ button:disabled {
   gap: 8px;
   padding-top: 10px;
 }
+
+.date-wheel-window[data-mode="month"] { grid-template-columns: 1fr 1.25fr; }
+
+.date-wheel-all {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.date-wheel-all[hidden], .date-wheel-group[hidden] { display: none; }
+
+.date-wheel-window[data-mode="month"] #date-wheel-month .date-wheel-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.date-wheel-count {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.date-wheel-option[data-empty="true"] .date-wheel-count { opacity: 0.65; }
 
 .date-wheel-highlight {
   position: absolute;

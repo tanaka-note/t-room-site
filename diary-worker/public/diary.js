@@ -97,6 +97,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     editorToolbarOpen: false,
     dateDraft: null,
     dateWheelTarget: null,
+    dateWheelMode: "date",
     dateWheelTimers: {},
     dateWheelScrollVersion: 0,
     searchTimer: null,
@@ -126,6 +127,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     photoHasMore: false,
     photoEntryQuery: "",
     photoMonth: "",
+    photoMonthCounts: null,
     photoOrder: "newest",
     photoRequestId: 0,
     photoLoading: false,
@@ -248,6 +250,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     dateWheelCancel: document.querySelector("#date-wheel-cancel"),
     dateWheelDone: document.querySelector("#date-wheel-done"),
     dateWheelValue: document.querySelector("#date-wheel-value"),
+    dateWheelTitle: document.querySelector("#date-wheel-title"),
+    dateWheelAll: document.querySelector("#date-wheel-all"),
     dateWheelYear: document.querySelector("#date-wheel-year"),
     dateWheelMonth: document.querySelector("#date-wheel-month"),
     dateWheelDay: document.querySelector("#date-wheel-day"),
@@ -501,6 +505,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     bindDateInput(elements.entryDate);
     elements.dateWheelCancel.addEventListener("click", closeDateWheel);
     elements.dateWheelDone.addEventListener("click", applyDateWheel);
+    elements.dateWheelAll.addEventListener("click", () => {
+      if (state.dateWheelMode !== "month") return;
+      setPhotoMonth("");
+      closeDateWheel();
+    });
+    elements.photoMonthFilter.addEventListener("click", () => openDateWheel(elements.photoMonthFilter));
 
     bindDateWheel(elements.dateWheelYear, "year");
     bindDateWheel(elements.dateWheelMonth, "month");
@@ -522,6 +532,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.photoMonthFilter.addEventListener("change", () => {
       const previousMonth = state.photoMonth;
       state.photoMonth = elements.photoMonthFilter.value;
+      renderPhotoMonthFilter();
       if (!state.photoMonth) state.photoOrder = "newest";
       else if (!previousMonth) state.photoOrder = "oldest";
       updatePhotoSortButton();
@@ -1589,6 +1600,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     dialogs.register("date-wheel-dialog", { backdrop: applyDateWheel, onClose: () => {
       for (const timer of Object.values(state.dateWheelTimers)) window.clearTimeout(timer);
       state.dateWheelTarget = null;
+      state.dateDraft = null;
     } });
   }
 
@@ -2913,15 +2925,46 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     const generation = sessionGeneration;
     const result = await api("/photos/meta");
     if (generation !== sessionGeneration) return;
-    const monthValue = state.photoMonth;
-    const months = result.months || [];
-    if (monthValue && !months.some(item => item.value === monthValue)) months.push({ value: monthValue, count: 0 });
-    const totalCount = months.reduce((total, item) => total + Number(item.count || 0), 0);
-    elements.photoMonthFilter.replaceChildren(createOption("", `すべて（${totalCount.toLocaleString("ja-JP")}）`), ...months.map((item) => (
-      createOption(item.value, `${formatMonth(item.value)}（${Number(item.count || 0).toLocaleString("ja-JP")}）`)
-    )));
-    elements.photoMonthFilter.value = monthValue;
+    state.photoMonthCounts = new Map((result.months || []).map(item => [item.value, Number(item.count || 0)]));
+    renderPhotoMonthFilter();
+    if (elements.dateWheelDialog.open && state.dateWheelMode === "month") renderPhotoMonthCounts();
     updatePhotoSortButton();
+  }
+
+  function photoCountLabel(month = "") {
+    if (!state.photoMonthCounts) return "";
+    const count = month ? state.photoMonthCounts.get(month) || 0
+      : [...state.photoMonthCounts.values()].reduce((total, value) => total + value, 0);
+    return `${count.toLocaleString("ja-JP")}枚`;
+  }
+
+  function renderPhotoMonthFilter() {
+    const label = state.photoMonth ? formatMonth(state.photoMonth) : "すべて";
+    const count = photoCountLabel(state.photoMonth);
+    elements.photoMonthFilter.value = state.photoMonth;
+    elements.photoMonthFilter.textContent = label + (count ? `（${count}）` : "");
+  }
+
+  function setPhotoMonth(value) {
+    if (elements.photoMonthFilter.value === value) return;
+    elements.photoMonthFilter.value = value;
+    elements.photoMonthFilter.dispatchEvent(new Event("input", { bubbles: true }));
+    elements.photoMonthFilter.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function renderPhotoMonthCounts() {
+    const year = state.dateDraft.year;
+    elements.dateWheelMonth.dataset.countYear = String(year);
+    for (const option of elements.dateWheelMonth.querySelectorAll(".date-wheel-option")) {
+      const month = Number(option.dataset.value);
+      const value = `${year}-${String(month).padStart(2, "0")}`;
+      const count = photoCountLabel(value);
+      option.querySelector(".date-wheel-count").textContent = count;
+      option.dataset.empty = String(!state.photoMonthCounts?.get(value));
+      option.setAttribute("aria-label", `${year}年${month}月` + (count ? `、${count}` : ""));
+    }
+    const total = photoCountLabel();
+    elements.dateWheelAll.textContent = "すべて" + (total ? `（${total}）` : "");
   }
 
   function updatePhotoSortButton() {
@@ -3267,6 +3310,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function openDateWheel(target = elements.entryDate) {
     if (elements.dateWheelDialog.open) return;
     state.dateWheelTarget = target;
+    state.dateWheelMode = target === elements.photoMonthFilter ? "month" : "date";
     setDateDraft(target.value || japanDateString());
     renderDateWheel();
     dialogs.open("date-wheel-dialog");
@@ -3278,7 +3322,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function applyDateWheel() {
     if (!state.dateDraft) return closeDateWheel();
-    const nextValue = datePartsToString(state.dateDraft);
+    if (state.dateWheelMode === "month") {
+      // Commit the visible month even if a touch scroll's debounce is still pending.
+      for (const [column, key] of [[elements.dateWheelYear, "year"], [elements.dateWheelMonth, "month"]]) {
+        window.clearTimeout(state.dateWheelTimers[key]);
+        if (column.dataset.settingScroll !== "true") updateDateWheelFromScroll(column, key);
+      }
+    }
+    const nextValue = state.dateWheelMode === "month"
+      ? TRoomDatePicker.formatValue(state.dateDraft, "month") : datePartsToString(state.dateDraft);
     const target = state.dateWheelTarget || elements.entryDate;
     if (target.value !== nextValue) {
       target.value = nextValue;
@@ -3300,9 +3352,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function renderDateWheel() {
     if (!state.dateDraft) return;
+    const monthOnly = state.dateWheelMode === "month";
+    elements.dateWheelTitle.textContent = monthOnly ? "年月を選択" : "日付を選択";
+    elements.dateWheelDialog.querySelector(".date-wheel-window").dataset.mode = state.dateWheelMode;
+    elements.dateWheelDay.parentElement.hidden = monthOnly;
+    elements.dateWheelAll.hidden = !monthOnly;
     fillDateWheel(elements.dateWheelYear, range(1900, 2100), state.dateDraft.year, "年");
     fillDateWheel(elements.dateWheelMonth, range(1, 12), state.dateDraft.month, "月");
-    renderDayWheel();
+    if (monthOnly) renderPhotoMonthCounts();
+    else renderDayWheel();
     updateDateWheelValue();
   }
 
@@ -3324,7 +3382,13 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       button.dataset.index = String(index);
       button.setAttribute("role", "option");
       button.setAttribute("aria-selected", String(value === selected));
-      button.textContent = `${value}${suffix}`;
+      if (state.dateWheelMode === "month" && column === elements.dateWheelMonth) {
+        const label = document.createElement("span");
+        label.textContent = `${value}${suffix}`;
+        const count = document.createElement("small");
+        count.className = "date-wheel-count";
+        button.append(label, count);
+      } else button.textContent = `${value}${suffix}`;
       return button;
     }));
     const selectedIndex = Math.max(0, values.indexOf(selected));
@@ -3351,7 +3415,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       const value = Number(option.dataset.value);
       if (state.dateDraft) {
         state.dateDraft[key] = value;
-        if (key === "year" || key === "month") renderDayWheel();
+        if (state.dateWheelMode === "month") {
+          if (key === "year") renderPhotoMonthCounts();
+        } else if (key === "year" || key === "month") renderDayWheel();
         updateDateWheelValue();
       }
       column.querySelectorAll(".date-wheel-option").forEach((item) => {
@@ -3384,13 +3450,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     if (state.dateDraft[key] === value) return;
     state.dateDraft[key] = value;
     options.forEach((item, itemIndex) => item.setAttribute("aria-selected", String(itemIndex === index)));
-    if (key === "year" || key === "month") renderDayWheel();
+    if (state.dateWheelMode === "month") {
+      if (key === "year") renderPhotoMonthCounts();
+    } else if (key === "year" || key === "month") renderDayWheel();
     updateDateWheelValue();
   }
 
   function updateDateWheelValue() {
     const { year, month, day } = state.dateDraft;
-    elements.dateWheelValue.textContent = `${year}年${month}月${day}日`;
+    elements.dateWheelValue.textContent = `${year}年${month}月` + (state.dateWheelMode === "month" ? "" : `${day}日`);
   }
 
   function datePartsToString({ year, month, day }) {
@@ -4142,6 +4210,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     cancelCameraRollLoad();
     state.photoEntryQuery = "";
     state.photoMonth = "";
+    state.photoMonthCounts = null;
+    renderPhotoMonthFilter();
+    elements.dateWheelMonth.replaceChildren();
+    elements.dateWheelAll.textContent = "すべて";
     state.photoOrder = "newest";
     updatePhotoSortButton();
     state.viewerPhotos = [];

@@ -1,3 +1,4 @@
+import { selectAlbumMonth } from "./album-month-fixture.mjs";
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -90,7 +91,7 @@ try {
       await page.goto(`${origin}/diary/`);
       await page.waitForSelector('#app-view:not([hidden])');
       await page.click('#camera-roll-button'); await open('camera-roll-dialog');
-      await page.selectOption('#photo-month-filter', '2026-10');
+      await selectAlbumMonth(page, '2026-10');
       await page.fill('#photo-entry-search', 'fixture');
       await page.waitForFunction(() => document.querySelectorAll('[data-photo-id]').length === 48 && !document.getElementById('camera-roll-more').disabled);
       await page.waitForTimeout(350);
@@ -122,7 +123,7 @@ try {
       await page.waitForFunction(() => document.getElementById('photo-viewer-image').alt === 'fixture-21.png');
       assert.equal(await page.locator('#photo-download-original').getAttribute('href'), '/original/21?download=1');
       assert.equal(await page.locator(`[data-photo-id="${photoId(20)}"]`).count(), 0);
-      assert.match(await page.locator('#photo-month-filter option[value="2026-10"]').textContent(), /58/);
+      assert.match(await page.locator('#photo-month-filter').textContent(), /58/);
       failDelete = true;
       await confirm(); await page.click('#delete-confirm-yes'); await closed('delete-confirm-dialog');
       assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-21.png');
@@ -146,14 +147,18 @@ try {
       await confirm(); await page.click('#delete-confirm-yes'); await closed('delete-confirm-dialog');
       await page.waitForFunction(() => document.getElementById('photo-viewer-image').alt === 'fixture-58.png');
       await page.keyboard.press('Escape'); await closed('photo-viewer-dialog');
-      await page.selectOption('#photo-month-filter', '2026-11');
+      await selectAlbumMonth(page, '2026-11');
       await page.waitForFunction(() => document.querySelectorAll('[data-photo-id]').length === 1);
       await clickPhoto(60); await open('photo-viewer-dialog');
       await confirm(); await page.click('#delete-confirm-yes'); await closed('photo-viewer-dialog');
       assert.equal(await page.locator('#camera-roll-dialog').evaluate(d => d.open), true);
-      assert.equal(await page.locator('#photo-month-filter').inputValue(), '2026-11', 'empty selected month is retained');
-      assert.match(await page.locator('#photo-month-filter option:checked').textContent(), /0/);
+      assert.equal(await page.locator('#photo-month-filter').evaluate(node => node.value), '2026-11', 'empty selected month is retained');
+      assert.match(await page.locator('#photo-month-filter').textContent(), /0/);
       assert.equal(await page.locator('[data-photo-id]').count(), 0);
+      await page.click('#photo-month-filter'); await open('date-wheel-dialog');
+      assert.equal(await page.locator('#date-wheel-month [data-value="11"] .date-wheel-count').textContent(), '0枚');
+      assert.equal(await page.locator('#date-wheel-all').textContent(), 'すべて（57枚）', 'deletion refreshes the picker total too');
+      await page.keyboard.press('Escape'); await closed('date-wheel-dialog');
       await page.keyboard.press('Escape'); await closed('camera-roll-dialog');
       await page.click('[data-entry-id="1"]'); await open('entry-dialog');
       await page.locator('#entry-dialog .entry-photo').first().click(); await open('photo-viewer-dialog');
