@@ -134,25 +134,6 @@
       "deployCommand": "pnpm run site:deploy"
     },
     {
-      "id": "asset-report",
-      "name": "資産運用報告ページ",
-      "publicUrls": ["https://tanaka-note.com/asset-report-k7m4q9x2/"],
-      "entrypoints": ["asset-report-k7m4q9x2/index.html"],
-      "buildRoots": ["asset-report-k7m4q9x2"],
-      "buildMode": "content-hash",
-      "serviceWorker": "asset-report-k7m4q9x2/service-worker.js",
-      "serviceWorkerUrl": "./service-worker.js",
-      "cachePrefix": "asset-report-shell-",
-      "cacheNameConstant": "CACHE_NAME",
-      "precacheConstant": "APP_SHELL",
-      "precacheMode": "html",
-      "manifest": "asset-report-k7m4q9x2/manifest.webmanifest",
-      "twa": null,
-      "deployTarget": "t-room-site",
-      "deployCwd": ".",
-      "deployCommand": "pnpm run site:deploy"
-    },
-    {
       "id": "diary",
       "name": "日記",
       "publicUrls": ["https://tanaka-note.com/diary/", "https://tanaka-note.com/diary/investment/", "https://tanaka-note.com/diary/favorites/"],
@@ -664,6 +645,7 @@
     }
   ],
   "excludedHtml": [
+    { "path": "asset-report-k7m4q9x2/index.html", "reason": "公開停止済みの移行検証用ソース。公開assetsに含めず終了用Workerだけを配信" },
     { "path": "learning/sharoushi/logs/template.html", "reason": "記事生成用テンプレート" },
     { "path": "cloud-worker/public/offline.html", "reason": "Service Workerオフラインfallback" }
   ]

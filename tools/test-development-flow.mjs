@@ -39,12 +39,12 @@ test('Health production guard stops incomplete configuration before deploy witho
 
 test('asset report data, rendering, update tools and tests always select the standard site regression', () => {
   for (const path of ['asset-report-k7m4q9x2/report.js', 'asset-report-k7m4q9x2/data/portfolio-data.mjs',
-    'asset-report-k7m4q9x2/portfolio-model.mjs', 'tools/update-asset-report.mjs', 'tools/test-asset-report-data.mjs',
-    'tools/test-asset-report-history.mjs', 'tools/test-asset-report-update.mjs', 'tools/test-asset-report.browser.mjs', 'tools/fixtures/asset-report.mjs']) {
+    'asset-report-k7m4q9x2/portfolio-model.mjs', 'tools/test-asset-report-data.mjs',
+    'tools/test-asset-report-history.mjs', 'tools/test-asset-report-retirement.browser.mjs', 'tools/fixtures/asset-report.mjs']) {
     assert.deepEqual(affected([path]), ['site'], path);
   }
   assert.ok(commands('site').some(command => command.script === 'asset-report:test'));
-  assert.ok(browserTests('site').includes('tools/test-asset-report.browser.mjs'));
+  assert.ok(browserTests('site').includes('tools/test-asset-report-retirement.browser.mjs'));
 });
 
 test('diary JavaScript changes select read-only build freshness verification before regressions', () => {
