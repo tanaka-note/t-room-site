@@ -11,7 +11,7 @@ const session = { authenticated: true, canManageEntries: true, accountName: 'fix
 const original = new Uint8Array([1, 2, 3]);
 const digest = Buffer.from(await crypto.subtle.digest('SHA-256', original)).toString('hex');
 const id = '20000000-0000-5000-8000-000000000001';
-const manifest = { version: 1, id: 'a'.repeat(64), year: 2025, timezone: 'Asia/Tokyo', days: [{
+const manifest2025 = { version: 1, id: 'a'.repeat(64), year: 2025, timezone: 'Asia/Tokyo', days: [{
   date: '2025-01-01', title: '2025-01-01', requestId: '10000000-0000-5000-8000-000000000000', photos: [{
     id, date: '2025-01-01', timestamp: 1735700400, fileName: 'fixture.jpg', mimeType: 'image/jpeg', width: 20, height: 10,
     ...Object.fromEntries(['original', 'display', 'thumbnail'].map(key => [key, { path: `photos/${id}/${key}.${key === 'original' ? 'jpg' : 'webp'}`, bytes: 3, sha256: digest }]))
@@ -51,6 +51,15 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const browser = await chromium.launch({ headless: true });
 const temporary = await mkdtemp(join(tmpdir(), 'diary-migration-folder-'));
 try {
+  for (const year of [2025, 2024]) {
+  const manifest = structuredClone(manifest2025);
+  manifest.year = year;
+  manifest.id = (year === 2024 ? 'b' : 'a').repeat(64);
+  const date = year === 2024 ? '2024-02-29' : '2025-01-01';
+  manifest.days[0].date = manifest.days[0].title = date;
+  manifest.days[0].photos[0].date = date;
+  manifest.days[0].photos[0].timestamp = Date.parse(`${date}T12:00:00+09:00`) / 1000;
+  entry = undefined; requests = 0; staged.clear();
   const page = await browser.newPage();
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(({ manifest }) => {
@@ -74,7 +83,11 @@ try {
     }
     window.showDirectoryPicker = async () => handle();
   }, { manifest });
-  await page.goto(`http://127.0.0.1:${server.address().port}/?takeout-migration=2025`);
+  await page.goto(`http://127.0.0.1:${server.address().port}/?takeout-migration=${year}`);
+  await page.getByRole('heading', { name: `${year}年 写真移行`, exact: true }).waitFor();
+  assert.equal(await page.locator('#migration-through').inputValue(), `${year}-12-31`);
+  assert.equal(await page.locator('#migration-through').getAttribute('min'), `${year}-01-01`);
+  assert.equal(await page.locator('#migration-through').getAttribute('max'), `${year}-12-31`);
   await page.getByRole('button', { name: '移行フォルダを選択', exact: true }).click();
   await page.getByText('準備完了', { exact: true }).waitFor();
   assert.equal(requests, 0, 'selecting files does not upload or write production data');
@@ -82,23 +95,24 @@ try {
   await page.getByText('処理完了：1/1日を保存済み', { exact: true }).first().waitFor();
   assert.equal(entry.status, 'published'); assert.equal(entry.content, `[[写真:${id}]]`);
   const journal = await page.evaluate(() => JSON.parse(window.fixtureStore.get('migration-progress.json')));
-  assert.equal(journal.days['2025-01-01'].status, 'complete');
-  assert.equal(journal.days['2025-01-01'].entryId, 1);
+  assert.equal(journal.days[date].status, 'complete');
+  assert.equal(journal.days[date].entryId, 1);
+  assert.equal(entry.entryDate, date); assert.equal(entry.title, date);
   await page.getByRole('button', { name: '保存結果を照合', exact: true }).click();
   await page.getByText('処理完了：1/1日を保存済み', { exact: true }).first().waitFor();
   assert.equal(requests, 5, 'verification never modifies saved diaries');
   assert.deepEqual(errors, []);
-  console.log('photo migration browser fixture passed (folder, durable journal, API upload, publication, verification)');
+  console.log(`${year} photo migration browser fixture passed (folder, durable journal, API upload, publication, verification)`);
   await page.close();
 
-  const folder = join(temporary, 'package');
+  const folder = join(temporary, String(year), 'package');
   await mkdir(join(folder, 'photos', id), { recursive: true });
   await writeFile(join(folder, 'manifest.json'), JSON.stringify(manifest));
   for (const key of ['original', 'display', 'thumbnail']) await writeFile(join(folder, manifest.days[0].photos[0][key].path), original);
   entry = undefined; requests = 0; staged.clear();
   const standardPage = await browser.newPage();
   standardPage.on('pageerror', error => errors.push(error.message));
-  await standardPage.goto(`http://127.0.0.1:${server.address().port}/?takeout-migration=2025`);
+  await standardPage.goto(`http://127.0.0.1:${server.address().port}/?takeout-migration=${year}`);
   async function chooseFolder() {
     const chooserPromise = standardPage.waitForEvent('filechooser');
     await standardPage.getByLabel('標準のフォルダー選択', { exact: true }).click();
@@ -116,7 +130,7 @@ try {
   const downloadPath = await (await downloadPromise).path();
   const exported = JSON.parse(await readFile(downloadPath, 'utf8'));
   assert.equal(exported.manifestId, manifest.id);
-  assert.equal(exported.days['2025-01-01'].status, 'complete');
+  assert.equal(exported.days[date].status, 'complete');
   assert.ok(exported.checkpoint > 0);
   assert.ok(!('photos' in exported) && !('cookie' in exported) && !('token' in exported));
   await standardPage.reload();
@@ -126,7 +140,17 @@ try {
   await standardPage.getByText('処理完了：1/1日を保存済み', { exact: true }).first().waitFor();
   assert.equal(requests, 5, 'reload resumes IndexedDB journal without duplicate mutation');
   assert.deepEqual(errors, []);
-  console.log('standard directory chooser, IndexedDB checkpoint, progress export, and reload resume passed');
+  console.log(`${year} standard directory chooser, IndexedDB checkpoint, progress export, and reload resume passed`);
+  await standardPage.goto(`http://127.0.0.1:${server.address().port}/?takeout-migration=${year === 2024 ? 2025 : 2024}`);
+  const wrongChooser = standardPage.waitForEvent('filechooser');
+  await standardPage.getByLabel('標準のフォルダー選択', { exact: true }).click();
+  await (await wrongChooser).setFiles(folder);
+  await standardPage.getByText(`選択されたデータは${year}年分です。`, { exact: false }).waitFor();
+  assert.equal(await standardPage.getByRole('button', { name: '終了日まで取り込む', exact: true }).isDisabled(), true);
+  assert.equal(requests, 5, 'wrong-year package cannot upload, publish or change saved diaries');
+  assert.deepEqual(errors, []);
+  await standardPage.close();
+  }
 } finally {
   await browser.close(); await new Promise(resolve => server.close(resolve));
   await rm(temporary, { recursive: true, force: true });

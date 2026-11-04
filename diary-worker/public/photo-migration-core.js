@@ -1,12 +1,14 @@
 // One-off migration uses the existing diary APIs and ordinary authenticated session.
 // The local journal contains identifiers and progress, never cookies or image bytes.
-export function validateManifest(manifest) {
-  if (manifest?.version !== 1 || manifest.year !== 2025 || manifest.timezone !== 'Asia/Tokyo'
+export function validateManifest(manifest, expectedYear = manifest?.year) {
+  if (manifest?.version !== 1 || ![2024, 2025].includes(manifest.year) || manifest.timezone !== 'Asia/Tokyo'
     || !/^[a-f0-9]{64}$/.test(manifest.id) || !Array.isArray(manifest.days)) throw new Error('移行データの形式が違います。');
+  if (manifest.year !== expectedYear) throw new Error(`${expectedYear}年の移行フォルダーを選択してください。選択されたデータは${manifest.year}年分です。`);
+  const datePattern = new RegExp(`^${manifest.year}-\\d{2}-\\d{2}$`);
   const ids = new Set();
   let previousDate = '';
   for (const day of manifest.days) {
-    if (!/^2025-\d{2}-\d{2}$/.test(day.date) || day.date <= previousDate || day.title !== day.date
+    if (!datePattern.test(day.date) || day.date <= previousDate || day.title !== day.date
       || !isUuid(day.requestId) || !Array.isArray(day.photos) || !day.photos.length) throw new Error('日付の指定を確認してください。');
     previousDate = day.date;
     let previous = null;
@@ -64,7 +66,12 @@ export class PhotoMigration {
       || session.loginId !== this.destination.loginId || session.role !== this.destination.role) throw new Error('ログイン先が変更されています。同じアカウントでログインし直してください。');
   }
 
-  async run({ through = '2025-12-31', maxDays = Infinity, verifyOnly = false } = {}) {
+  async run({ through = `${this.manifest.year}-12-31`, maxDays = Infinity, verifyOnly = false } = {}) {
+    if (typeof through !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(through)
+      || through < `${this.manifest.year}-01-01` || through > `${this.manifest.year}-12-31`
+      || !Number.isFinite(Date.parse(through)) || new Date(through).toISOString().slice(0, 10) !== through) {
+      throw new Error(`終了日は${this.manifest.year}年の有効な日付を指定してください。`);
+    }
     await this.checkpoint(); // Prove that durable progress is writable before any mutation.
     let completed = 0;
     for (const day of this.manifest.days) {

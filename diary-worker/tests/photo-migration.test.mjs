@@ -18,6 +18,18 @@ function parallelManifest(count = 3) {
   return value;
 }
 
+function datedManifest(date) {
+  const value = structuredClone(manifest);
+  value.year = Number(date.slice(0, 4));
+  value.id = (value.year === 2024 ? 'b' : 'a').repeat(64);
+  value.days[0].date = value.days[0].title = date;
+  for (const [index, photo] of value.days[0].photos.entries()) {
+    photo.date = date;
+    photo.timestamp = Date.parse(`${date}T12:00:00+09:00`) / 1000 + index;
+  }
+  return value;
+}
+
 function fixture(selectedManifest = manifest) {
   let journal;
   let entry;
@@ -80,6 +92,46 @@ function fixture(selectedManifest = manifest) {
       readFile: async () => bytes, saveJournal: async value => { journal = structuredClone(value); }, shouldStop: () => stop, ...overrides }); }
   };
 }
+
+for (const date of ['2024-02-29', '2024-12-31']) {
+  test(`${date} migrates, resumes and verifies with the target year as the default end date`, async () => {
+    const value = datedManifest(date); const f = fixture(value);
+    f.failure = 'publish';
+    await assert.rejects(f.engine().run(), /lost publish/);
+    await f.engine().run();
+    await f.engine().run({ verifyOnly: true });
+    assert.equal(f.creates, 1); assert.equal(f.uploads, 2);
+    assert.equal(f.entry.entryDate, date); assert.equal(f.entry.title, date);
+    assert.equal(f.entry.content, photoContent(value.days[0]));
+    assert.equal(f.journal.days[date].status, 'complete');
+  });
+}
+
+test('year mismatch and mixed-year data are rejected without changing a 2025 journal', async () => {
+  const f = fixture(); await f.engine().run();
+  const saved = structuredClone(f.journal);
+  assert.throws(() => validateManifest(manifest, 2024), /2024年.*2025年/);
+  const value = datedManifest('2024-02-29');
+  assert.throws(() => validateManifest(value, 2025), /2025年.*2024年/);
+  assert.throws(() => new PhotoMigration({ manifest: value, journal: saved, destination }), /保存先/);
+  value.year = 2025;
+  assert.throws(() => validateManifest(value), /日付/);
+  value.year = 2023;
+  assert.throws(() => validateManifest(value), /形式/);
+  assert.deepEqual(f.journal, saved);
+});
+
+test('2024 cutoff applies and invalid or other-year end dates fail before checkpoints or API calls', async () => {
+  const value = datedManifest('2024-12-31'); const f = fixture(value);
+  await f.engine().run({ through: '2024-12-30' });
+  assert.equal(f.creates, 0);
+  for (const through of ['2025-01-01', '2023-12-31', '2024-02-30', '', null]) {
+    await assert.rejects(f.engine({ api: () => assert.fail('must not call API'),
+      saveJournal: () => assert.fail('must not checkpoint') }).run({ through }), /終了日/);
+  }
+  await f.engine().run();
+  assert.equal(f.journal.days['2024-12-31'].status, 'complete');
+});
 
 test('resume after lost create response does not create a second diary', async () => {
   const f = fixture(); f.failure = 'create';
