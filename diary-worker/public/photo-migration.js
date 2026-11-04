@@ -1,7 +1,8 @@
 const coreUrl = new URL(`photo-migration-core.js${new URL(import.meta.url).search}`, import.meta.url);
 const { PhotoMigration, validateManifest } = await import(coreUrl.href);
 
-export async function mountMigration(initialSession) {
+export async function mountMigration(initialSession, year = 2025) {
+  if (![2024, 2025].includes(year)) throw new Error('移行対象の年が不正です。');
   const stylesheet = document.createElement('link');
   stylesheet.rel = 'stylesheet';
   stylesheet.href = new URL(`photo-migration.css${new URL(import.meta.url).search}`, import.meta.url).href;
@@ -10,13 +11,13 @@ export async function mountMigration(initialSession) {
   document.querySelector('#login-view').hidden = true;
   const view = document.querySelector('#app-view');
   view.hidden = false;
-  view.innerHTML = `<main class="migration-panel"><h1>2025年 写真移行</h1>
+  view.innerHTML = `<main class="migration-panel"><h1>${year}年 写真移行</h1>
     <p id="migration-account"></p><p>指定したフォルダの画像を撮影日ごとにまとめ、日付をタイトルにして保存します。元のZIPは変更しません。</p>
     <button id="migration-folder">移行フォルダを選択</button>
     <label>標準のフォルダー選択 <input id="migration-files" type="file" webkitdirectory multiple></label>
     <p id="migration-storage">選択方法に応じて、フォルダーまたはこのブラウザーに進捗を保存します。</p>
     <p id="migration-summary" role="status">manifest.json がある package フォルダを選択してください。</p>
-    <label>今回の終了日 <input id="migration-through" type="date" value="2025-12-31" min="2025-01-01" max="2025-12-31"></label>
+    <label>今回の終了日 <input id="migration-through" type="date" value="${year}-12-31" min="${year}-01-01" max="${year}-12-31"></label>
     <button id="migration-test" disabled>未処理の1日分を取り込む</button><button id="migration-start" disabled>終了日まで取り込む</button>
     <button id="migration-verify" disabled>保存結果を照合</button><button id="migration-stop" disabled>中断する</button>
     <progress id="migration-progress" value="0" max="1"></progress><p id="migration-state" role="status">待機中</p>
@@ -158,13 +159,13 @@ export async function mountMigration(initialSession) {
   element('folder').addEventListener('click', async () => {
     try {
       if (!window.showDirectoryPicker) throw new Error('PC版ChromeまたはEdgeで開いてください。');
-      directory = await window.showDirectoryPicker({ mode: 'readwrite', id: 'diary-photo-migration-2025' });
+      directory = await window.showDirectoryPicker({ mode: 'readwrite', id: `diary-photo-migration-${year}` });
       selectedFiles = null;
       await prepareSelection();
     } catch (error) { manifest = null; element('state').textContent = error.message; setRunning(false); }
   });
   async function prepareSelection() {
-    manifest = validateManifest(await readJson('manifest.json'));
+    manifest = validateManifest(await readJson('manifest.json'), year);
     await loadJournal();
     new PhotoMigration({ manifest, journal, destination, api, readFile, saveJournal });
     element('storage').textContent = directory ? '進捗をこのフォルダーとブラウザーに保存します。' : '進捗はこのブラウザーに保存します。再開時は同じChromeプロファイルで同じフォルダーを選択してください。写真本体はブラウザーへ永続保存しません。';
@@ -195,6 +196,7 @@ export async function mountMigration(initialSession) {
     setRunning(true);
     element('state').textContent = options.verifyOnly ? '照合中' : '取り込み中';
     try {
+      // Keep the original lock name so old and new tabs, across both years, exclude each other.
       await navigator.locks.request('diary-photo-migration-2025', { ifAvailable: true }, async lock => {
         if (!lock) throw new Error('別のタブで移行中です。');
         // Reload the durable journal after acquiring the lock, including when another tab finished.
