@@ -72,11 +72,64 @@ async function load(period) {
   displayRecord(record);
 }
 function numeric(value) {
-  const normalized = String(value).replaceAll(',', '').trim();
-  if (!/^\d+$/.test(normalized)) throw new Error('金額は0以上の整数円で入力してください。');
-  const number = Number(normalized); if (!Number.isSafeInteger(number) || number > 1e12) throw new Error('金額が大きすぎます。');
+  const text = normalizeMoneyText(value).trim();
+  if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)$/.test(text)) throw new Error('金額は0以上の整数円で入力してください。');
+  const number = Number(text.replaceAll(',', '')); if (!Number.isSafeInteger(number) || number > 1e12) throw new Error('金額が大きすぎます。');
   return number;
 }
+function normalizeMoneyText(value) {
+  return String(value).replace(/[０-９]/g, digit => String(digit.charCodeAt(0) - 0xff10)).replaceAll('，', ',');
+}
+const isMoneyInput = input => input.matches?.('#base-principal, #legacy-total, [data-field="amount"]');
+function formatMoneyInput(input, editing = false) {
+  const original = input.value, start = input.selectionStart, end = input.selectionEnd;
+  const normalized = normalizeMoneyText(original);
+  // Native digit edits can temporarily disturb commas that we inserted ourselves.
+  const candidate = editing && !input.validity.customError ? normalized.replaceAll(',', '') : normalized;
+  if (!candidate.trim()) { input.setCustomValidity(''); return; }
+  try {
+    const value = numeric(candidate);
+    input.value = value.toLocaleString('ja-JP');
+    input.setCustomValidity('');
+    const position = offset => {
+      const digits = normalized.slice(0, offset).replace(/[^0-9]/g, '').length;
+      if (!digits) return 0;
+      let count = 0;
+      for (let i = 0; i < input.value.length; i++) if (/\d/.test(input.value[i]) && ++count === digits) return i + 1;
+      return input.value.length;
+    };
+    if (document.activeElement === input) input.setSelectionRange(position(start), position(end));
+  } catch (error) { input.setCustomValidity(error.message); }
+}
+function setMoneyInput(input, value) { input.value = value; input.setCustomValidity(''); formatMoneyInput(input); }
+$('editor-form').addEventListener('beforeinput', event => {
+  const input = event.target;
+  if (!isMoneyInput(input) || event.isComposing || input.selectionStart !== input.selectionEnd) return;
+  const caret = input.selectionStart;
+  // Delete the adjacent digit too when Backspace/Delete touches a generated comma.
+  if (event.inputType === 'deleteContentBackward' && input.value[caret - 1] === ',') input.setSelectionRange(caret - 2, caret);
+  if (event.inputType === 'deleteContentForward' && input.value[caret] === ',') input.setSelectionRange(caret, caret + 2);
+});
+$('editor-form').addEventListener('paste', event => {
+  const input = event.target;
+  if (!isMoneyInput(input) || !event.clipboardData) return;
+  event.preventDefault();
+  try {
+    const pasted = normalizeMoneyText(event.clipboardData.getData('text')).trim();
+    numeric(pasted);
+    const digits = pasted.replaceAll(',', '');
+    const start = normalizeMoneyText(input.value.slice(0, input.selectionStart)).replaceAll(',', '');
+    const end = normalizeMoneyText(input.value.slice(input.selectionEnd)).replaceAll(',', '');
+    input.value = start + digits + end;
+    input.setSelectionRange(start.length + digits.length, start.length + digits.length);
+    input.setCustomValidity('');
+    input.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertFromPaste'}));
+  } catch (error) { input.setCustomValidity(error.message); input.reportValidity(); }
+});
+$('editor-form').addEventListener('compositionend', event => {
+  if (isMoneyInput(event.target)) { formatMoneyInput(event.target); markDirty(); updateTotal(); }
+});
+$('editor-form').addEventListener('focusout', event => { if (isMoneyInput(event.target)) formatMoneyInput(event.target); });
 function collectDraft() {
   const record = { period: $('record-date').value, time: $('record-time').value || null, assets: draft.assets === null ? null : [], rawMarketValue: 0 };
   if (record.assets === null) record.rawMarketValue = numeric($('legacy-total').value);
@@ -98,22 +151,29 @@ function addRow(asset) {
     const input = document.createElement(field === 'category' ? 'select' : 'input'); input.dataset.field = field;
     if (field === 'category') for (const group of ALLOCATION_GROUPS) { const option = document.createElement('option'); option.value = option.textContent = group.name; input.append(option); }
     else { input.type = 'text'; input.required = true; if (field === 'amount') input.inputMode = 'numeric'; else input.maxLength = 120; }
-    input.value = value; wrapper.append(input); row.append(wrapper);
+    if (field === 'amount') setMoneyInput(input, value); else input.value = value; wrapper.append(input); row.append(wrapper);
   }
   const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '削除';
   remove.onclick = () => { if (busy || !confirm('この日付の保有銘柄から削除しますか？ 過去の記録には影響しません。')) return; row.remove(); markDirty(); updateTotal(); };
   row.append(remove); $('asset-editors').append(row);
 }
 function openDraft(record, basePrincipal = dataset.metadata.basePrincipal) {
-  draft = clone(record); markDirty(false); $('base-principal').value = basePrincipal; $('record-date').value = record.period; $('record-time').value = record.time || '';
+  draft = clone(record); markDirty(false); setMoneyInput($('base-principal'), basePrincipal); $('record-date').value = record.period; $('record-time').value = record.time || '';
   $('asset-editors').replaceChildren(); $('legacy-total-label').hidden = record.assets !== null; $('add-asset').hidden = record.assets === null;
   $('editor-note').textContent = record.assets === null ? '移行済みの過去記録には銘柄別データがないため、この日は控除前の合計額を修正します。' : '評価額を編集すると合計を自動計算します。新しい日付を指定すると、その日の記録として保存できます。';
-  if (record.assets === null) $('legacy-total').value = record.rawMarketValue; else record.assets.forEach(addRow);
+  if (record.assets === null) setMoneyInput($('legacy-total'), record.rawMarketValue); else record.assets.forEach(addRow);
   $('editor-panel').hidden = false; updateTotal();
 }
 $('edit-toggle').onclick = () => { if (!session || busy) return; if (!$('editor-panel').hidden) { if (discard()) { $('editor-panel').hidden = true; markDirty(false); } } else openDraft(selected); };
 $('cancel-edit').onclick = () => { if (!busy && discard()) { $('editor-panel').hidden = true; markDirty(false); } };
-$('editor-form').addEventListener('input', event => { if (event.target.id !== 'record-date') { markDirty(); updateTotal(); } });
+$('editor-form').addEventListener('input', event => {
+  if (event.target.id === 'record-date') return;
+  markDirty();
+  if (event.isComposing) return;
+  if (isMoneyInput(event.target)) formatMoneyInput(event.target,
+    event.inputType?.startsWith('delete') || (event.inputType === 'insertText' && /^[0-9０-９]$/.test(event.data || '')));
+  updateTotal();
+});
 let dateRequest = 0;
 $('record-date').addEventListener('change', async () => {
   if (!draft || busy) return;
