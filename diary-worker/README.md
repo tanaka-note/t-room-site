@@ -90,7 +90,7 @@ API応答の`Server-Timing`は`diary_total`（Workerでの総時間）、`diary_
 
 `scripts/prepare-takeout.py --source <ZIPの保存先> --output <packageフォルダ> --year 2025` は、全分割ZIPのJSONを照合し、日本時間の撮影日ごとに元画像・表示用WebP・サムネイルと `manifest.json` をローカルへ準備する。PythonのPillowとpillow-heifを使用する。元ZIPは変更せず、動画は対象外。同日の同一SHA-256は重複として記録し、撮影日時不明・不一致・非対応画像は除外一覧へ残す。撮影日時はGoogleのJSON、次にEXIFを使い、ファイル作成日時やファイル名から推測しない。
 
-既存の日記へログイン後、2024年分は `/diary/?takeout-migration=2024`、2025年分は `/diary/?takeout-migration=2025` で移行専用画面を開く。準備スクリプトの `--year` も対象年へ合わせ、出力packageは年ごとに分ける。ZIPの保存先はドライブ直下でもよく、分割された全ZIPを同じ保存先へ揃える。ZIP64対応のPython標準zipfileで読むため2GB超のZIPも扱える。画面の年とmanifestの年が異なる場合は、進捗の読込・書込や日記の変更を行わず停止する。終了日もその年の範囲内に制限する。2025年の移行ID・進捗形式・IndexedDBのキーは変更せず、2024年分とはmanifest IDで分離する。旧版を含め年をまたぐ同時実行も同じタブ間ロックで防ぐ。
+既存の日記へログイン後、2023年分は `/diary/?takeout-migration=2023`、2024年分は `/diary/?takeout-migration=2024`、2025年分は `/diary/?takeout-migration=2025` で移行専用画面を開く。準備スクリプトの `--year` も対象年へ合わせ、出力packageは年ごとに分ける。ZIPの保存先はドライブ直下でもよく、分割された全ZIPを同じ保存先へ揃える。ZIP64対応のPython標準zipfileで読むため2GB超のZIPも扱える。画面の年とmanifestの年が異なる場合は、進捗の読込・書込や日記の変更を行わず停止する。終了日もその年の範囲内に制限する。既存年の移行ID・進捗形式・IndexedDBのキーは維持し、各年の進捗はmanifest IDで分離する。旧版を含め年をまたぐ同時実行も同じタブ間ロックで防ぐ。
 
 通常画面にはリンクを追加しない。PC版Chrome/Edgeでpackageフォルダを選び、最初に未処理の1日分を試す。既存APIの認証・認可を維持し、日付がタイトルの下書きへ写真を保存し、全画像を照合してから本文内の撮影時刻順で投稿する。既存の日記がある日は上書きせず停止する。
 

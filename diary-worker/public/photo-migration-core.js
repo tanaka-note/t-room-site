@@ -1,7 +1,7 @@
 // One-off migration uses the existing diary APIs and ordinary authenticated session.
 // The local journal contains identifiers and progress, never cookies or image bytes.
 export function validateManifest(manifest, expectedYear = manifest?.year) {
-  if (manifest?.version !== 1 || ![2024, 2025].includes(manifest.year) || manifest.timezone !== 'Asia/Tokyo'
+  if (manifest?.version !== 1 || ![2023, 2024, 2025].includes(manifest.year) || manifest.timezone !== 'Asia/Tokyo'
     || !/^[a-f0-9]{64}$/.test(manifest.id) || !Array.isArray(manifest.days)) throw new Error('移行データの形式が違います。');
   if (manifest.year !== expectedYear) throw new Error(`${expectedYear}年の移行フォルダーを選択してください。選択されたデータは${manifest.year}年分です。`);
   const datePattern = new RegExp(`^${manifest.year}-\\d{2}-\\d{2}$`);
