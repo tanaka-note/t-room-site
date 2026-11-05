@@ -224,3 +224,59 @@ test('network failure leaves an unverified photo pending and later retries witho
   assert.equal(f.env.BACKUP.writes.filter(k=>k.startsWith('media/verified-photos/')).length,3);
   f.sql.close();
 });
+
+
+test('a partially proven v8 snapshot stays unproven even after remaining photos are copied', async () => {
+  const f=await fixture();
+  const first=await f.batch({maxObjects:1});
+  assert.equal(first.copied,1);
+  const atSnapshot={...f.sql.prepare('SELECT * FROM diary_photos').get()};
+  const identity=JSON.parse(atSnapshot.backup_identity);
+  assert.ok(identity.original);
+  assert.equal(identity.display,undefined);
+  const snapshot={formatVersion:8,backupScope:'d1-only',tables:{diary_photos:{rows:[atSnapshot]}}};
+  f.next();
+  assert.equal((await f.batch()).complete,true);
+  // Later D1 bindings and R2 receipts must not retroactively certify a prior snapshot.
+  await assert.rejects(resolvePhotoManifest(f.env.BACKUP,snapshot),/MediaIdentityUnproven/);
+  const current={...f.sql.prepare('SELECT * FROM diary_photos').get()};
+  const verified=await resolvePhotoManifest(f.env.BACKUP,{...snapshot,tables:{diary_photos:{rows:[current]}}});
+  assert.equal(verified.mediaBackup.objects.length,3);
+  f.sql.close();
+});
+
+test('missing immutable photo proof fails closed even when its receipt and copy still exist', async () => {
+  const f=await fixture();
+  assert.equal((await f.batch()).complete,true);
+  const row={...f.sql.prepare('SELECT * FROM diary_photos').get()};
+  const snapshot={formatVersion:8,backupScope:'d1-only',tables:{diary_photos:{rows:[row]}}};
+  const valid=await resolvePhotoManifest(f.env.BACKUP,snapshot);
+  assert.equal(valid.mediaBackup.objects.length,3);
+  const versions=[...f.env.BACKUP.objects.keys()].filter(k=>k.startsWith('media/photo-versions/'+row.id+'/original/'));
+  assert.equal(versions.length,1);
+  assert.ok(f.env.BACKUP.objects.has(valid.mediaBackup.objects[0].backupKey));
+  assert.ok(f.env.BACKUP.objects.has('media/photo-receipts/'+row.id+'/original.json.gz'));
+  f.env.BACKUP.objects.delete(versions[0]);
+  await assert.rejects(resolvePhotoManifest(f.env.BACKUP,snapshot),/MediaManifestIncomplete/);
+  // No fallback to a matching receipt, number of candidates or timestamps.
+  f.sql.close();
+});
+
+test('restoration detects damaged photo bytes and never rewrites the backup evidence', async () => {
+  const f=await fixture();
+  assert.equal((await f.batch()).complete,true);
+  const row={...f.sql.prepare('SELECT * FROM diary_photos').get()};
+  const payload={formatVersion:8,backupScope:'d1-only',tables:{diary_photos:{rows:[row]}}};
+  const paired=await resolvePhotoManifest(f.env.BACKUP,payload);
+  const affected=paired.mediaBackup.objects.find(o=>o.variant==='original');
+  const object=f.env.BACKUP.objects.get(affected.backupKey);
+  object.bytes=new Uint8Array([9,9,9]); // same length, different SHA-256
+  const isolated=new Bucket();
+  const restored=await restorePhotos({BACKUP:f.env.BACKUP,MEDIA:isolated},paired);
+  assert.equal(restored.complete,false);
+  assert.equal(restored.failed,1);
+  assert.equal(restored.restored,2);
+  assert.equal(await isolated.head(affected.sourceKey),null);
+  assert.deepEqual(f.env.BACKUP.objects.get(affected.backupKey).bytes,new Uint8Array([9,9,9]));
+  f.sql.close();
+});
