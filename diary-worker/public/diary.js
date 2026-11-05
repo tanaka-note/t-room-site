@@ -1,6 +1,6 @@
 export async function startDiary(initialSession, deferredInstallPrompt = null, onReady = () => deferredInstallPrompt, initialScrollIntent = {}) {
   const migrationYear = new URL(location.href).searchParams.get("takeout-migration");
-  if (["2024", "2025"].includes(migrationYear)) {
+  if (["2023", "2024", "2025"].includes(migrationYear)) {
     if (!initialSession?.authenticated || !initialSession.canManageEntries) throw new Error("日記を作成できるアカウントでログインしてください。");
     const migrationUrl = new URL(`photo-migration.js${new URL(import.meta.url).search}`, import.meta.url);
     await (await import(migrationUrl.href)).mountMigration(initialSession, Number(migrationYear));

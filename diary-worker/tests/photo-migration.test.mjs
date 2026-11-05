@@ -21,7 +21,7 @@ function parallelManifest(count = 3) {
 function datedManifest(date) {
   const value = structuredClone(manifest);
   value.year = Number(date.slice(0, 4));
-  value.id = (value.year === 2024 ? 'b' : 'a').repeat(64);
+  value.id = ({ 2023: 'c', 2024: 'b', 2025: 'a' })[value.year].repeat(64);
   value.days[0].date = value.days[0].title = date;
   for (const [index, photo] of value.days[0].photos.entries()) {
     photo.date = date;
@@ -93,7 +93,7 @@ function fixture(selectedManifest = manifest) {
   };
 }
 
-for (const date of ['2024-02-29', '2024-12-31']) {
+for (const date of ['2023-12-31', '2024-02-29', '2024-12-31']) {
   test(`${date} migrates, resumes and verifies with the target year as the default end date`, async () => {
     const value = datedManifest(date); const f = fixture(value);
     f.failure = 'publish';
@@ -116,7 +116,7 @@ test('year mismatch and mixed-year data are rejected without changing a 2025 jou
   assert.throws(() => new PhotoMigration({ manifest: value, journal: saved, destination }), /保存先/);
   value.year = 2025;
   assert.throws(() => validateManifest(value), /日付/);
-  value.year = 2023;
+  value.year = 2022;
   assert.throws(() => validateManifest(value), /形式/);
   assert.deepEqual(f.journal, saved);
 });

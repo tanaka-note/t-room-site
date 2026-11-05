@@ -2,7 +2,7 @@ const coreUrl = new URL(`photo-migration-core.js${new URL(import.meta.url).searc
 const { PhotoMigration, validateManifest } = await import(coreUrl.href);
 
 export async function mountMigration(initialSession, year = 2025) {
-  if (![2024, 2025].includes(year)) throw new Error('移行対象の年が不正です。');
+  if (![2023, 2024, 2025].includes(year)) throw new Error('移行対象の年が不正です。');
   const stylesheet = document.createElement('link');
   stylesheet.rel = 'stylesheet';
   stylesheet.href = new URL(`photo-migration.css${new URL(import.meta.url).search}`, import.meta.url).href;

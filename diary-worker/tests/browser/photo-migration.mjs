@@ -51,11 +51,10 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const browser = await chromium.launch({ headless: true });
 const temporary = await mkdtemp(join(tmpdir(), 'diary-migration-folder-'));
 try {
-  for (const year of [2025, 2024]) {
+  for (const [year, date, manifestKey] of [[2025, '2025-01-01', 'a'], [2024, '2024-02-29', 'b'], [2023, '2023-12-31', 'c']]) {
   const manifest = structuredClone(manifest2025);
   manifest.year = year;
-  manifest.id = (year === 2024 ? 'b' : 'a').repeat(64);
-  const date = year === 2024 ? '2024-02-29' : '2025-01-01';
+  manifest.id = manifestKey.repeat(64);
   manifest.days[0].date = manifest.days[0].title = date;
   manifest.days[0].photos[0].date = date;
   manifest.days[0].photos[0].timestamp = Date.parse(`${date}T12:00:00+09:00`) / 1000;
