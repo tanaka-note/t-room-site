@@ -13,7 +13,7 @@
 - T-CloudはD1の管理情報・暗号化済み鍵情報が対象。R2のファイル本体、動画、サムネイルを複製しない。共有リンクと一時解除状態も自動復元対象にしない。
 - Healthの記録は暗号文のまま保存し、Security側の暗号化済み鍵情報と対応させて復旧する。PRF、平文秘密鍵、復号鍵、Worker Secretsを収集しない。パスキーの秘密鍵は端末側にあり、このバックアップから作成できない。
 - Password hashやサービスの一時セッション、challenge、handoff、Downloaderの処理中ジョブ・一時ファイルは対象外。AIの利用実績と料金予約・再送状態は照合に必要なため保持するが、復旧時に処理を再実行しない。
-- 日記D1は専用R2・03:25 JSTを維持し、写真処理と完全に独立する。写真の未処理・破損・R2障害はD1保存・検証・保持の成否に参加しない。写真は独立した差分保存を継続し、世代削除対象外とする。D1の成功だけで日記全体を復元可能と表示しない。
+- 日記D1は専用R2・03:25 JSTを維持し、写真処理と完全に独立する。写真の未処理・破損・R2障害はD1保存・検証・保持の成否に参加しない。写真本体は日記用R2に保存し、別バケットへの画像バックアップは廃止する。D1の成功だけで日記全体を復元可能と表示しない。
 
 ## D1 exportによる保存
 
@@ -40,60 +40,42 @@ DB単位のR2 CASリースを20分保持し、15分Workflow stepより長くす�
 1. 別途承認されたインフラ手順で、専用Workerに12 D1と`DIARY_BACKUP`、`D1_EXPORT_ACCOUNT_ID`、専用Secret `D1_EXPORT_API_TOKEN`、Workflow `t-room-d1-backup`を準備する。tokenは対象D1のexportに必要な最小権限だけを持たせ、Git・ログへ保存しない。通常のコード公開tokenや読み取り専用MCPの権限を広げない。
    - export APIには対象アカウントの **D1 Write** が必要。2026-11-02の本番API照合で、D1 ReadはDB metadata取得に成功してもexportは401/code 10000で拒否されることを確認した。専用tokenにはD1以外のWorker/R2/token管理権限を付けない。GETによる資格情報の確認だけで公開準備完了とせず、代表DBのWorkflow完了・保存物・成功監査まで確認する。exportは読取操作であり、本番データを変更・復元するAPIは実行しない。
 2. `backup-worker`を専用手順で先に公開し、Workflowの実在・active version・binding・Secret名を読み戻す。新しいpublic route、workers.dev、写真R2本体へのbindingは追加しない。日記の既存バックアップR2とD1だけを追加する。
-3. Diaryの`D1_BACKUPS`はこのWorkflowを参照する。Diary Actions公開は専用WorkerのWorkflow/Secret/日記bindingが未準備ならpreflightで停止する。写真のCronとコピー・再検証・追いつき頻度は変更しない。DB migrationは不要。
-4. 初回定期実行後、12 DBそれぞれのWorkflow完了・成功監査・manifest/part読戻し・既存世代維持を確認する。Cronのdispatch成功だけで完了としない。schema/内容hash/整合性は隔離復元で確認し、本番DBを巻き戻さない。日記写真は独立した従来の残件・検証状態を確認する。
+3. Diaryの`D1_BACKUPS`はこのWorkflowを参照する。Diary Actions公開は専用WorkerのWorkflow/Secret/日記bindingが未準備ならpreflightで停止する。日記D1のCronは03:25 JSTを維持する。DB migrationは不要。
+4. 初回定期実行後、12 DBそれぞれのWorkflow完了・成功監査・manifest/part読戻し・既存世代維持を確認する。Cronのdispatch成功だけで完了としない。schema/内容hash/整合性は隔離復元で確認し、本番DBを巻き戻さない。日記写真のバックアップ・再検証は廃止済みで、D1の成否には含めない。
 5. 問題時はDiaryを先に旧versionへ戻して旧D1 Cronへ戻し、その後専用Workerを戻す。新旧世代・part・写真・証明は削除しない。初回の実環境時間・利用量が想定を超える場合は増枠で押し切らず処理分割を見直す。
 
 バックアップR2は既存の非公開構成・保存時暗号化を維持する。Securityの監査長期保管・Downloader一時R2の扱いは変更せず、バックアップ保管先を毎日再複製する機能は追加しない。
 
-## 日記写真の独立実行と復元
+## 日記写真のバックアップ廃止
 
-時刻はJST。DiaryのCronを文字列で明示的に振り分け、D1と既存cleanupは03:25だけで実行する。写真はD1バックアップ関数・schema guard・snapshot上限に依存せず、写真参照を最大41行ずつ取得する。参照元DB自体の停止は写真処理にも影響する。
+日記写真は既存の `t-room-diary-media` を正本とし、別R2への差分コピー・再検証・初回追いつき処理を廃止する。日記WorkerのCronは `25 18 * * *`（03:25 JST）のみで、D1と従来の通常cleanupを維持する。アップロード・表示・写真管理と `diary/staging/` の正式写真は変更しない。`backup_identity` 列と旧形式のDB復元互換性は維持し、列削除・migrationは行わない。旧写真形式の読取・隔離復元helperは互換試験用に残すが、本番からコピー処理は呼び出さない。
 
-| 用途 | 時刻 | 上限 |
-| --- | --- | --- |
-| D1単独 | 毎日03:25 | 3試行、日次30・月次12世代 |
-| 写真コピー | 毎日03:55 | 40 object、推定I/O 256 MiB、90秒 |
-| 写真再検証 | 毎日04:45〜11:45の毎時45分 | 各40 object、256 MiB、90秒、8枠/日 |
-| 初回追いつき | 04・05時台の05/15/25/35/55分 | 各40 object、256 MiB、90秒、10枠/日、14日間限定 |
+既存画像バックアップの削除対象は **`t-room-diary-backups` バケットの次の6 prefixだけ**。
 
-既存Cloud 03:17、Backup 03:40、Security 03:41/毎時17分、Calendar 04:10、Downloaderの10分刻みと開始時刻をずらす。長引いた別サービスの実行との重複までは保証しない。Cronは非version設定なのでコード公開と別に適用・読み戻しが必要。
+- `media/formal-photos/`
+- `media/verified-photos/`
+- `media/photo-receipts/`
+- `media/photo-versions/`
+- `media/photo-issues/`
+- `_metadata/diary-photos/`
 
-R2 `_metadata/diary-photos/` にコピー/再検証別のカーソル・集計・新着高水位を保存する。新着は過去分より先、初回も前日以降を優先する。過去分はIDのキーセットで最大120 variant/回を巡回する。コピー枠では古い検証レシートを再利用し、深い再検証は別枠だけで行う。新規/変更コピーが検証待ちのため停止しない。
+`diary-worker/scripts/retire-photo-backups.mjs` は削除対象を固定し、定期実行停止の読み戻しと実行中ジョブの猶予を確認してから、最大1,000 keyの明示リストで並列削除する。空prefixによる削除・バケット削除・本体画像バケットの変更要求・D1書込は拒否する。既存の正当な管理者認証を使う呼出元から `retirePhotoBackups({ request, apply: false })` で件数・容量を確認し、承認済みの場合だけ `apply: true` を実行する。Secretはログ・引数・ファイルへ渡さない。削除後は対象0件と、対象外バックアップのkey/ETag/サイズ一覧、本体画像の代表metadataの一致を照合する。
 
-写真全体の同時実行数は1。条件付き書込で5分のリースを取得し、期限切れ後はreceipt/カーソルを更新しない。リースは削除せず期限で回収する。初回実行から14日、または最初の全件コピー確認まで追いつきを許可する。同じcatchup時刻の実行券はcreate-onlyで、1日10枠以上に増えない。理論上限は400 object・2.5 GiB推定I/O・15分の作業枠/日。サイズ・障害で実処理量は小さくなり、完了期限を保証しない。期間は自動延長しない。
+D1の日次・月次manifest/part、旧DB世代、同バケット内の他サービスのデータ、過去のSecurity監査は削除しない。`t-room-diary-media` には削除要求を送らない。削除した画像コピーは復元できないので、D1復元時は正本R2に残る写真を別途照合する。D1の正常表示を画像復元の保証として扱わない。
 
-カーソルはバッチ終端、receiptは各写真の検証直後にSHA確認付きで保存する。中断時は直前バッチを再走査するが確認済み写真は再コピーしない。通信失敗・欠落は各laneの永続再試行journal（最大256項目）へ保存し、次回以降の実行で期限到来分を最大8項目、新着・過去分より先に再試行する。待機は1分から指数増加、最大6時間。journal満杯時は未登録の失敗位置からカーソルを進めない。90秒は次の処理を開始しないための期限で、進行中I/Oの強制中断保証ではない。単体の推定I/Oは写真サイズの6倍なので、通常枠で44,739,242 byte（約42.7 MiB）を超える写真は`oversized`として区別し、優先再試行へ入れず後続を継続する。Backup-dataに単体上限超過・優先再試行待ち件数を表示する。大きな写真の自動コピーには別の処理量設計が必要。
-
-写真は`media/verified-photos/{photoId}/{variant}/{sha256}`へcreate-only保存する。sourceをstreamでSHA-256計算し、コピー時にR2 SHA条件を指定し、保存先を読み戻してSHA・サイズを照合する。source ETagも前後で確認する。破損物は上書きせず`media/photo-issues/`にcreate-onlyの事故記録を保存する。事故はsourceが変更されても自動解除せず、receiptと破損物を手動調査対象として残す。
-
-従来の7日再検証は5,445 objectで平均778 object/日が必要で、従来の最大120 object/日（40×3試行）より大きい。独立枠では30日経過で再検証対象とし、ID順に分散する。8枠で最大320 object/日だが、バイト・時間制約もあるため30日は目安であり上限保証ではない。検証待ちが増え続ければ別の処理量設計が必要。全件毎回のSHA照合はしない。
-
-v1 receiptもSHA・source/copy版・サイズが一致すれば再利用する。初回のD1証明情報付与時はreceiptの新旧によらずsource/copyを深く検証する。写真参照（ID・作成日時・原本サイズ・3種のsource key）と内容SHAを結ぶimmutable検証情報を`media/photo-versions/{photoId}/{variant}/{referenceSha256}/{contentSha256}.json.gz`へ追加し、旧版を残す。検証後だけ`diary_photos.backup_identity`へvariant別source key・SHA-256・byte数を条件付き保存する。同じkeyの既存SHAと異なる内容は破損扱いで、付け替えない。v8 D1は同一transaction、v9 D1は同一exportで参照・証明情報を取得し、D1保存時に写真R2へ問い合わせない。
-
-隔離復元ではv8/v9 D1を空のmigration済みDBへ戻し、account無効化を維持する。v9は`restoreIsolated`が検証済み写真参照をv8互換の`photoPayload`として返す。写真は別途`resolvePhotoManifest(bucket, payload)`で全参照を照合してから`restorePhotos`を隔離R2へ実行し、本体SHAを再照合する。snapshot内の証明SHA・サイズが一致するimmutable版だけを選び、候補数や日時で推測しない。証明がない旧snapshotは候補が1つでも`MediaIdentityUnproven`、証明に一致する版がなければ`MediaManifestIncomplete`で停止する。後日live D1に付与した証明を過去snapshotへ遡及しない。旧v2〜v8のD1は新列をNULLとして復元可能で、v7の明示マニフェストによる写真復元も維持する。
-
-公開時はDiaryのmigration `0022_photo_backup_identity.sql`だけを事前適用し、コード公開後にDiaryのCronを専用手順で適用する。nullable列の追加なので旧コードの通常操作と互換性があり、rollback時も列・証明・写真を削除しない。schema fingerprintの既存本番表記差は、読取精査済みDDLへこの加算migrationを適用した期待値へ更新する。初回検証が済むまで写真の証明はNULLのままで、その間のD1世代は写真の自動対応付けを保証しない。検証後の次のD1世代から証明を含む。
-
-40 object・256 MiB・90秒はアプリの安全枠で、公式上限ではない。[Workers limits](https://developers.cloudflare.com/workers/platform/limits/)はメモリ128 MB、同時接続6、有料プランsubrequest 10,000、1時間未満間隔のCron CPU 30秒、wall time 15分。DigestStreamと逐次実行を使い、全体をbufferしない。[R2 limits](https://developers.cloudflare.com/r2/platform/limits/)の同一key書込は秒1回なので、制御objectはバッチ単位、写真と実行券は異なるkeyに書く。契約枠・実環境CPU/最大メモリ・料金は合成fixtureでは測定していない。
-
-[Bucket Locks](https://developers.cloudflare.com/r2/buckets/bucket-locks/)のprefix限定lockはimmutable写真・検証履歴・事故記録の保護候補。mutable receipt/リース/カーソルへのlockは処理を停止し、日次/月次への無期限lockは保持整理、バケット全体lockは候補の後処理と衝突する。本番lockが空であることを読取確認しただけで今回は変更しない。
+T-Cloudの `Backup-data` は日記DBの成否・世代・容量と他サービスの表示を維持し、廃止した写真の進捗・成否・再検証・容量一覧を表示／取得しない。旧世代の `mediaComplete` も現在の画像コピーの保証として表示しない。日記側の集計cache keyを更新し、旧写真容量を持つcacheを再利用しない。コード／画面変更はPRのmergeと対象公開後に反映し、非version設定のCron停止とデータ削除は別途実施する。
 
 ## 成否と管理画面
 
-開始・成功・失敗・一部未完了・世代整理失敗を、内容を含まない実行ID・時刻・工程・固定理由コード・試行回数として既存Security監査へ記録する。日記を含むD1 Workflowは監査への同期記録と既存Queueへの配送が両方失敗した場合、保存を開始しない。写真ジョブの監査配送と安全なWorkerログは従来どおり維持する。
+開始・成功・失敗・一部未完了・世代整理失敗を、内容を含まない実行ID・時刻・工程・固定理由コード・試行回数として既存Security監査へ記録する。日記を含むD1 Workflowは監査への同期記録と既存Queueへの配送が両方失敗した場合、保存を開始しない。画像バックアップ廃止前の監査履歴は保持する。
 
-通常のCronはDBごとにWorkflowを作成し、1 DBのdispatch失敗でも後続DBを試す。`backup_dispatched`は起動依頼の完了だけを表し、保存成功を意味しない。起動に失敗したDBは固定項目の`backup_dispatch_failed`ログに残し、Cronも失敗する。日記D1のCronもdispatchだけを担当し、写真ジョブとは独立する。
+通常のCronはDBごとにWorkflowを作成し、1 DBのdispatch失敗でも後続DBを試す。`backup_dispatched`は起動依頼の完了だけを表し、保存成功を意味しない。起動に失敗したDBは固定項目の`backup_dispatch_failed`ログに残し、Cronも失敗する。日記D1のCronもdispatchだけを担当し、日記の通常処理とは独立する。
 
 各Workflowは開始記録、公式export・列選別・分割保存・読戻し、成功監査、世代整理を行う。保存失敗・監査不能・整理失敗はWorkflowの失敗終了とし、既存監査へ`backup_failed`または`backup_prune_failed`を残す。安全な固定理由コード以外の例外本文はWorkflowの永続step状態にも渡さない。成功監査を残せない場合は世代整理しない。全体の完了は12 DBそれぞれのWorkflow終端・成功監査・保存世代で確認する。
 
 Cronのdispatch結果とBackup-dataの監査表示は別の確認元。監査RPCとQueueが両方使えない場合、画面に前回の正常状態や実行中が残り得るため、Workflowの状態とCronの失敗も監視する。stepは最大3試行で、同日の正常日次があれば再取得せず検証・月次から再開する。旧bindingなしの互換Cronは従来の同期処理を維持するが、新構成の完了判定には使用しない。
 
 `Backup-data`は最終成功・最新実行・履歴・世代・容量・長期保管月を表示する。正常、実行中、失敗、一部未完了、未実行/遅延、世代整理失敗、状態取得不可を区別する。予定時刻から2時間の猶予後、開始記録自体がない場合も遅延とする。失敗後の成功で過去の失敗履歴を消さない。R2容量・世代一覧は通常6時間cache、手動更新は最短1分。実行状態はそのcacheと分け、アクセス時に監査DBから取得する。取得不能は正常扱いしない。
-
-日記はD1・写真コピー・写真再検証の監査targetを分離する。写真進捗は新規コピー、保存済み、未処理、検証待ち、失敗、破損、保存元なし、未確認を区別する。巡回中は部分集計と開始日時を表示し、未確認を正常扱いしない。D1容量/世代と写真の物理保管容量も別表示する。強制終了は事前の開始記録が残り、終端記録のない実行が猶予後に遅延になる。監査RPC/Queueとも停止した場合は安全なWorkerログとCron失敗も参照する。
-
-写真独立実行の公開順と旧方式の調査事実は[2026-10-31の読取監査](../docs/history/2026-10-31-diary-backup-audit.md)を参照。
 
 ## セキュリティ監査の期限なし保管
 

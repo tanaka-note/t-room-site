@@ -20,7 +20,8 @@ let listCalls = 0;
 // A read-only fixture intentionally has no get, put, delete, copy or body APIs.
 const bucket = { async list({ prefix, cursor, include }) {
   listCalls++;
-  if (!["media/verified-photos/","media/photo-receipts/","media/formal-photos/","media/photo-versions/","media/photo-issues/"].includes(prefix)) assert.deepEqual(include, ["customMetadata", "httpMetadata"]);
+  assert.ok(!prefix.startsWith('media/') && !prefix.startsWith('_metadata/diary-photos/'), 'retired photo storage must never be scanned');
+  assert.deepEqual(include, ["customMetadata", "httpMetadata"]);
   const selected = objects.filter(o => o.key.startsWith(prefix));
   const offset = Number(cursor || 0);
   return { objects: selected.slice(offset, offset + 1), truncated: offset + 1 < selected.length, cursor: String(offset + 1) };
@@ -33,18 +34,17 @@ test("the JavaScript and CSS actually served by the Worker match the source", ()
   }
 });
 
-test("real R2 sizes, pagination, metadata and photo overview without copying", () => {
-  assert.equal(snapshot.backupBytes, 1300);
-  assert.equal(snapshot.backupObjectCount, 5);
+test("D1 sizes and pagination exclude retired photos and their old completion metadata", () => {
+  assert.equal(snapshot.backupBytes, 280);
+  assert.equal(snapshot.backupObjectCount, 3);
   assert.equal(snapshot.daily.objectCount, 2);
   assert.equal(snapshot.monthly.objectCount, 1);
-  assert.equal(snapshot.photo.bytes, 1020);
-  assert.equal(snapshot.photo.objectCount, 2);
-  assert.equal(snapshot.photo.objects, undefined);
-  assert.equal(snapshot.mediaComplete, true);
+  assert.equal(snapshot.photo, undefined);
+  assert.equal(snapshot.photoSummary, undefined);
+  assert.equal(snapshot.mediaComplete, undefined);
   assert.equal(snapshot.lastBackupAt, at.toISOString());
-  assert.equal(snapshot.daily.objects[1].mediaComplete, null);
-  assert.equal(snapshot.monthly.objects[0].mediaComplete, false);
+  assert.equal(snapshot.daily.objects[1].mediaComplete, undefined);
+  assert.equal(snapshot.monthly.objects[0].backupScope, 'd1-only');
 });
 
 test("snapshot cache avoids repeated LIST; explicit refresh rescans after cooldown", async () => {
@@ -64,7 +64,7 @@ test("incomplete pagination fails instead of reporting a partial total", async (
   await assert.rejects(scanBackupMetadata({ async list() { return { objects: [], truncated: true }; } }));
 });
 
-test('photo metadata failure preserves D1 generations and marks missing totals unavailable', async () => {
+test('retired photo metadata cannot make D1 totals unavailable', async () => {
   const partial = await scanBackupMetadata({ async list(options) {
     if (options.prefix.startsWith('media/')) throw new Error('Photo metadata unavailable');
     return bucket.list(options);
@@ -72,10 +72,8 @@ test('photo metadata failure preserves D1 generations and marks missing totals u
   assert.equal(partial.daily.objectCount,2);
   assert.equal(partial.monthly.objectCount,1);
   assert.equal(partial.d1Available,true);
-  assert.equal(partial.photo.available,false);
-  assert.equal(partial.photo.objectCount,null);
-  assert.equal(partial.photo.bytes,null);
-  assert.equal(partial.storagePartial,true);
+  assert.equal(partial.photo,undefined);
+  assert.equal(partial.storagePartial,false);
   assert.equal(partial.backupBytes,280);
 });
 
@@ -110,8 +108,8 @@ test('authorized members and admins share service failures, history and partial 
   try {
     f.env.SERVICE_BACKUPS = { async getSnapshot() { return { backupBytes: 200, services: [{ id: 'health', label: '体調管理', state: 'failed', available: true, history: [{ state: 'failed', reason: 'operation_failed' }] }] }; } };
     const result = (await f.api('/diary-backups')).body;
-    assert.equal(result.backupBytes, 1500);
-    assert.equal(result.diaryBytes, 1300);
+    assert.equal(result.backupBytes, 480);
+    assert.equal(result.diaryBytes, 280);
     assert.equal(result.services[0].state, 'failed');
     assert.deepEqual((await f.api('/diary-backups', 'member', 'GET', member())).body, result);
     f.env.DIARY_BACKUPS.getSnapshot = async () => { throw new Error('Unavailable'); };
@@ -131,7 +129,7 @@ test("admin reads the fixed mount ID despite rename, with actual metadata", asyn
     assert.equal(r.status, 200);
     assert.equal(r.body.folderId, 2850);
     assert.equal(r.body.readOnly, true);
-    assert.equal(r.body.backupBytes, 1300);
+    assert.equal(r.body.backupBytes, 280);
   } finally { f.db.close(); }
 });
 
@@ -229,13 +227,13 @@ test("usage adds backupBytes once; details preserve ordinary files inside Backup
   try {
     const usage = (await f.api("/usage")).body;
     assert.equal(usage.cloudBytes, 100);
-    assert.equal(usage.backupBytes, 1300);
-    assert.equal(usage.activeBytes, 1400);
+    assert.equal(usage.backupBytes, 280);
+    assert.equal(usage.activeBytes, 380);
     assert.equal(usage.activeFileCount, 2);
     assert.equal(usage.trashBytes, 0);
     const details = (await f.api("/usage-details")).body;
-    assert.equal(details.folders.find(o => o.id === 2850).sizeBytes, 1360);
-    assert.equal(details.backup.photo.bytes, 1020);
+    assert.equal(details.folders.find(o => o.id === 2850).sizeBytes, 340);
+    assert.equal(details.backup.photo, undefined);
   } finally { f.db.close(); }
 });
 
@@ -283,7 +281,7 @@ test("actual Cloud/Security handlers validate signed member sessions and reject 
     const admin = await handoff("admin");
     const adminBackup = await api(admin.cookie, "/diary-backups", "GET", undefined, { "X-TCloud-Session": admin.body.sessionCacheId });
     assert.equal(adminBackup.status, 200);
-    assert.equal(adminBackup.body.backupBytes, 1500);
+    assert.equal(adminBackup.body.backupBytes, 480);
     assert.equal(adminBackup.body.services[0].history[0].reason, "operation_failed");
     assert.equal((await api(null, "/diary-backups")).status, 401);
     assert.equal((await api(legacyPasswordSession("admin").cookie, "/diary-backups")).status, 401);

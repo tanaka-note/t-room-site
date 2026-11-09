@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-7364e45637a8";
+const APP_BUILD_ID = "cloud-074196552fef";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -2383,7 +2383,7 @@ async function readDiaryBackupMount(env, session, refresh = false) {
         const other = results[1].status === 'fulfilled' ? results[1].value : null;
         if (!diary && !other) throw new Error('Unavailable');
         const empty = { bytes: 0, objectCount: 0, objects: [] };
-        return { ...(diary || { daily: empty, monthly: empty, photo: empty }),
+        return { ...(diary || { daily: empty, monthly: empty }),
           diaryAvailable: Boolean(diary), diaryBytes: diary?.backupBytes ?? null,
           serviceBackupsAvailable: Boolean(other), services: other?.services || [],
           storageObservedAt: other?.observedAt || diary?.observedAt || null,

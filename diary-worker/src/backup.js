@@ -1,6 +1,6 @@
 import { compress, decode, publishGeneration, withBackupLock } from '../../backup-worker/src/integrity.js';
 import { snapshotStatement, snapshotTables } from '../../backup-worker/src/snapshot.js';
-import { backupPhotos, restorePhotos } from './photo-backup.js';
+import { restorePhotos } from './photo-backup.js';
 import { prune as pruneVerified } from '../../backup-worker/src/backup.js';
 import { reportRun } from '../../backup-worker/src/monitor.js';
 import { assertSchema } from '../../backup-worker/src/schema-guard.js';
@@ -13,8 +13,8 @@ const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAILY_PREFIX = "daily/";
 const MONTHLY_PREFIX = "monthly/";
 const PHOTO_BACKUP_PREFIX = "media/formal-photos/";
-// Legacy photo namespace, retained for compatibility only. New writes use
-// SHA-addressed objects in photo-backup.js and never prune historical photos.
+// Historical photo namespace retained for readers and isolated compatibility
+// fixtures. Production photo backup scheduling and writes have been retired.
 
 const BACKUP_TABLES = [
   {
@@ -207,7 +207,6 @@ function formalPhotoBackupKey(photoId, variant) {
   return `${PHOTO_BACKUP_PREFIX}${encodeURIComponent(String(photoId))}/${variant}`;
 }
 
-async function backupFormalPhotoObjects(env, rows) { return backupPhotos(env, rows); }
 async function restoreFormalPhotoObjects(env, payload) { validateBackupPayload(payload); return restorePhotos(env, payload); }
 
 async function gunzipJson(source) {
@@ -353,7 +352,6 @@ export {
   DAILY_RETENTION,
   MONTHLY_RETENTION,
   PHOTO_BACKUP_PREFIX,
-  backupFormalPhotoObjects,
   backupKeys,
   createDiaryBackupPayload,
   formalPhotoBackupKey,
