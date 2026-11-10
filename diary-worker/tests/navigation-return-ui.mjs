@@ -25,7 +25,7 @@ assert.match(script, /link === elements\.tagPageBack \|\| \(link === elements\.f
 // Execute the production helpers with browser state; these cases must exercise
 // acceptance and consumption, rather than merely assert the source's shape.
 const helpers = ["isNewDiaryNavigation", "isDiaryReturnReferrer", "isDiaryListPath", "configureDiaryReturnNavigation",
-  "updateDiaryReturnNavigation", "isOwnedDiaryReturnView", "hasDiaryReturnNavigation"]
+  "updateDiaryReturnNavigation", "diaryListHref", "isOwnedDiaryReturnView", "hasDiaryReturnNavigation"]
   .map((name) => script.match(new RegExp(`  function ${name}\\([^]*?\\n  }`))[0]).join("\n");
 function configure({ sourcePath = "/diary/", referrer = "https://diary.test/diary/", age = 10,
   savedAt = 100_000, type = "navigate", snapshot = {}, raw, storageBlocked = false, historyToken = "old-token", repeat = false,
@@ -121,5 +121,41 @@ const afterLogin = configure({ sourcePath: "/diary/tags/", referrer: "https://di
   nextSession: { role: "user", accountName: "account-a", activeHouseholdId: "household-a" } });
 assert.equal(afterLogin.backLink.href, "/diary/tags/", "matching login rechecks the accepted handoff");
 assert.equal(afterLogin.canGoBack, true);
+
+// Execute the same link builder and DOM assignment used in the page. Accepted
+// tag text must remain one encoded path segment; hostile URLs keep the default.
+for (const [sourcePath, expected] of [
+  ["/diary", "/diary/"], ["/diary/", "/diary/"],
+  ["/diary/tags", "/diary/tags/"], ["/diary/favorites", "/diary/favorites/"],
+  ["/diary/tag/旅行/", "/diary/tag/%E6%97%85%E8%A1%8C/"],
+  ["/diary/tag/%E6%97%85%E8%A1%8C/", "/diary/tag/%E6%97%85%E8%A1%8C/"],
+  ["/diary/tag/javascript:alert(1)/", "/diary/tag/javascript%3Aalert(1)/"],
+  ["/diary/tag/<img onerror=alert(1)>/", "/diary/tag/%3Cimg%20onerror%3Dalert(1)%3E/"],
+  ["/diary/tag/%2F%2Fevil.example%2Fx/", "/diary/tag/%2F%2Fevil.example%2Fx/"]
+]) {
+  const built = runInNewContext(`${helpers}\ndiaryListHref(${JSON.stringify(sourcePath)});`, { BASE_PATH: "/diary" });
+  assert.equal(built, expected, `encoded return link for ${sourcePath}`);
+  const source = new URL(sourcePath, "https://diary.test");
+  const result = configure({ sourcePath: source.pathname, referrer: source.href });
+  assert.equal(result.backLink.href, expected, `safe return link for ${sourcePath}`);
+  const target = new URL(result.backLink.href, "https://diary.test");
+  assert.equal(target.origin, "https://diary.test");
+  assert.equal(target.protocol, "https:");
+  assert.equal(target.search, "");
+  assert.equal(target.hash, "");
+}
+for (const sourcePath of [
+  "javascript:alert(1)", "data:text/html,<script>alert(1)</script>",
+  "https://evil.example/diary/", "//evil.example/diary/", "\\\\evil.example/diary/",
+  "/diary/?next=https://evil.example", "/diary/#javascript:alert(1)",
+  "/diary/tag/%invalid/", "/diary/tag/%E0%A4/", "/diary/tag/x/../../evil",
+  "\njavascript:alert(1)", null, { routePath: "/diary/" }
+]) {
+  const built = runInNewContext(`${helpers}\ndiaryListHref(${JSON.stringify(sourcePath)});`, { BASE_PATH: "/diary" });
+  assert.equal(built, "", "invalid URLs and malformed encodings are rejected");
+  const result = configure({ sourcePath, referrer: "https://diary.test/diary/" });
+  assert.equal(result.backLink.href, "/diary/", "invalid source retains the fixed fallback");
+  assert.equal(result.backLink.textContent, "← 日記へ戻る");
+}
 
 process.stdout.write("Diary navigation return-state test passed.\n");
