@@ -3,6 +3,7 @@
   "name": "t-room-cloud",
   "main": "src/index.js",
   "compatibility_date": "2026-08-01",
+  "limits": { "subrequests": 250000 },
   "routes": [
     {
       "pattern": "tanaka-note.com/cloud*",
@@ -59,11 +60,12 @@
     "TRASH_RETENTION_MODE": "enabled",
     "TRASH_CUTOVER_MODE": "ready",
     "TRASH_PURGE_EMERGENCY_STOP": "false",
-    "TRASH_PURGE_MAX_COUNT": "20",
+    "TRASH_PURGE_MAX_COUNT": "5000",
     "TRASH_PURGE_MAX_BYTES": "1099511627776",
-    "TRASH_PURGE_MAX_CANDIDATES": "200",
+    "TRASH_PURGE_MAX_CANDIDATES": "50000",
+    "TRASH_PURGE_MAX_DURATION_MS": "480000",
     "TRASH_PURGE_GROWTH_FACTOR": "3",
-    "TRASH_PURGE_GROWTH_ALLOWANCE": "20"
+    "TRASH_PURGE_GROWTH_ALLOWANCE": "10000"
   },
   "triggers": {
     "crons": ["17 18 * * *"]

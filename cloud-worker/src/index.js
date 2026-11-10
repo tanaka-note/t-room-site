@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-ea3d738c04db";
+const APP_BUILD_ID = "cloud-883da984e370";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -2585,6 +2585,7 @@ const TRASH_RETENTION_MS = 720 * 60 * 60 * 1000;
 // Covers the largest multipart file plus thumbnails without allowing an
 // accidental configuration change to remove the automatic byte ceiling.
 const TRASH_PURGE_BYTE_CEILING = 1024 ** 4;
+const TRASH_PURGE_PAGE_SIZE = 20;
 
 function trashSafetyError(reason) {
   const error = new HttpError(409, "安全確認のため処理を停止しました。完全削除の処理中は復元できません。再読み込みし、管理者へ確認してください。");
@@ -2611,8 +2612,9 @@ function trashSettings(env) {
   };
   const mode = env.TRASH_RETENTION_MODE || "disabled";
   if (!["disabled", "dry-run", "enabled"].includes(mode)) throw trashSafetyError("invalid_mode");
-  return { mode, maxCount: integer("TRASH_PURGE_MAX_COUNT", 20, 1000),
+  return { mode, maxCount: integer("TRASH_PURGE_MAX_COUNT", 20, 5000),
     maxBytes: integer("TRASH_PURGE_MAX_BYTES", 104857600, TRASH_PURGE_BYTE_CEILING),
+    maxDurationMs: integer("TRASH_PURGE_MAX_DURATION_MS", 480000, 480000),
     maxCandidates: integer("TRASH_PURGE_MAX_CANDIDATES", 200, 100000),
     growthFactor: integer("TRASH_PURGE_GROWTH_FACTOR", 3, 100),
     growthAllowance: integer("TRASH_PURGE_GROWTH_ALLOWANCE", 20, 100000) };
@@ -2753,6 +2755,14 @@ async function executeTrashRun(env, source, session, onlyFileId = null) {
   try {
     const settings = trashSettings(env);
     const automatic = source === "automatic", dryRun = automatic && settings.mode === "dry-run";
+    // Stop admitting new work before the ten-minute lease expires. An already
+    // claimed file must finish through the existing irreversible protocol.
+    const deadline = automatic ? Date.now() + settings.maxDurationMs : Infinity;
+    const withinTime = () => {
+      if (Date.now() < deadline) return true;
+      run.reason ||= "time_limit";
+      return false;
+    };
     if (automatic && settings.mode === "disabled") return run;
     await requireTrashCutoverReady(env);
     const lock = await env.DB.prepare(`UPDATE cloud_trash_control SET lease_owner=?,lease_until=?
@@ -2789,55 +2799,88 @@ async function executeTrashRun(env, source, session, onlyFileId = null) {
     // A corrupt folder with no eligible leaves must still stop and be audited,
     // rather than silently disappear from the leaf cleanup query.
     if (!onlyFileId) {
-      const roots = await env.DB.prepare(`SELECT f.* FROM cloud_folders f WHERE ${predicate}
+      let rootCursor = 0, checkedRoots = 0;
+      const rootLimit = automatic ? settings.maxCandidates : maxCount;
+      while (checkedRoots < rootLimit) {
+        if (!withinTime()) return run;
+        const roots = await env.DB.prepare(`SELECT f.id,f.deleted_at,f.trash_operation_id FROM cloud_folders f WHERE ${predicate}
+        AND f.id>?
         AND NOT EXISTS(SELECT 1 FROM cloud_folders p WHERE p.id=f.parent_id
           AND p.deleted_at=f.deleted_at AND p.trash_operation_id IS f.trash_operation_id)
-        ORDER BY f.deleted_at,f.id LIMIT ?`).bind(...args, automatic ? settings.maxCandidates : maxCount).all();
-      if (!roots.results) throw trashSafetyError("candidate_query_incomplete");
-      for (const folder of roots.results) {
-        run.targetFolderId = folder.id; run.operationId = folder.trash_operation_id;
-        await validateTrashTree(env, { ...folder, folder_id: folder.id }, automatic);
+        ORDER BY f.id LIMIT ?`).bind(...args, rootCursor, Math.min(TRASH_PURGE_PAGE_SIZE, rootLimit - checkedRoots)).all();
+        if (!roots.results) throw trashSafetyError("candidate_query_incomplete");
+        if (!roots.results.length) break;
+        for (const folder of roots.results) {
+          if (!withinTime()) return run;
+          run.targetFolderId = folder.id; run.operationId = folder.trash_operation_id;
+          await validateTrashTree(env, { ...folder, folder_id: folder.id }, automatic);
+          rootCursor = folder.id; checkedRoots++;
+        }
       }
     }
-    const rows = await env.DB.prepare(`SELECT f.* FROM cloud_files f WHERE ${filePredicate}
-      ORDER BY f.purge_id IS NULL,f.deleted_at,f.id LIMIT ?`).bind(...fileArgs, maxCount).all();
-    if (!rows.results) throw trashSafetyError("candidate_query_incomplete");
-    for (const file of rows.results) {
-      run.targetFileId = file.id; run.operationId = file.trash_operation_id;
-      await validateTrashTree(env, file, automatic);
-      if (dryRun) {
-        await trashRunAudit(env, run, "trash_dry_run_candidate", "file", file.id,
-          { operationId: file.trash_operation_id, targetBytes: Math.max(file.size_bytes, file.encrypted_size_bytes || 0), purgeId: file.purge_id });
-        run.skipped++; continue;
+    let fileCursor = null;
+    while (run.deleted + run.skipped < maxCount && !run.reason) {
+      if (!withinTime()) break;
+      // Keyset pagination remains stable while completed rows disappear or a
+      // concurrent restoration makes a snapshot ineligible. Never use OFFSET.
+      const cursorSql = fileCursor ? `AND ((f.purge_id IS NULL)>? OR ((f.purge_id IS NULL)=?
+        AND (f.deleted_at>? OR (f.deleted_at=? AND f.id>?))))` : "";
+      const cursorArgs = fileCursor ? [fileCursor.pending, fileCursor.pending, fileCursor.at, fileCursor.at, fileCursor.id] : [];
+      const rows = await env.DB.prepare(`SELECT f.id,f.folder_id,f.object_key,f.thumbnail_key,f.display_thumbnail_key,
+        f.stream_uid,f.size_bytes,f.encrypted_size_bytes,f.status,f.deleted_at,f.trash_operation_id,f.purge_id
+        FROM cloud_files f WHERE ${filePredicate} ${cursorSql}
+        ORDER BY f.purge_id IS NULL,f.deleted_at,f.id LIMIT ?`)
+        .bind(...fileArgs, ...cursorArgs, Math.min(TRASH_PURGE_PAGE_SIZE, maxCount - run.deleted - run.skipped)).all();
+      if (!rows.results) throw trashSafetyError("candidate_query_incomplete");
+      if (!rows.results.length) break;
+      for (const file of rows.results) {
+        if (!withinTime()) break;
+        fileCursor = { pending: file.purge_id === null ? 1 : 0, at: file.deleted_at, id: file.id };
+        run.targetFileId = file.id; run.operationId = file.trash_operation_id;
+        await validateTrashTree(env, file, automatic);
+        if (dryRun) {
+          await trashRunAudit(env, run, "trash_dry_run_candidate", "file", file.id,
+            { operationId: file.trash_operation_id, targetBytes: Math.max(file.size_bytes, file.encrypted_size_bytes || 0), purgeId: file.purge_id });
+          run.skipped++; continue;
+        }
+        if (!withinTime()) break;
+        await assertTrashLease(env, run, settings);
+        let job = file.purge_id ? await env.DB.prepare("SELECT * FROM cloud_trash_purges WHERE id=? AND phase<>'completed'").bind(file.purge_id).first() : null;
+        if (file.purge_id && !job) throw trashSafetyError("missing_manifest");
+        const bytes = job ? job.size_bytes : await measureTrashObjects(env, file, automatic);
+        if (automatic && run.bytes + bytes > settings.maxBytes) { run.reason = "byte_limit"; break; }
+        if (!withinTime()) break;
+        if (!job) job = await claimTrashFile(env, run, file, bytes, cutoff);
+        if (!job) { run.skipped++; continue; }
+        // Count attempted capacity, including a retry with already absent keys.
+        run.bytes += bytes;
+        await deleteClaimedTrashFile(env, run, settings, job);
+        run.deleted++; run.success++;
       }
-      await assertTrashLease(env, run, settings);
-      let job = file.purge_id ? await env.DB.prepare("SELECT * FROM cloud_trash_purges WHERE id=? AND phase<>'completed'").bind(file.purge_id).first() : null;
-      if (file.purge_id && !job) throw trashSafetyError("missing_manifest");
-      const bytes = job ? job.size_bytes : await measureTrashObjects(env, file, automatic);
-      if (automatic && run.bytes + bytes > settings.maxBytes) { run.reason = "byte_limit"; break; }
-      if (!job) job = await claimTrashFile(env, run, file, bytes, cutoff);
-      if (!job) { run.skipped++; continue; }
-      // Count attempted capacity, including a retry with already absent keys.
-      run.bytes += bytes;
-      await deleteClaimedTrashFile(env, run, settings, job);
-      run.deleted++; run.success++;
     }
     // Only empty leaves can be removed. No recursive physical deletion.
     // Separate generations, live children and legacy folders remain intact.
-    const room = maxCount - run.deleted - run.skipped;
-    if (!onlyFileId && room > 0) {
-      const leaves = await env.DB.prepare(`SELECT f.* FROM cloud_folders f WHERE ${predicate}
+    let folderCursor = 0;
+    while (!onlyFileId && run.deleted + run.deletedFolders + run.skipped < maxCount) {
+      if (!withinTime()) break;
+      const room = maxCount - run.deleted - run.deletedFolders - run.skipped;
+      const leaves = await env.DB.prepare(`SELECT f.id,f.parent_id,f.deleted_at,f.trash_operation_id FROM cloud_folders f WHERE ${predicate}
+        ${dryRun ? "AND f.id>?" : ""}
         ${dryRun ? "" : `AND NOT EXISTS(SELECT 1 FROM cloud_files c WHERE c.folder_id=f.id)
         AND NOT EXISTS(SELECT 1 FROM cloud_folders c WHERE c.parent_id=f.id)`}
-        ORDER BY f.deleted_at,f.id LIMIT ?`).bind(...args, room).all();
+        ORDER BY f.id LIMIT ?`).bind(...args, ...(dryRun ? [folderCursor] : []), Math.min(TRASH_PURGE_PAGE_SIZE, room)).all();
       if (!leaves.results) throw trashSafetyError("candidate_query_incomplete");
+      if (!leaves.results.length) break;
       for (const folder of leaves.results) {
+        if (!withinTime()) break;
+        folderCursor = folder.id;
         run.targetFolderId = folder.id; run.operationId = folder.trash_operation_id;
         await validateTrashTree(env, { ...folder, folder_id: folder.id }, automatic);
         if (dryRun) {
           await trashRunAudit(env, run, "trash_dry_run_candidate", "folder", folder.id, { operationId: folder.trash_operation_id });
           run.skipped++; continue;
         }
+        if (!withinTime()) break;
         await assertTrashLease(env, run, settings);
         const purgeId = crypto.randomUUID();
         const result = await env.DB.batch([
@@ -2857,6 +2900,9 @@ async function executeTrashRun(env, source, session, onlyFileId = null) {
         ]);
         if (result[0].meta.changes) { run.deletedFolders++; run.success++; } else run.skipped++;
       }
+      // Manual requests keep their existing twenty-item, single-pass contract.
+      // Automatic requests revisit newly empty ancestors within the same run.
+      if (!automatic) break;
     }
     if (automatic) await env.DB.prepare("UPDATE cloud_trash_control SET last_candidate_count=? WHERE id=1 AND lease_owner=?")
       .bind(count, run.runId).run();
