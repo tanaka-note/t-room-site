@@ -75,6 +75,7 @@ export function browserTests(target) {
     billing: ['billing-worker/test/dialog-navigation.browser.mjs'],
     inventory: ['inventory-worker/test/inventory.browser.mjs'] })[target] || [];
   if (target === 'cloud') existing.unshift('cloud-worker/tests/trash-retention.browser.mjs', 'cloud-worker/tests/move-partial.browser.mjs', 'cloud-worker/tests/scoped-moves.browser.mjs', 'cloud-worker/tests/folder-history-loading.browser.mjs', 'cloud-worker/tests/backup-status.browser.mjs', 'cloud-worker/tests/diary-backup-mount.browser.mjs', 'cloud-worker/tests/photo-preview-loading.browser.mjs');
+  if (target === 'diary') existing.push('diary-worker/tests/browser/archive-navigation.mjs');
   const searchClear = ['site', 'cloud', 'diary', 'inventory'].includes(target) ? ['tools/test-search-clear.browser.mjs'] : [];
   return ['cloud', 'security', 'diary', 'billing'].includes(target)
     ? [...existing, ...searchClear, 'diary-worker/tests/browser/passkey-account-dialog.mjs'] : [...existing, ...searchClear];
