@@ -332,6 +332,7 @@ function returnViewFixture() {
     ${body('hasDiaryReturnNavigation')}
     ${body('isOwnedDiaryReturnView')}
     ${body('updateDiaryReturnNavigation')}
+    ${body('diaryListHref')}
     ${body('configureDiaryReturnNavigation')}
     ${body('isDiaryListPath')}
     let hide;

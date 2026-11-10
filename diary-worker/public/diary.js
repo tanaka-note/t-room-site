@@ -1184,9 +1184,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     } catch {
       return false;
     }
-    return returnView?.version === 2
+    const href = diaryListHref(destinationPath);
+    return Boolean(href) && returnView?.version === 2
       && returnView.destinationPath === window.location.pathname
-      && returnView.routePath === destinationPath
+      && diaryListHref(returnView.routePath) === href
       && isOwnedDiaryReturnView(returnView)
       && window.history.state?.[RETURN_NAVIGATION_KEY] === returnView.savedAt
       && Date.now() - returnView.savedAt <= RETURN_VIEW_MAX_AGE_MS;
@@ -4109,9 +4110,27 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     // Display a source only when this history entry owns the accepted navigation.
     if (!Number.isFinite(returnView.savedAt)
       || window.history.state?.[RETURN_NAVIGATION_KEY] !== returnView.savedAt) return;
-    if (!isDiaryListPath(returnView.routePath) || Date.now() - returnView.savedAt > RETURN_VIEW_MAX_AGE_MS) return;
-    elements.tagPageBack.href = returnView.routePath;
+    const href = diaryListHref(returnView.routePath);
+    if (!href || Date.now() - returnView.savedAt > RETURN_VIEW_MAX_AGE_MS) return;
+    elements.tagPageBack.href = href;
     elements.tagPageBack.textContent = "← 前の画面へ戻る";
+  }
+
+  function diaryListHref(pathname) {
+    // Rebuild links from fixed routes and an encoded tag, never a stored URL.
+    switch (pathname) {
+      case "/diary": case "/diary/": return `${BASE_PATH}/`;
+      case "/diary/tags": case "/diary/tags/": return `${BASE_PATH}/tags/`;
+      case "/diary/favorites": case "/diary/favorites/": return `${BASE_PATH}/favorites/`;
+    }
+    if (typeof pathname !== "string") return "";
+    const match = /^\/diary\/tag\/([^/]+)\/?$/.exec(pathname);
+    if (!match) return "";
+    try {
+      return `${BASE_PATH}/tag/${encodeURIComponent(decodeURIComponent(match[1]))}/`;
+    } catch {
+      return "";
+    }
   }
 
   function isDiaryListPath(pathname) {
