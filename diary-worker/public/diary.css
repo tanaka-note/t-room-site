@@ -686,33 +686,72 @@ button {
 }
 
 .diary-archive-nav {
-  display: grid;
-  gap: 2px;
   margin-top: 14px;
 }
 
-.archive-button {
+.archive-year {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  width: 100%;
-  border: 0;
-  border-bottom: 1px solid rgba(216, 222, 230, 0.72);
-  padding: 11px 2px;
+  margin: 0 0 12px;
+  font-weight: 700;
+}
+
+.archive-year > span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.archive-year select {
+  min-height: 44px;
+  min-width: 120px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 10px;
+  color: var(--ink);
+  background: #fff;
+  font: inherit;
+}
+
+.archive-month-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.archive-button {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: 60px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 7px 3px;
   background: transparent;
   color: inherit;
-  text-align: left;
+  font-weight: 700;
 }
 
 .archive-button:hover,
-.archive-button:focus-visible,
-.archive-button[aria-pressed="true"] {
+.archive-button:focus-visible {
+  border-color: var(--teal-dark);
+  background: #f5f9f7;
   color: var(--teal-dark);
+}
+
+.archive-button[aria-pressed="true"] {
+  border-color: var(--teal-dark);
+  background: #eaf3ef;
+  color: var(--teal-dark);
+  box-shadow: inset 0 0 0 1px var(--teal-dark);
 }
 
 .archive-button small {
   color: var(--muted);
+  font-weight: 400;
 }
 
 .diary-search-card {

@@ -77,6 +77,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     query: "",
     month: japanDateString().slice(0, 7),
     monthExpanded: false,
+    archiveMonths: [],
+    archiveYear: "",
+    archiveMonth: "",
     dateFrom: "",
     dateTo: "",
     tag: "",
@@ -379,6 +382,17 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function bindEvents() {
+    const compactArchive = window.matchMedia("(max-width: 860px)");
+    const placeArchive = () => {
+      const parent = compactArchive.matches ? elements.diaryMain : elements.tagPanel.parentElement;
+      const next = compactArchive.matches ? elements.entryList.closest("section") : elements.tagPanel;
+      if (elements.archivePanel.parentElement === parent) return;
+      const position = !elements.appView.hidden ? captureEntryListPosition() : null;
+      parent.insertBefore(elements.archivePanel, next);
+      if (position) restoreEntryListPosition(position);
+    };
+    placeArchive();
+    compactArchive.addEventListener("change", placeArchive);
     document.addEventListener("troom:before-auto-update", (event) => {
       if (hasEditorChanges() || state.editorComposing || state.photoPreparing || state.photoUploading || state.photoPickerActive || photoSaver?.busy || document.querySelector("dialog[open]")) {
         event.preventDefault();
@@ -453,6 +467,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     });
     elements.entryList.addEventListener("click", handleEntryListClick);
     elements.archiveList.addEventListener("click", handleArchiveClick);
+    elements.archiveList.addEventListener("change", (event) => {
+      if (event.target.id !== "archive-year-select") return;
+      state.archiveYear = event.target.value;
+      renderArchive(state.archiveMonths);
+      if (!state.entriesAbortController) storeDiaryReturnView("", { historyOnly: true });
+    });
     elements.editEntryButton.addEventListener("click", () => {
       if (state.activeEntry) {
         const entry = state.activeEntry;
@@ -704,6 +724,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.canViewTrash = Boolean(session.canViewTrash);
     state.canPermanentlyDelete = Boolean(session.canPermanentlyDelete);
     state.canViewInvestment = Boolean(session.canViewInvestment);
+    clearArchive();
     const returnView = takeDiaryReturnView(state.activeHouseholdId);
     if (!returnView && "scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
     if (returnView) {
@@ -723,7 +744,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.householdSwitcherWrap.hidden = true;
     elements.householdSwitcher.replaceChildren();
     elements.entryList.replaceChildren(createEmpty("読み込んでいます..."));
-    elements.archiveList.replaceChildren();
     elements.tagList.replaceChildren();
     elements.bootView.hidden = true;
     elements.loginView.hidden = true;
@@ -765,7 +785,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       state.activeHouseholdId = householdId;
       updateDiaryReturnNavigation();
       state.availableTags = [];
-      elements.archiveList.replaceChildren();
+      clearArchive();
       elements.tagList.replaceChildren();
       state.trash = false;
       state.drafts = false;
@@ -986,6 +1006,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       query: state.query,
       month: state.month,
       monthExpanded: state.monthExpanded,
+      archiveYear: state.archiveYear,
       dateFrom: state.dateFrom,
       dateTo: state.dateTo,
       tagQuery: state.tagQuery,
@@ -1082,6 +1103,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.query = splitSearchTerms(returnView.query).join(" ");
     state.month = /^\d{4}-\d{2}$/.test(returnView.month) ? returnView.month : currentJapanMonth();
     state.monthExpanded = Boolean(returnView.monthExpanded);
+    state.archiveYear = /^\d{4}$/.test(returnView.archiveYear) ? returnView.archiveYear : "";
     state.dateFrom = /^\d{4}-\d{2}-\d{2}$/.test(returnView.dateFrom) ? returnView.dateFrom : "";
     state.dateTo = /^\d{4}-\d{2}-\d{2}$/.test(returnView.dateTo) ? returnView.dateTo : "";
     state.tagQuery = String(returnView.tagQuery || "").normalize("NFKC").trim().toLocaleLowerCase("ja-JP").slice(0, 100);
@@ -1294,24 +1316,65 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.entryList.replaceChildren(...cards);
   }
 
+  function clearArchive() {
+    state.archiveMonths = [];
+    state.archiveYear = "";
+    state.archiveMonth = "";
+    elements.archiveList.replaceChildren();
+  }
+
   function renderArchive(months) {
+    const monthChanged = state.archiveMonth && state.archiveMonth !== state.month;
+    state.archiveMonths = months;
+    state.archiveMonth = state.month;
     if (!months.length) {
+      state.archiveYear = "";
       elements.archiveList.replaceChildren(createEmpty("年月別の記録はまだありません。"));
       return;
     }
-    elements.archiveList.replaceChildren(...months.map((item) => {
+    const years = [...new Set(months.map(item => item.value.slice(0, 4)))].sort().reverse();
+    const selectedYear = state.month.slice(0, 4);
+    if (monthChanged || !years.includes(state.archiveYear)) {
+      state.archiveYear = years.includes(selectedYear) ? selectedYear : years[0];
+    }
+    const heading = document.createElement(years.length > 1 ? "label" : "p");
+    heading.className = "archive-year";
+    if (years.length > 1) {
+      const label = document.createElement("span");
+      label.textContent = "年を選ぶ";
+      const select = document.createElement("select");
+      select.id = "archive-year-select";
+      select.replaceChildren(...years.map(year => {
+        const option = document.createElement("option");
+        option.value = year;
+        option.textContent = `${year}年`;
+        option.selected = year === state.archiveYear;
+        return option;
+      }));
+      heading.append(label, select);
+    } else heading.textContent = `${state.archiveYear}年`;
+    const grid = document.createElement("div");
+    grid.className = "archive-month-grid";
+    grid.setAttribute("role", "group");
+    grid.setAttribute("aria-label", `${state.archiveYear}年の記録がある月`);
+    grid.replaceChildren(...months.filter(item => item.value.startsWith(`${state.archiveYear}-`))
+      .sort((a, b) => a.value.localeCompare(b.value)).map((item) => {
       const button = document.createElement("button");
       button.className = "archive-button";
       button.type = "button";
       button.dataset.month = item.value;
-      button.setAttribute("aria-pressed", String(state.month === item.value));
+      button.setAttribute("aria-pressed", String(isMonthlyView() && state.month === item.value));
+      button.setAttribute("aria-label", `${formatMonth(item.value)}、${item.count}件`);
       const label = document.createElement("span");
-      label.textContent = formatMonth(item.value);
+      label.textContent = `${Number(item.value.slice(5))}月`;
       const count = document.createElement("small");
       count.textContent = `${item.count}件`;
       button.append(label, count);
       return button;
     }));
+    const focusedYear = document.activeElement?.id === "archive-year-select";
+    elements.archiveList.replaceChildren(heading, grid);
+    if (focusedYear) elements.archiveList.querySelector("select")?.focus({ preventScroll: true });
   }
 
   function renderTags(tags) {
@@ -3294,7 +3357,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function formatShortDate(value) {
     const [year, month, day] = String(value || "").split("-").map(Number);
-    return year && month && day ? `${year}.${month}.${day}` : "";
+    if (!year || !month || !day) return "";
+    const weekday = ["日", "月", "火", "水", "木", "金", "土"][new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+    return `${year}.${month}.${day}（${weekday}）`;
   }
 
   function formatBytes(value) {
@@ -3699,6 +3764,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function updateFilterControls() {
+    if (state.archiveMonth && state.archiveMonth !== state.month) renderArchive(state.archiveMonths);
     const active = Boolean(state.query || state.dateFrom || state.dateTo || state.tag || state.trash || state.drafts || state.favoritePage);
     elements.searchClear.hidden = !state.query;
     elements.dateReset.hidden = !state.dateFrom && !state.dateTo;
@@ -3713,7 +3779,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.monthNavigation.hidden = !isMonthlyView();
     elements.currentMonth.disabled = state.month === currentJapanMonth();
     document.querySelectorAll("[data-month]").forEach((button) => {
-      button.setAttribute("aria-pressed", String(button.dataset.month === state.month));
+      button.setAttribute("aria-pressed", String(isMonthlyView() && button.dataset.month === state.month));
     });
     document.querySelectorAll("[data-tag]").forEach((button) => {
       if (button.dataset.tag === state.tag) button.setAttribute("aria-current", "page");
@@ -4196,7 +4262,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     for(const input of document.querySelectorAll('dialog input,dialog textarea'))input.value='';
     for(const key of ['detailDate','detailPublishedAt','detailTitle','detailAuthor','detailDeletion','detailTags','detailContent','deleteConfirmMessage','editorMessage','entryTagSuggestions'])elements[key]?.replaceChildren();
     elements.entryList.replaceChildren();
-    elements.archiveList.replaceChildren();
+    clearArchive();
     elements.tagList.replaceChildren();
     elements.householdSwitcher.replaceChildren();
     elements.householdSwitcherWrap.hidden = true;
