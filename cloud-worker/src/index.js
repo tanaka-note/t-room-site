@@ -7,7 +7,7 @@ import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAu
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-074196552fef";
+const APP_BUILD_ID = "cloud-ea3d738c04db";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -2582,6 +2582,9 @@ async function requireTrashCutoverReady(env) {
 }
 
 const TRASH_RETENTION_MS = 720 * 60 * 60 * 1000;
+// Covers the largest multipart file plus thumbnails without allowing an
+// accidental configuration change to remove the automatic byte ceiling.
+const TRASH_PURGE_BYTE_CEILING = 1024 ** 4;
 
 function trashSafetyError(reason) {
   const error = new HttpError(409, "安全確認のため処理を停止しました。完全削除の処理中は復元できません。再読み込みし、管理者へ確認してください。");
@@ -2609,7 +2612,7 @@ function trashSettings(env) {
   const mode = env.TRASH_RETENTION_MODE || "disabled";
   if (!["disabled", "dry-run", "enabled"].includes(mode)) throw trashSafetyError("invalid_mode");
   return { mode, maxCount: integer("TRASH_PURGE_MAX_COUNT", 20, 1000),
-    maxBytes: integer("TRASH_PURGE_MAX_BYTES", 104857600, Number.MAX_SAFE_INTEGER),
+    maxBytes: integer("TRASH_PURGE_MAX_BYTES", 104857600, TRASH_PURGE_BYTE_CEILING),
     maxCandidates: integer("TRASH_PURGE_MAX_CANDIDATES", 200, 100000),
     growthFactor: integer("TRASH_PURGE_GROWTH_FACTOR", 3, 100),
     growthAllowance: integer("TRASH_PURGE_GROWTH_ALLOWANCE", 20, 100000) };
