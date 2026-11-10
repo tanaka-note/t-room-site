@@ -465,7 +465,8 @@ assert.equal(reverseSettled[1].status, "rejected");
 
 const workerSource = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
 const wrangler = JSON.parse(await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
-assert.deepEqual(wrangler.triggers.crons, ["25 18 * * *", "55 18 * * *", "45 0-2,19-23 * * *", "5,15,25,35,55 19,20 * * *"]);
+assert.deepEqual(wrangler.triggers.crons, ["25 18 * * *"]);
+assert.doesNotMatch(workerSource, /runScheduledPhotoBackup|photo-backup-job|read\('diary-photos'\)|read\('diary-photo-verification'\)/);
 assert.ok(wrangler.r2_buckets.some((binding) => binding.binding === "MEDIA" && binding.bucket_name === "t-room-diary-media"));
 assert.ok(wrangler.r2_buckets.some((binding) => binding.binding === "BACKUP" && binding.bucket_name === "t-room-diary-backups"));
 assert.match(workerSource, /runScheduledDiaryBackup/);

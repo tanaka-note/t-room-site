@@ -38,12 +38,9 @@ try {
         assert.equal(await page.locator('#injected').count(), 0);
         assert.equal(await panel.locator('input[type=checkbox], [draggable=true], a').count(), 0);
         await panel.getByText('日記 D1：正常', { exact: true }).waitFor();
-        await panel.getByText('日記 写真：一部未完了', { exact: true }).waitFor();
-        await panel.getByText('日記 写真の再検証：失敗', { exact: true }).waitFor();
-        assert.match(await panel.innerText(), /今回の新規コピー 40件.*バックアップ済み 100件.*未処理 23件.*検証待ち 9件.*破損 1件.*未確認 77件/s);
-        assert.match(await panel.innerText(), /D1と写真は別管理/);
-        assert.match(await panel.innerText(), /単体上限超過 3件.*優先再試行待ち 2件/s);
-        assert.match(await panel.innerText(), /約42.7MiB超/);
+        assert.equal(await panel.locator('[data-backup-group="diary-photos"], [data-backup-group="diary-photo-verification"], [data-backup-group="photo"], .backup-photo-summary').count(), 0);
+        assert.match(await panel.innerText(), /日記DBのみ。写真本体は日記の保存領域にあり、バックアップ対象外/);
+        assert.doesNotMatch(await panel.innerText(), /今回の新規コピー|写真の進捗|写真の再検証：|写真バックアップ/);
         const adminDetails = await panel.textContent();
         await page.evaluate(() => { __test.state.folderId = 7; renderDiaryBackupMount(); });
         assert.equal(await panel.isVisible(), false);
@@ -65,13 +62,13 @@ try {
         await panel.getByText('セキュリティ監査の長期保管：一部未完了', { exact: true }).waitFor();
         mkdirSync(root + '/tmp/backup-ui', { recursive: true });
         await panel.screenshot({ path: root + `/tmp/backup-ui/${name}-${mobile ? 'mobile' : 'desktop'}.png` });
-        snapshot.photo = { ...empty, available: false, bytes: null, objectCount: null };
+        snapshot.monthly = { ...empty, available: false, bytes: null, objectCount: null };
         snapshot.storagePartial = true;
         await panel.locator('.backup-refresh').click();
         await panel.getByText('日記 D1：正常', { exact: true }).waitFor();
         await panel.getByText('一部の容量・件数を取得できません。取得できた状態だけを表示しています。', { exact: true }).waitFor();
         assert.match(await panel.innerText(), /容量・件数取得不可/);
-        snapshot.photo = empty; snapshot.storagePartial = false;
+        snapshot.monthly = empty; snapshot.storagePartial = false;
         await page.close();
       }
     } finally { await browser.close(); }
