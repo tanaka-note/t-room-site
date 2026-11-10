@@ -6,6 +6,7 @@ import vm from "node:vm";
 import { context, env as sessionEnv, api, handoff, db as sessionDb } from "./session-fixture.mjs";
 
 const DAY = 86400000;
+const productionVars = JSON.parse(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8")).vars;
 const admin = { role: "admin", canDelete: true };
 function fixture(options = {}, migrated = true) {
   const db = new DatabaseSync(":memory:");
@@ -396,6 +397,77 @@ test("count and byte ceilings defer unclaimed records without making them irreve
   f.env.TRASH_PURGE_MAX_BYTES = "9";
   const result = await f.run(); assert.equal(result.reason, "byte_limit"); assert.equal(result.deleted, 0);
   assert.equal(f.row(2).purge_id, null); await f.restore(2);
+});
+
+test("enabled production budget purges maximum-size multipart video and thumbnails, protecting live/restored/young/legacy files", async () => {
+  const f = fixture(productionVars);
+  const maximumVideo = 64 * 1024 * 1024 * 10000 - 10000 * 32;
+  const thumbnailBytes = 2 * 1024 * 1024;
+  assert.equal(productionVars.TRASH_RETENTION_MODE, "enabled");
+  assert.equal(context.trashSettings(f.env).maxBytes, 1024 ** 4);
+  f.file(1, null, maximumVideo);
+  f.db.exec("UPDATE cloud_files SET thumbnail_key='thumbnails/1',display_thumbnail_key='display/1' WHERE id=1");
+  f.objects.set("thumbnails/1", thumbnailBytes); f.objects.set("display/1", thumbnailBytes);
+  await f.trash(1, 31);
+  for (let id = 2; id <= 5; id++) f.file(id, null, maximumVideo);
+  await f.trash(3, 31); await f.restore(3);
+  await f.trash(4, 29);
+  f.db.prepare("UPDATE cloud_files SET deleted_at=? WHERE id=5").run(new Date(Date.now() - 90 * DAY).toISOString());
+  const before = [2, 3, 4, 5].map(id => f.row(id));
+  const result = await f.run();
+  assert.equal(result.failed, 0); assert.equal(result.deleted, 1);
+  assert.equal(result.bytes, maximumVideo + 2 * thumbnailBytes);
+  assert.deepEqual(f.deletes, ["originals/1", "thumbnails/1", "display/1"]);
+  assert.deepEqual([2, 3, 4, 5].map(id => f.row(id)), before);
+  for (const id of [2, 3, 4, 5]) assert.equal(f.objects.get(`originals/${id}`), maximumVideo);
+});
+
+test("1 TiB budget includes retries and thumbnails; overflow stays restorable until a later run", async () => {
+  const f = fixture(productionVars), budget = 1024 ** 4;
+  const largeVideo = 600 * 1024 ** 3;
+  f.file(1, null, largeVideo); f.file(2, null, largeVideo);
+  await f.trash(1, 32); await f.trash(2, 31);
+  // Fail after external deletion. The retry still consumes the original size.
+  f.hooks.before = (sql, kind) => {
+    if (kind === "run" && sql.startsWith("DELETE FROM cloud_files WHERE id=? AND purge_id=?")) throw new Error("fixture finalize failure");
+  };
+  assert.equal((await f.run()).failed, 1);
+  assert.equal(f.objects.has("originals/1"), false);
+  f.hooks.before = null;
+  let result = await f.run();
+  assert.equal(result.failed, 0); assert.equal(result.reason, "byte_limit");
+  assert.equal(result.deleted, 1); assert.equal(result.bytes, largeVideo);
+  assert.equal(f.row(2).purge_id, null); assert.equal(f.objects.get("originals/2"), largeVideo);
+  await f.restore(2); await f.trash(2, 31);
+  result = await f.run(); assert.equal(result.deleted, 1); assert.equal(result.failed, 0);
+
+  const boundary = fixture(productionVars);
+  boundary.file(1, null, budget - 5);
+  boundary.db.exec("UPDATE cloud_files SET thumbnail_key='thumbnails/1' WHERE id=1");
+  boundary.objects.set("thumbnails/1", 6); await boundary.trash(1, 31);
+  result = await boundary.run(); assert.equal(result.reason, "byte_limit");
+  assert.deepEqual(boundary.deletes, []); assert.equal(boundary.row(1).purge_id, null);
+  boundary.objects.set("thumbnails/1", 5);
+  result = await boundary.run(); assert.equal(result.deleted, 1); assert.equal(result.bytes, budget);
+});
+
+test("production budget still fails closed on invalid limits, shared keys, emergency stop and candidate spikes", async () => {
+  for (const mode of ["oversized", "unsafe", "fraction", "shared", "stop", "spike"]) {
+    const f = fixture(productionVars); f.file(1); await f.trash(1, 31);
+    if (mode === "oversized") f.env.TRASH_PURGE_MAX_BYTES = String(1024 ** 4 + 1);
+    if (mode === "unsafe") f.env.TRASH_PURGE_MAX_BYTES = String(Number.MAX_SAFE_INTEGER + 1);
+    if (mode === "fraction") f.env.TRASH_PURGE_MAX_BYTES = "1.5";
+    if (mode === "shared") { f.file(2); f.db.exec("UPDATE cloud_files SET thumbnail_key='originals/1' WHERE id=2"); }
+    if (mode === "stop") f.db.exec("UPDATE cloud_trash_control SET emergency_stop=1");
+    if (mode === "spike") {
+      f.env.TRASH_PURGE_MAX_CANDIDATES = "1"; f.folder(1);
+      await context.deleteFolder(1, f.env, admin); f.age(1, 31, "folder");
+    }
+    const result = await f.run(); assert.equal(result.failed, 1, mode);
+    if (mode !== "shared") assert.deepEqual(f.heads, [], mode);
+    assert.deepEqual(f.deletes, [], mode);
+    assert.equal(f.row(1).purge_id, null, mode);
+  }
 });
 
 test("all associated R2 sizes count toward capacity; shared cross-column keys stop deletion", async () => {

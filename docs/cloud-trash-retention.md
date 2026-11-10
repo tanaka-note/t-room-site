@@ -28,18 +28,20 @@ manifestは完了後も保持し、キー／Stream UIDの新規参照・再利�
 
 ファイルは上限内の小分けで処理する。フォルダは子ファイル・子フォルダのいない葉だけを条件付き削除し、次の実行で親へ進む。大きなツリーを一度にD1物理削除しない。最初の不可逆処理が確定した世代は、処理が次回へ残っていても通常復元できない。
 
-| 設定 | 初期値 | 意味 |
+| 設定 | 公開設定 | 意味 |
 |---|---|---|
-| TRASH_CUTOVER_MODE | ready（D1承認は0） | 移行中はゴミ箱の移動・復元・一覧・完全削除を503で停止。readyとD1承認の両方が必要 |
-| TRASH_RETENTION_MODE | disabled | disabled／dry-run／enabled。それ以外は停止 |
+| TRASH_CUTOVER_MODE | ready | 移行中はゴミ箱の移動・復元・一覧・完全削除を503で停止。readyとD1承認の両方が必要。D1承認のmigration初期値は0 |
+| TRASH_RETENTION_MODE | enabled | disabled／dry-run／enabled。それ以外は停止。未指定時はdisabled |
 | TRASH_PURGE_EMERGENCY_STOP | false | true等、false以外なら手動・自動の完全削除を停止 |
 | TRASH_PURGE_MAX_COUNT | 20 | 自動実行1回のファイル＋フォルダ上限 |
-| TRASH_PURGE_MAX_BYTES | 104857600 | 自動実行1回100MiB。本体＋関連R2 HEAD容量、再試行manifest容量も計上 |
+| TRASH_PURGE_MAX_BYTES | 1099511627776 | 自動実行1回1TiB。本体＋関連R2 HEAD容量、再試行manifest容量も計上。設定可能な最大値も1TiB。未指定時は従来の100MiB |
 | TRASH_PURGE_MAX_CANDIDATES | 200 | ファイル＋フォルダ候補総数の異常上限 |
 | TRASH_PURGE_GROWTH_FACTOR | 3 | 前回候補数に対する増加倍率 |
 | TRASH_PURGE_GROWTH_ALLOWANCE | 20 | 急増停止の増分許容量 |
 
 件数・容量上限は未claimの対象を次回へ残す。1ファイルだけで容量上限を超える場合もclaimしない。手動は既存と同じ1リクエスト20ファイルまでとし、自動用容量制限は課さない。空フォルダも1リクエスト最大20件の範囲内で処理し、Webは残件数に従って次を呼ぶ。
+
+従来の公開設定100MiBでは、それを超える動画が先頭にあると後続ファイルも毎回処理されなかった。1TiBは現在の最大multipartファイル（約640GB）と関連サムネイルを単体で処理できる値であり、無制限にはしない。大容量ファイルが複数ある場合は合計1TiBまでとし、残りは次の日次実行へ送る。R2本体をダウンロードせずHEAD容量とキー単位の削除だけを使う。20件上限、候補200件・急増時の緊急停止、世代・共有キー・復元競合保護は維持する。
 
 候補総数が絶対上限を超える、または前回比倍率と増分許容量を両方超える場合は、D1 controlのemergency_stopを1にして停止する。初回も絶対上限を適用する。D1照会失敗・状態矛盾・外部ストレージ障害・監査保存失敗時は次の対象へ進まない。controlが欠落している場合も実削除しない。
 
@@ -56,6 +58,18 @@ cloud_audit_logsのtrash_run_started／trash_run_finished、trash_dry_run_candid
 ゴミ箱カードに720時間到達日時と無効／試行中／有効を表示する。旧データは自動削除対象外、不可逆状態は復元不可と表示する。日時は「削除実施の確約」ではなく対象になる最早時刻であり、上限・矛盾・停止設定によって後ろにずれる。
 
 ## 導入・有効化
+
+### 移行済み環境での有効化
+
+2026-11-10の本番読取確認では、移行schemaと切替承認は有効、自動削除はdisabled、720時間経過候補はファイル・フォルダとも0件だった。共有キー、未検証の削除記録、ready以外／Streamのゴミ箱ファイル、ゴミ箱配下の通常保管／異世代要素、未完了manifestは検出されず、emergency_stop=0を確認した。SELECTのみで確認し、DBのrows_written=0、changed_db=false。ファイル内容・個別のobjectキー・認証・鍵は取得せず、本番データを変更していない。
+
+この有効化変更はユーザーの明示依頼に基づく。wranglerのmodeをenabled、容量上限を1TiBへ変更する。PRの段階では本番設定を変更せず、対象CI成功後のmergeと通常のCloud公開で反映する。移行は完了済みのため、0013の再適用・切替承認の変更・旧データbackfillは行わない。公開前に上記の状態を再確認し、候補や整合性が変わっていれば再評価する。公開後はGET /cloud/api/trash-transition-statusでmode=ready、schemaReady=true、cutoverReady=true、operationsAvailable=true、retentionMode=enabledとbuild一致を確認する。
+
+ローカルworkerdの隔離D1／R2で、公開設定を読み込んだ合成データに2回のdry-runを行い、業務テーブル全行とR2のキー・内容が不変であることを比較する。その後enabledで期限経過対象だけを削除し、通常保管・復元済み・29日・旧データ・DBに紐付かないR2 objectの保存を確認する。大容量のHEAD値と1TiB境界・途中失敗後の再試行はSQLite／R2 adapter fixtureで検証し、数百GBの実転送は行わない。本番でmode=dry-runを公開した実行実績や、本番R2の削除試験と混同しない。
+
+バックアップWorkerが保管するT-CloudのバックアップはD1であり、T-CloudのR2本体を複製するものではない。完全削除後のファイル内容の復元は保証しない。緊急停止・disabledへの変更は以後の処理を止める手段で、削除済みファイルを元に戻す手段ではない。
+
+### 未移行環境での初回切り替え
 
 **0013を旧Workerへ先に適用してはいけない。** 旧WorkerはR2削除後にD1を削除する。0013のDELETE保護は旧方式を拒否するため、R2だけ消えた状態を作り得る。単体・一括の両方で、過去の実コードと合成データから再現済み。旧版へ先にマイグレーションを適用する従来手順は撤回する。
 
