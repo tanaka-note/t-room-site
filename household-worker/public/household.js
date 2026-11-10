@@ -6,7 +6,7 @@
   const today = () => new Date(Date.now()+9*3600000).toISOString().slice(0,10);
   const previousMonth = () => {const d=new Date(`${today()}T00:00:00Z`);d.setUTCDate(0);return d.toISOString().slice(0,7);};
   const nav = TroomDialogNavigation.create({key:'troomHouseholdDialogs'});
-  let data={accounts:[],transactions:[],categories:[],snapshots:[],historical:[]}, revision=0, session=null, busy=false, activity=Date.now(), confirmation=null, restoreFile=null, categoryEditing=null;
+  let data={accounts:[],transactions:[],categories:[],snapshots:[],historical:[]}, revision=0, session=null, busy=false, activity=Date.now(), confirmation=null, restoreFile=null, categoryEditMode=false;
   const editors=new Map(), channel=typeof BroadcastChannel==='function'?new BroadcastChannel('household-ledger'):null;
   let sessionGeneration=0,expiryTimer=null,cleanupPlan=null,visibleEntries=200,entryCriteria='',entryType='expense';
   const pendingRequests=new Set(),downloadUrls=new Set();
@@ -62,13 +62,13 @@
   function options(select,rows,placeholder){const old=select.value;select.replaceChildren();if(placeholder!==undefined){const o=new Option(placeholder,'');select.add(o);}for(const [value,label]of rows)select.add(new Option(label,value));if([...select.options].some(o=>o.value===old))select.value=old;}
   function field(form,name){return form.elements.namedItem(name);}
   function markDirty(){for(const [id,e]of editors){e.form.dataset.troomDirty=String($(id).open&&e.initial!==e.serialize());}document.body.dataset.troomUpdateBlock=String(busy||installPromptOpen||[...editors].some(([id,e])=>$(id).open&&e.initial!==e.serialize()));}
-  function setBusy(value){busy=value;document.body.dataset.troomUpdateBlock=String(value);for(const b of document.querySelectorAll('button'))b.disabled=value;for(const form of document.querySelectorAll('dialog form'))form.inert=value;$('restore').disabled=value||!restoreFile;assetChart?.setBusy(value);updateItemControls();markDirty();updateInstallState();}
+  function setBusy(value){busy=value;document.body.dataset.troomUpdateBlock=String(value);for(const b of document.querySelectorAll('button'))b.disabled=value;for(const form of document.querySelectorAll('dialog form'))form.inert=value;$('restore').disabled=value||!restoreFile;assetChart?.setBusy(value);updateItemControls();updateCategoryDelete();markDirty();updateInstallState();}
   function resetSession(broadcast=false){
     sessionGeneration++;clearTimeout(expiryTimer);expiryTimer=null;
     for(const controller of pendingRequests)controller.abort();pendingRequests.clear();
     for(const url of downloadUrls)URL.revokeObjectURL(url);downloadUrls.clear();
     session=null;revision=0;visibleEntries=200;entryCriteria='';entryType='expense';data={accounts:[],transactions:[],categories:[],snapshots:[],historical:[]};assetPoints=[];chartPeriod='all';
-    confirmation=restoreFile=categoryEditing=editingAccount=cleanupPlan=null;$('maintenance-summary').textContent='';$('maintenance-apply').hidden=true;
+    confirmation=restoreFile=editingAccount=cleanupPlan=null;categoryEditMode=false;$('maintenance-summary').textContent='';$('maintenance-apply').hidden=true;
     nav.reset();for(const dialog of document.querySelectorAll('dialog[open]'))dialog.close();
     for(const form of document.querySelectorAll('#app-view form,dialog form'))form.reset();
     for(const input of document.querySelectorAll('#app-view input:not([type=checkbox]),#app-view textarea,dialog input:not([type=checkbox]),dialog textarea')){input.value='';input.setCustomValidity('');}
@@ -76,7 +76,7 @@
     $('account-items').replaceChildren();$('balance-history').replaceChildren();$('search').value='';$('period').value=today().slice(0,7);$('period-mode').value='month';
     $('restore-file').value='';$('restore-preview').textContent='';
     for(const id of ['confirm-title','confirm-copy','confirm-error','entry-error','account-error','message'])$(id).textContent='';
-    resetCategory();render();$('account-name').textContent='';$('access-mode').textContent='';document.body.classList.remove('is-viewer');
+    render();$('account-name').textContent='';$('access-mode').textContent='';document.body.classList.remove('is-viewer');
     $('app-view').hidden=true;$('login-view').hidden=false;$('login').hidden=false;$('boot-message').textContent='パスキーを使ってログインしてください。';$('login').removeAttribute('aria-busy');$('passkey-login-label').textContent='パスキーでログイン';setBusy(false);
     if(broadcast)channel?.postMessage('session-changed');
   }
@@ -103,9 +103,9 @@
   nav.register('confirm-dialog',{blocked:()=>busy,guard:()=>!busy,onClose:()=>{confirmation=null;}});
   $('confirm-cancel').onclick=()=>nav.close('confirm-dialog');
   $('confirm-ok').onclick=async()=>{if(busy||!confirmation)return;const action=confirmation,generation=sessionGeneration;setBusy(true);try{await action();currentGeneration(generation);setBusy(false);if($('confirm-dialog').open)await nav.close('confirm-dialog',{force:true});}catch(error){report(error,'confirm-error',generation);if(error.status===409)confirmation=null;}finally{if(generation===sessionGeneration)setBusy(false);}};
-  function editor(id,formId,serialize,save){
+  function editor(id,formId,serialize,save,afterClose){
     const form=$(formId),e={form,serialize,initial:'',id:null,expectedRevision:0,requestId:null};editors.set(id,e);
-    nav.register(id,{blocked:()=>busy,guard:()=>{if(busy)return false;if(e.initial===serialize())return true;ask('入力内容を破棄しますか？','保存していない入力内容があります。',async()=>{await nav.close('confirm-dialog',{force:true});await nav.close(id,{force:true});});return false;},onClose:()=>{form.reset();e.initial=serialize();e.id=null;e.requestId=null;markDirty();}});
+    nav.register(id,{blocked:()=>busy,guard:()=>{if(busy)return false;if(e.initial===serialize())return true;ask('入力内容を破棄しますか？','保存していない入力内容があります。',async()=>{await nav.close('confirm-dialog',{force:true});await nav.close(id,{force:true});});return false;},onClose:()=>{const recordId=e.id;form.reset();e.initial=serialize();e.id=null;e.requestId=null;markDirty();afterClose?.(recordId);}});
     for(const event of ['input','change'])form.addEventListener(event,()=>{e.requestId=null;markDirty();});
     form.onsubmit=async event=>{event.preventDefault();if(busy||!form.reportValidity())return;const generation=sessionGeneration;e.requestId||=crypto.randomUUID();$(formId.replace('-form','-error')).textContent='';setBusy(true);try{await save(e);currentGeneration(generation);setBusy(false);await nav.close(id,{force:true});}catch(error){report(error,formId.replace('-form','-error'),generation);}finally{if(generation===sessionGeneration)setBusy(false);}};
     return e;
@@ -127,14 +127,14 @@
     const actions=el('div',undefined,'item-actions');for(const [direction,label,text]of [[-1,'上へ移動','↑'],[1,'下へ移動','↓']]){const b=button(text,()=>moveItem(row,direction));b.dataset.move=direction<0?'up':'down';b.setAttribute('aria-label',label);actions.append(b);}
     actions.append(button('削除',()=>ask('この内訳を削除しますか？',row.querySelector('[data-field=name]').value||'名称未入力の内訳',()=>{row.remove();accountEditor.requestId=null;updateItemControls();markDirty();}),'danger'));row.append(actions);$('account-items').append(row);updateItemControls();
   }
-  function accountValue(){const v=formValues(accountForm);return {...v,archived:field(accountForm,'archived').checked,items:[...$('account-items').children].map(row=>({id:row.dataset.id,name:row.querySelector('[data-field=name]').value,amount:moneyNumber(row.querySelector('[data-field=amount]'))}))};}
+  function accountValue(){const v=formValues(accountForm);return {...v,items:[...$('account-items').children].map(row=>({id:row.dataset.id,name:row.querySelector('[data-field=name]').value,amount:moneyNumber(row.querySelector('[data-field=amount]'))}))};}
   const accountEditor=editor('account-dialog','account-form',()=>JSON.stringify(accountValue()),e=>mutate('account.save',{...accountValue(),id:e.id},e.expectedRevision,e.requestId));
   let editingAccount=null;
   function fillBalance(items){$('account-items').replaceChildren();for(const item of items)itemRow(item);}
   function openAccount(record){
     if(session?.role!=='owner')return;
     editingAccount=record||null;accountForm.reset();$('account-title').textContent=record?'口座と残高を編集':'口座を作成';
-    field(accountForm,'name').value=record?.name||'';field(accountForm,'type').value=record?.type||'その他';field(accountForm,'archived').checked=record?.archived||false;
+    field(accountForm,'name').value=record?.name||'';field(accountForm,'type').value=record?.type||'その他';
     field(accountForm,'asOf').max=today();field(accountForm,'asOf').value=today();field(accountForm,'asOf').readOnly=true;
     options($('balance-history'),[...(record?.balances||[])].reverse().map(b=>[b.date,`${b.date} 時点`]),'新しい基準日の残高を入力');$('balance-history').value='';
     fillBalance(record?.items||[{id:crypto.randomUUID(),name:'残高',amount:0}]);open('account-dialog',accountEditor,record?.id);
@@ -153,7 +153,7 @@
   }
   function renderCategorySummary(groups,income,expense){
     const root=$('category-summary'),openGroups=new Set([...root.querySelectorAll('details[open]')].map(n=>JSON.stringify([n.dataset.type,n.dataset.category])));
-    const byAmount=(a,b)=>b.total-a.total||a.name.localeCompare(b.name,'ja');
+    const byAmount=(a,b)=>Number(a.name.startsWith('その他'))-Number(b.name.startsWith('その他'))||b.total-a.total||a.name.localeCompare(b.name,'ja');
     root.replaceChildren();
     for(const [type,title,total]of [['income','収入',income],['expense','支出',expense]]){
       const section=el('section',undefined,'panel category-summary-group'),heading=el('div',undefined,'category-summary-heading'),h=el('h4',title);
@@ -193,7 +193,7 @@
     }
     root.replaceChildren(fragment);$('more-entries').hidden=entryCount<=visibleEntries;$('entry-display').textContent=entryCount?`${Math.min(entryCount,visibleEntries)} / ${entryCount}件を表示`:'';$('income').textContent=money(income);$('expense').textContent=money(expense);$('net').textContent=money(income-expense);$('empty-entries').hidden=entryCount>0;$('entry-count').textContent=rows.length+'件';renderCategorySummary(groups,income,expense);
   }
-  function renderAccounts(){const root=$('accounts');root.replaceChildren();let total=0;for(const a of data.accounts){if(!a.archived)total+=totals(a);const card=el('article',undefined,'panel account-card'),header=el('header'),title=el('div');title.append(el('h3',a.name),el('span',`${a.type}${a.archived?'・保管済み':''}`,'muted small'));header.append(title);if(session?.role==='owner')header.append(button('編集',()=>openAccount(a)));card.append(header,el('p',money(totals(a)),'total'),el('p',a.balances?.length?`${a.balances.at(-1).date} 時点`:'基準日未入力','muted small'));for(const i of a.items){const row=el('div',undefined,'item');row.append(el('span',i.name),el('strong',money(i.amount)));card.append(row);}root.append(card);}$('current-assets').textContent=money(total);$('empty-accounts').hidden=data.accounts.length>0;}
+  function renderAccounts(){const root=$('accounts');root.replaceChildren();let total=0;for(const a of data.accounts){total+=totals(a);const card=el('article',undefined,'panel account-card'),header=el('header'),title=el('div');title.append(el('h3',a.name),el('span',a.type,'muted small'));header.append(title);if(session?.role==='owner')header.append(button('編集',()=>openAccount(a)));card.append(header,el('p',money(totals(a)),'total'),el('p',a.balances?.length?`${a.balances.at(-1).date} 時点`:'基準日未入力','muted small'));for(const i of a.items){const row=el('div',undefined,'item');row.append(el('span',i.name),el('strong',money(i.amount)));card.append(row);}root.append(card);}$('current-assets').textContent=money(total);$('empty-accounts').hidden=data.accounts.length>0;}
   function points(){return assetPoints;}
   assetChart=TRoomAssetChart.create({root:$('chart'),month:$('chart-month'),value:$('chart-value'),change:$('chart-change'),live:$('chart-live')});
   function renderAssets(){
@@ -213,15 +213,52 @@
     }
     $('empty-assets').hidden=values.length>0;$('asset-record-count').textContent=`${values.length}件`;
   }
-  function renderCategories(){const groups=new Map();for(const c of visibleCategories()){if(!groups.has(c.parent))groups.set(c.parent,[]);groups.get(c.parent).push(c);}options($('category-parent'),[...groups.keys()].map(p=>[p,p]));const root=$('categories');root.replaceChildren();for(const [parent,items]of groups){const row=el('div',undefined,'category-group');row.append(el('strong',parent));for(const c of items){if(!c.builtin&&session?.role==='owner'){row.append(button(c.name,()=>{categoryEditing=c;$('category-parent').value=c.parent;field($('category-form'),'name').value=c.name;$('category-form').querySelector('[type=submit]').textContent='変更を保存';$('category-cancel').hidden=false;}),button(`${c.name}を削除`,()=>{const expected=revision;ask('分類を削除しますか？',c.name,()=>mutate('category.delete',{id:c.id},expected));},'danger'));}else row.append(el('span',c.name));}root.append(row);}}
+  function renderCategories(){
+    const groups=new Map();for(const c of visibleCategories()){if(!groups.has(c.parent))groups.set(c.parent,[]);groups.get(c.parent).push(c);}
+    const parents=[...groups.keys()].map(p=>[p,p]);options($('category-parent'),parents);options($('category-edit-parent'),parents);
+    const editing=categoryEditMode&&session?.role==='owner';$('edit-categories').textContent=editing?'編集を完了':'分類を編集';$('edit-categories').setAttribute('aria-pressed',String(editing));$('category-edit-help').hidden=!editing;
+    const root=$('categories');root.replaceChildren();
+    for(const [parent,items]of groups){
+      const row=el('div',undefined,'category-group');row.append(el('strong',parent));
+      for(const c of items){
+        const chip=editing&&!c.builtin?button(c.name,()=>openCategory(c),'category-chip category-edit-button'):el('span',c.name,'category-chip');
+        chip.dataset.categoryId=c.id;if(chip.tagName==='BUTTON')chip.setAttribute('aria-label',`${c.name}を編集`);row.append(chip);
+      }
+      root.append(row);
+    }
+    updateCategoryDelete();
+  }
   function render(){options($('category-filter'),[...new Set(visibleCategories().map(c=>c.parent))].map(p=>[p,p]),'すべて');renderTransactions();renderAccounts();renderAssets();renderCategories();showView();}
   function showView(){const view=['transactions','accounts','assets','settings'].includes(location.hash.slice(1))?location.hash.slice(1):'transactions';for(const page of document.querySelectorAll('.page'))page.hidden=page.id!==`view-${view}`;for(const b of document.querySelectorAll('[data-view]')){if(b.dataset.view===view)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');}if(view==='assets')assetChart.resize();}
   for(const b of document.querySelectorAll('[data-view]'))b.onclick=()=>{if(location.hash!==`#${b.dataset.view}`)history.pushState({...history.state,householdView:b.dataset.view},'',`#${b.dataset.view}`);showView();};window.addEventListener('popstate',showView);
   for(const b of document.querySelectorAll('[data-entry-type]'))b.onclick=()=>{if(busy||entryType===b.dataset.entryType)return;entryType=b.dataset.entryType;renderTransactions();};
   $('more-entries').onclick=()=>{visibleEntries+=200;renderTransactions();};
   $('period').value=today().slice(0,7);for(const id of ['period','period-mode','category-filter'])$(id).onchange=renderTransactions;$('search').oninput=renderTransactions;
-  function resetCategory(){categoryEditing=null;$('category-form').reset();$('category-form').querySelector('[type=submit]').textContent='中項目を追加';$('category-cancel').hidden=true;}
-  $('category-cancel').onclick=resetCategory;$('category-form').onsubmit=async event=>{event.preventDefault();if(busy||session?.role!=='owner')return;const generation=sessionGeneration,value={id:categoryEditing?.id||crypto.randomUUID(),...formValues($('category-form'))};setBusy(true);try{await mutate('category.save',value);currentGeneration(generation);resetCategory();}catch(error){report(error,'message',generation);}finally{if(generation===sessionGeneration)setBusy(false);}};
+  const categoryForm=$('category-edit-form');
+  const categoryEditor=editor('category-edit-dialog','category-edit-form',()=>JSON.stringify(formValues(categoryForm)),e=>mutate('category.save',{id:e.id,...formValues(categoryForm)},e.expectedRevision,e.requestId),id=>{
+    const origin=[...$('categories').querySelectorAll('button')].find(b=>b.dataset.categoryId===id);
+    (origin||$('edit-categories')).focus({preventScroll:true});
+  });
+  function updateCategoryDelete(){
+    const record=data.categories.find(c=>c.id===categoryEditor.id),used=record&&data.transactions.some(t=>t.categoryId===record.id);
+    $('category-delete').disabled=busy||!record||record.builtin||used;
+    $('category-delete-reason').textContent=used?'明細で使用中のため削除できません。':'';
+  }
+  function openCategory(record){
+    if(busy||session?.role!=='owner'||record.builtin)return;
+    categoryForm.reset();field(categoryForm,'parent').value=record.parent;field(categoryForm,'name').value=record.name;
+    open('category-edit-dialog',categoryEditor,record.id);updateCategoryDelete();
+  }
+  $('edit-categories').onclick=()=>{if(busy||session?.role!=='owner')return;categoryEditMode=!categoryEditMode;renderCategories();};
+  $('category-delete').onclick=()=>{
+    if($('category-delete').disabled)return;
+    const record=data.categories.find(c=>c.id===categoryEditor.id),expected=categoryEditor.expectedRevision,requestId=crypto.randomUUID();
+    ask('分類を削除しますか？',record.name,async()=>{
+      await mutate('category.delete',{id:record.id},expected,requestId);
+      await nav.close('confirm-dialog',{force:true});setBusy(false);await nav.close('category-edit-dialog',{force:true});
+    });
+  };
+  $('category-form').onsubmit=async event=>{event.preventDefault();if(busy||session?.role!=='owner')return;const generation=sessionGeneration,value={id:crypto.randomUUID(),...formValues($('category-form'))};setBusy(true);try{await mutate('category.save',value);currentGeneration(generation);$('category-form').reset();}catch(error){report(error,'message',generation);}finally{if(generation===sessionGeneration)setBusy(false);}};
   async function download(path,filename){if(busy)return;const generation=sessionGeneration;setBusy(true);try{const blob=await api(path,undefined,true);currentGeneration(generation);const url=URL.createObjectURL(blob),a=el('a');downloadUrls.add(url);a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>{URL.revokeObjectURL(url);downloadUrls.delete(url);},10000);}catch(error){report(error,'message',generation);}finally{if(generation===sessionGeneration)setBusy(false);}};
   $('export-csv').onclick=()=>download('/export.csv',`家計簿-明細-${today()}.csv`);$('export-backup').onclick=()=>download('/backup',`家計簿-バックアップ-${today()}.json`);
   $('restore-file').onchange=async()=>{const generation=sessionGeneration;restoreFile=null;$('restore').disabled=true;$('restore-preview').textContent='';const file=$('restore-file').files[0];if(!file)return;try{if(file.size>12*1024*1024)throw new Error('12MB以下のバックアップを選んでください。');const value=JSON.parse(await file.text());currentGeneration(generation);if(value.format!=='troom-household'||![1,2].includes(value.version)||!value.data)throw new Error('家計簿のバックアップファイルを選んでください。');for(const key of ['accounts','transactions','snapshots','historical','categories'])if(!Array.isArray(value.data[key]))throw new Error('バックアップの形式を確認してください。');restoreFile=value;$('restore-preview').textContent=`口座 ${value.data.accounts.length}件・明細 ${value.data.transactions.length}件・月末記録 ${value.data.snapshots.length+value.data.historical.length}件`;$('restore').disabled=false;}catch(error){report(error,'restore-preview',generation);}};

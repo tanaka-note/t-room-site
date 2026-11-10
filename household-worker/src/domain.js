@@ -50,7 +50,7 @@ const definitions = {
 // Money Forward ME's published category order. IDs remain unchanged for existing records/backups.
 export const CATEGORY_ORDER = ['収入','食費','現金・カード','交通費','趣味・娯楽','日用品','衣服・美容','特別な支出','交際費','住宅','水道・光熱費','自動車','保険','税・社会保障','教養・教育','通信費','健康・医療','その他','未分類'];
 export function orderedCategories(categories) {
-  return [...categories].sort((a,b)=>CATEGORY_ORDER.indexOf(a.parent)-CATEGORY_ORDER.indexOf(b.parent)||Number(b.builtin)-Number(a.builtin)||(a.builtin&&b.builtin?Number(a.id.split('-').at(-1))-Number(b.id.split('-').at(-1)):a.name.localeCompare(b.name,'ja')));
+  return [...categories].sort((a,b)=>CATEGORY_ORDER.indexOf(a.parent)-CATEGORY_ORDER.indexOf(b.parent)||Number(a.name.startsWith('その他'))-Number(b.name.startsWith('その他'))||Number(b.builtin)-Number(a.builtin)||(a.builtin&&b.builtin?Number(a.id.split('-').at(-1))-Number(b.id.split('-').at(-1)):a.name.localeCompare(b.name,'ja')));
 }
 export function defaultCategories() {
   return orderedCategories(Object.entries(definitions).flatMap(([parent, names], p) => names.map((name, n) => ({ id: `builtin-${p}-${n}`, parent, name, type: parent === '収入' ? 'income' : 'expense', builtin: true }))));
@@ -101,6 +101,8 @@ export function assetHistory(data, today = jstDate()) {
       while (index+1 < balances.length && balances[index+1].date <= cutoff) index++;
       cursors.set(account.id,index);
       const selected = balances[index];
+      // Legacy archived, undated accounts keep their former projection behavior.
+      // New saves always supply a date and clear this compatibility flag.
       if (!selected) { if (!balances.length && !account.archived) missing.push(account.id); continue; }
       const value = selected.items.reduce((sum,item)=>sum+item.amount,0);
       if (!Number.isSafeInteger(value)) throw new HttpError(400, '合計金額が大きすぎます。');
@@ -165,7 +167,7 @@ export function mutateData(data, operation, value) {
     const existing = next.accounts.find(a=>a.id===value?.id);
     if (value?.historyId && value.historyId !== existing?.historyId) throw new HttpError(400, '口座の対応付け機能は利用できません。');
     // Keep any legacy backup metadata intact; new account links are no longer accepted.
-    const row = accountInput({ ...value, historyId: existing?.historyId, balances: existing?.balances || [] });
+    const row = accountInput({ ...value, archived: false, historyId: existing?.historyId, balances: existing?.balances || [] });
     const asOf = balanceDate(value?.asOf);
     const submitted = accountInput({ ...value, balances: undefined }).items;
     const balances = row.balances.filter(b=>b.date!==asOf);
@@ -173,7 +175,6 @@ export function mutateData(data, operation, value) {
     row.balances = balances.sort((a,b)=>a.date.localeCompare(b.date));
     if (row.balances.length > 3600) throw new HttpError(400, '残高履歴の件数が上限に達しました。');
     row.items = structuredClone(row.balances.at(-1).items);
-    if (row.archived && row.items.some(i => i.amount !== 0)) throw new HttpError(400, '残高のある口座は保管できません。');
     if (!next.accounts.some(a => a.id === row.id) && next.accounts.length >= 200) throw new HttpError(400, '口座数の上限に達しました。');
     upsert(next.accounts, row);
   } else if (['snapshot.save','snapshot.delete','historical.save','historical.delete'].includes(operation)) throw new HttpError(400, '資産推移は自動集計です。口座画面から基準日と残高を入力してください。');
