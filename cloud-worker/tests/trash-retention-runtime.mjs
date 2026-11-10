@@ -70,7 +70,7 @@ test("workerd: Worker-first cutover preserves R2 on old schema and while migrati
   } finally { await mf.dispose(); }
 });
 
-test("workerd: production activation after two dry-runs deletes only expired verified trash and preserves other R2 data", async () => {
+test("workerd: production activation after two dry-runs drains multiple pages and preserves other R2 data", async () => {
   const mf = new Miniflare((convertV4MiniflareOptions || (options => options))({ workers: [{ modules: true, script,
     compatibilityDate: "2026-08-01", d1Databases: ["DB"], r2Buckets: ["FILES"], bindings: productionVars }] }));
   try {
@@ -80,9 +80,9 @@ test("workerd: production activation after two dry-runs deletes only expired ver
     await db.prepare("UPDATE cloud_trash_control SET cutover_ready=1 WHERE id=1").run();
     await db.prepare("INSERT INTO cloud_folders(id,name,created_by) VALUES(1,'live','admin'),(2,'expired tree','admin')").run();
     await db.prepare("INSERT INTO cloud_folders(id,parent_id,name,created_by) VALUES(3,2,'child','admin')").run();
-    for (let id = 1; id <= 6; id++) {
+    for (let id = 1; id <= 26; id++) {
       await db.prepare(`INSERT INTO cloud_files(id,folder_id,object_key,original_name,mime_type,media_kind,size_bytes,status,created_by)
-        VALUES(?,?,?,'synthetic','video/mp4','video',20,'ready','admin')`).bind(id, id === 6 ? 3 : 1, `originals/${id}`).run();
+        VALUES(?,?,?,'synthetic','video/mp4','video',20,'ready','admin')`).bind(id, id >= 6 ? 3 : 1, `originals/${id}`).run();
       await r2.put(`originals/${id}`, `fixture-video-data-${id}`);
     }
     await r2.put("thumbnails/1", "thumb");
@@ -112,7 +112,7 @@ test("workerd: production activation after two dry-runs deletes only expired ver
     const beforeBusiness = await business(), beforeStorage = await storage();
     for (let run = 0; run < 2; run++) {
       const result = await (await request("/dry-run")).json();
-      assert.equal(result.failed, 0); assert.equal(result.deleted, 0); assert.equal(result.skipped, 4);
+      assert.equal(result.failed, 0); assert.equal(result.deleted, 0); assert.equal(result.skipped, 24);
       assert.equal(await business(), beforeBusiness); assert.deepEqual(await storage(), beforeStorage);
     }
     assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM cloud_audit_logs WHERE event_type='trash_run_finished'").first()).n, 2);
@@ -120,15 +120,16 @@ test("workerd: production activation after two dry-runs deletes only expired ver
     assert.equal(limited.reason, "byte_limit"); assert.equal(limited.deleted, 0);
     assert.equal(await business(), beforeBusiness); assert.deepEqual(await storage(), beforeStorage);
     let result = await (await request("/run")).json();
-    assert.equal(result.failed, 0); assert.equal(result.deleted, 2); assert.equal(result.deletedFolders, 1);
+    assert.equal(result.failed, 0); assert.equal(result.deleted, 22); assert.equal(result.deletedFolders, 2);
     result = await (await request("/run")).json();
-    assert.equal(result.failed, 0); assert.equal(result.deletedFolders, 1);
+    assert.equal(result.failed, 0); assert.equal(result.deletedFolders, 0);
     for (const id of [2, 3, 4, 5]) {
       assert.ok(await db.prepare("SELECT id FROM cloud_files WHERE id=?").bind(id).first());
       assert.equal(await (await r2.get(`originals/${id}`)).text(), `fixture-video-data-${id}`);
     }
-    assert.deepEqual(await storage(), beforeStorage.filter(([key]) => !["originals/1", "originals/6", "thumbnails/1"].includes(key)));
-    assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM cloud_trash_purges WHERE phase='completed'").first()).n, 2);
+    const expiredKeys = new Set(["originals/1", "thumbnails/1", ...Array.from({ length: 21 }, (_, i) => `originals/${i + 6}`)]);
+    assert.deepEqual(await storage(), beforeStorage.filter(([key]) => !expiredKeys.has(key)));
+    assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM cloud_trash_purges WHERE phase='completed'").first()).n, 22);
     assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM cloud_folders WHERE id=1 AND deleted_at IS NULL").first()).n, 1);
   } finally { await mf.dispose(); }
 });

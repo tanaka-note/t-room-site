@@ -6,7 +6,8 @@ import vm from "node:vm";
 import { context, env as sessionEnv, api, handoff, db as sessionDb } from "./session-fixture.mjs";
 
 const DAY = 86400000;
-const productionVars = JSON.parse(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8")).vars;
+const productionConfig = JSON.parse(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"));
+const productionVars = productionConfig.vars;
 const admin = { role: "admin", canDelete: true };
 function fixture(options = {}, migrated = true) {
   const db = new DatabaseSync(":memory:");
@@ -72,6 +73,136 @@ function businessState(db) {
   return JSON.stringify(["cloud_files", "cloud_folders", "cloud_trash_operations", "cloud_trash_purges", "cloud_trash_folder_purges"]
     .map(table => db.prepare(`SELECT * FROM ${table} ORDER BY id`).all()));
 }
+
+// Synthetic rows only: no multipart data is transferred. Give each file its
+// own verified operation, as individual trash actions in a live folder do.
+function seedExpiredFiles(f, count, bytes = 1024 * 1024) {
+  f.folder(1);
+  const at = new Date(Date.now() - 31 * DAY).toISOString();
+  const operation = f.db.prepare("INSERT INTO cloud_trash_operations(id,deleted_at,target_type,target_id) VALUES(?,?,'file',?)");
+  const update = f.db.prepare("UPDATE cloud_files SET deleted_at=?,trash_operation_id=? WHERE id=?");
+  f.db.exec("BEGIN");
+  try {
+    for (let id = 1; id <= count; id++) {
+      f.file(id, 1, bytes);
+      operation.run(`bulk-fixture-${id}`, at, id);
+      update.run(at, `bulk-fixture-${id}`, id);
+    }
+    f.db.exec("COMMIT");
+  } catch (error) { f.db.exec("ROLLBACK"); throw error; }
+}
+
+test("production drains 5,000 small files through twenty-row pages; remaining files stay restorable", { timeout: 120000 }, async () => {
+  const f = fixture(productionVars);
+  seedExpiredFiles(f, 5001);
+  f.db.exec("UPDATE cloud_trash_control SET last_candidate_count=0");
+  for (const id of [6000, 6001, 6002, 6003]) f.file(id, 1);
+  await f.trash(6001, 31); await f.restore(6001);
+  await f.trash(6002, 29);
+  f.db.prepare("UPDATE cloud_files SET deleted_at=? WHERE id=6003").run(new Date(Date.now() - 90 * DAY).toISOString());
+  const protectedRows = [6000, 6001, 6002, 6003].map(id => f.row(id));
+  const pages = []; let sqlCalls = 0;
+  f.hooks.before = () => { sqlCalls++; };
+  f.hooks.after = (sql, kind, args, value) => {
+    if (kind === "all" && sql.includes("ORDER BY f.purge_id IS NULL")) pages.push(value.results.length);
+  };
+  let result = await f.run();
+  assert.equal(result.failed, 0); assert.equal(result.deleted, 5000); assert.equal(result.reason, "count_limit");
+  assert.equal(result.bytes, 5000 * 1024 * 1024);
+  assert.ok(sqlCalls + f.heads.length + f.deletes.length < productionConfig.limits.subrequests);
+  console.log("Synthetic throughput operations", JSON.stringify({ files: result.deleted, sqlStatements: sqlCalls,
+    r2Heads: f.heads.length, r2Deletes: f.deletes.length, configuredSubrequests: productionConfig.limits.subrequests }));
+  assert.equal(pages.length, 250); assert.ok(pages.every(n => n === 20));
+  assert.equal(new Set(f.deletes).size, 5000); assert.equal(f.row(5001).purge_id, null);
+  assert.deepEqual([6000, 6001, 6002, 6003].map(id => f.row(id)), protectedRows);
+  for (const id of [6000, 6001, 6002, 6003]) assert.equal(f.objects.has(`originals/${id}`), true);
+  await f.restore(5001); await f.trash(5001, 31);
+  result = await f.run(); assert.equal(result.failed, 0); assert.equal(result.deleted, 1);
+});
+
+test("keyset pages preserve concurrent restoration/re-trash and prioritize persisted retries without skipping files", async () => {
+  for (const retrash of [false, true]) {
+    const f = fixture(productionVars); seedExpiredFiles(f, 41, 10);
+    f.hooks.deleted = async key => {
+      if (key !== "originals/20") return;
+      await f.restore(21);
+      if (retrash) await context.moveFileToTrash(21, f.env, admin);
+    };
+    const result = await f.run();
+    assert.equal(result.failed, 0); assert.equal(result.deleted, 40);
+    assert.equal(new Set(f.deletes).size, 40); assert.equal(f.objects.has("originals/21"), true);
+    assert.equal(f.row(21).purge_id, null);
+  }
+  const f = fixture(productionVars); seedExpiredFiles(f, 41, 10);
+  f.hooks.delete = () => { throw new Error("fixture R2 failure"); };
+  await assert.rejects(context.permanentlyDeleteFile(25, f.env, admin));
+  assert.ok(f.row(25).purge_id);
+  f.hooks.delete = null; const start = f.deletes.length;
+  const result = await f.run();
+  assert.equal(result.failed, 0); assert.equal(result.deleted, 41);
+  assert.equal(f.deletes[start], "originals/25");
+  assert.equal(new Set(f.deletes.slice(start)).size, 41);
+});
+
+test("time budget stops before a new claim, completes an in-flight file, and leaves later files restorable", async () => {
+  const runtimeDate = vm.runInNewContext("Date", context), originalNow = runtimeDate.now;
+  let now = Date.now(); runtimeDate.now = () => now;
+  try {
+    for (const afterHead of [false, true]) {
+      const f = fixture({ ...productionVars, TRASH_PURGE_MAX_DURATION_MS: "1000" });
+      seedExpiredFiles(f, 3, 10);
+      if (afterHead) f.hooks.head = () => { now += 1001; };
+      else f.hooks.deleted = () => { now += 1001; };
+      let result = await f.run();
+      assert.equal(result.failed, 0); assert.equal(result.reason, "time_limit");
+      assert.equal(result.deleted, afterHead ? 0 : 1);
+      assert.equal(f.row(2).purge_id, null); await f.restore(2);
+      assert.equal(f.db.prepare("SELECT lease_owner FROM cloud_trash_control").get().lease_owner, null);
+      f.hooks.head = null; f.hooks.deleted = null;
+      result = await f.run(); assert.equal(result.failed, 0); assert.equal(result.deleted, afterHead ? 2 : 1);
+    }
+  } finally { runtimeDate.now = originalNow; }
+});
+
+test("folder preflight checks later pages before any purge; empty ancestors drain in the same automatic run", async () => {
+  const f = fixture(productionVars);
+  for (let id = 1; id <= 22; id++) f.folder(id);
+  f.folder(23, 22); f.file(1, 1);
+  for (let id = 1; id <= 22; id++) {
+    await context.deleteFolder(id, f.env, admin); f.age(id, 31, "folder");
+  }
+  f.db.exec("UPDATE cloud_folders SET deleted_at=NULL,trash_operation_id=NULL WHERE id=23");
+  const result = await f.run();
+  assert.equal(result.reason, "inconsistent_folder_tree"); assert.deepEqual(f.deletes, []);
+  assert.ok(f.row(1));
+
+  const nested = fixture(productionVars);
+  nested.folder(1);
+  for (let id = 2; id <= 30; id++) nested.folder(id, id - 1);
+  await context.deleteFolder(1, nested.env, admin); nested.age(1, 31, "folder");
+  const drained = await nested.run();
+  assert.equal(drained.failed, 0); assert.equal(drained.deletedFolders, 30);
+  assert.equal(nested.db.prepare("SELECT COUNT(*) AS n FROM cloud_folders").get().n, 0);
+});
+
+test("folder time budget is checked after validation and before creating an irreversible manifest", async () => {
+  const runtimeDate = vm.runInNewContext("Date", context), originalNow = runtimeDate.now;
+  let now = Date.now(); runtimeDate.now = () => now;
+  try {
+    const f = fixture({ ...productionVars, TRASH_PURGE_MAX_DURATION_MS: "1000" });
+    f.folder(1); await context.deleteFolder(1, f.env, admin); f.age(1, 31, "folder");
+    let leafRead = false;
+    f.hooks.after = (sql, kind) => {
+      if (kind === "all" && sql.includes("SELECT f.id,f.parent_id,f.deleted_at")) leafRead = true;
+      if (leafRead && kind === "first" && sql.includes("AS invalid")) now += 1001;
+    };
+    const result = await f.run();
+    assert.equal(result.failed, 0); assert.equal(result.reason, "time_limit"); assert.equal(result.deletedFolders, 0);
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM cloud_trash_folder_purges").get().n, 0);
+    f.hooks.after = null; await context.restoreFolder(1, f.env, admin);
+    assert.equal(f.db.prepare("SELECT deleted_at FROM cloud_folders WHERE id=1").get().deleted_at, null);
+  } finally { runtimeDate.now = originalNow; }
+});
 
 test("historical Worker + 0013 reproduces R2 loss before D1 delete guard rejects single/bulk deletion", async () => {
   const historical = readFileSync(new URL("./fixtures/trash-before-0013.js", import.meta.url), "utf8");
@@ -171,7 +302,7 @@ test("candidate snapshot -> restoration/re-trash -> claim cannot delete the new 
     const f = fixture(); f.file(1); await f.trash(1);
     const g = gate();
     f.hooks.after = async (sql, kind) => {
-      if (kind === "all" && sql.includes("SELECT f.* FROM cloud_files")) { f.hooks.after = null; await g.pause(); }
+      if (kind === "all" && sql.includes("ORDER BY f.purge_id IS NULL")) { f.hooks.after = null; await g.pause(); }
     };
     const pending = f.run(); await g.ready; await f.restore(1);
     if (retrash) await context.moveFileToTrash(1, f.env, admin);
@@ -452,11 +583,13 @@ test("1 TiB budget includes retries and thumbnails; overflow stays restorable un
 });
 
 test("production budget still fails closed on invalid limits, shared keys, emergency stop and candidate spikes", async () => {
-  for (const mode of ["oversized", "unsafe", "fraction", "shared", "stop", "spike"]) {
+  for (const mode of ["oversized", "unsafe", "fraction", "count", "duration", "shared", "stop", "spike"]) {
     const f = fixture(productionVars); f.file(1); await f.trash(1, 31);
     if (mode === "oversized") f.env.TRASH_PURGE_MAX_BYTES = String(1024 ** 4 + 1);
     if (mode === "unsafe") f.env.TRASH_PURGE_MAX_BYTES = String(Number.MAX_SAFE_INTEGER + 1);
     if (mode === "fraction") f.env.TRASH_PURGE_MAX_BYTES = "1.5";
+    if (mode === "count") f.env.TRASH_PURGE_MAX_COUNT = "5001";
+    if (mode === "duration") f.env.TRASH_PURGE_MAX_DURATION_MS = "480001";
     if (mode === "shared") { f.file(2); f.db.exec("UPDATE cloud_files SET thumbnail_key='originals/1' WHERE id=2"); }
     if (mode === "stop") f.db.exec("UPDATE cloud_trash_control SET emergency_stop=1");
     if (mode === "spike") {
