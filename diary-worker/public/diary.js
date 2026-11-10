@@ -1184,9 +1184,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     } catch {
       return false;
     }
-    return returnView?.version === 2
+    const href = diaryListHref(destinationPath);
+    return Boolean(href) && returnView?.version === 2
       && returnView.destinationPath === window.location.pathname
-      && returnView.routePath === destinationPath
+      && diaryListHref(returnView.routePath) === href
       && isOwnedDiaryReturnView(returnView)
       && window.history.state?.[RETURN_NAVIGATION_KEY] === returnView.savedAt
       && Date.now() - returnView.savedAt <= RETURN_VIEW_MAX_AGE_MS;

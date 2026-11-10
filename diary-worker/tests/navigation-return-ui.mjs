@@ -61,7 +61,7 @@ function configure({ sourcePath = "/diary/", referrer = "https://diary.test/diar
     Object.assign(state, nextSession);
     runInNewContext(`${helpers}\nupdateDiaryReturnNavigation();`, context);
   }
-  const canGoBack = runInNewContext(`${helpers}\nhasDiaryReturnNavigation(${JSON.stringify(sourcePath)});`, context);
+  const canGoBack = runInNewContext(`${helpers}\nhasDiaryReturnNavigation(${JSON.stringify(backLink.href)});`, context);
   assert.equal(history.state.unrelated, "preserved");
   if (!storageBlocked) assert.equal(storage.has("handoff"), false, "handoff is consumed even when rejected");
   return { token: history.state.handoff, backLink, canGoBack };
@@ -138,6 +138,7 @@ for (const [sourcePath, expected] of [
   const source = new URL(sourcePath, "https://diary.test");
   const result = configure({ sourcePath: source.pathname, referrer: source.href });
   assert.equal(result.backLink.href, expected, `safe return link for ${sourcePath}`);
+  assert.equal(result.canGoBack, true, "canonicalized links preserve the original history return");
   const target = new URL(result.backLink.href, "https://diary.test");
   assert.equal(target.origin, "https://diary.test");
   assert.equal(target.protocol, "https:");
