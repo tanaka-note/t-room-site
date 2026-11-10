@@ -34,7 +34,7 @@
     "verify:ai": "node tools/verify.mjs --target ai --browser --build"
   },
   "devDependencies": {
-    "pagefind": "^1.5.2",
-    "wrangler": "4.121.0"
+    "pagefind": "^1.6.0",
+    "wrangler": "4.158.0"
   }
 }
