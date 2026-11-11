@@ -84,6 +84,24 @@ const server = createServer(async (req, res) => {
     // Any accidental plaintext HTTP API access fails this test.
     if (url.pathname.startsWith("/diary/api/"))
       return json({ error: "PlaintextApiForbidden" }, 500);
+    // Serve explicit fixture entrypoints; leave the actual HTML shell untouched.
+    if (
+      [
+        "/diary/diary-bootstrap.js",
+        "/assets/pwa-auto-update.js",
+        "/security/passkey-client.js",
+      ].includes(url.pathname)
+    ) {
+      res.writeHead(200, {
+        "Content-Type": "text/javascript",
+        "Cache-Control": "no-store",
+      });
+      return res.end(
+        url.pathname === "/diary/diary-bootstrap.js"
+          ? "void import('/diary-worker/tests/e2ee/browser-bootstrap.mjs');"
+          : "// Disabled in the local encryption fixture. No SW, production auth or update calls.",
+      );
+    }
     let relative;
     if (url.pathname.startsWith("/diary/"))
       relative =
@@ -103,12 +121,7 @@ const server = createServer(async (req, res) => {
     else return res.writeHead(404).end();
     const file = resolve(root, relative);
     if (!file.startsWith(root + sep)) throw new Error("InvalidPath");
-    let body = await readFile(file);
-    if (file.endsWith("/public/index.html"))
-      body = Buffer.from(
-        body.toString().replace(/<script[\s\S]*?<\/script>/g, "") +
-          '<script type="module" src="/diary-worker/tests/e2ee/browser-bootstrap.mjs"></script>',
-      );
+    const body = await readFile(file);
     res.writeHead(200, {
       "Content-Type":
         {
