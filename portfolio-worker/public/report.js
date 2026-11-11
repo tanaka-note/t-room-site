@@ -1,29 +1,12 @@
 "use strict";
 
-import { createPortfolioModel, calculateHistoryScale, adjustedAllocationGroups } from './portfolio-model.mjs';
-let reportData, portfolio, allocation = [], adjustmentForPeriod, historyMarketValue;
+import { createPortfolioModel, adjustedAllocationGroups } from './portfolio-model.mjs';
+let reportData, allocation = [], adjustmentForPeriod;
 const yenFormatter = new Intl.NumberFormat("ja-JP", {
   style: "currency",
   currency: "JPY",
   maximumFractionDigits: 0
 });
-
-const HISTORY_RANGE_DEFINITIONS = {
-  "7d": { label: "1週間", days: 7 },
-  "1m": { label: "1ヶ月", days: 31 },
-  all: { label: "すべて", days: null }
-};
-
-const historyView = {
-  range: "all",
-  records: [],
-  visibleRecords: [],
-  geometry: null,
-  selectedIndex: -1,
-  eventsBound: false,
-  resizeObserver: null,
-  observedWidth: 0
-};
 
 let currentPortfolioTotal = 0;
 
@@ -143,245 +126,9 @@ function drawAllocationChart(total) {
   });
 }
 
-function initializeHistoryChart() {
-  const section = document.querySelector("#history-section");
-  historyView.records = [...reportData.history];
-
-  if (historyView.records.length < 2) {
-    section.hidden = true;
-    return;
-  }
-
-  section.hidden = false;
-  bindHistoryChartEvents();
-  applyHistoryRange(historyView.range);
-}
-
-function bindHistoryChartEvents() {
-  if (historyView.eventsBound) return;
-  historyView.eventsBound = true;
-  const controls = document.querySelector("#history-range-controls");
-  const canvas = document.querySelector("#history-chart");
-  const frame = document.querySelector(".chart-frame-history");
-  controls.addEventListener("click", (event) => {
-    const button = event.target.closest("button[data-history-range]");
-    if (button) applyHistoryRange(button.dataset.historyRange);
-  });
-  canvas.addEventListener("pointerdown", showNearestHistoryPoint);
-  canvas.addEventListener("pointermove", showNearestHistoryPoint);
-  canvas.addEventListener("pointerleave", (event) => {
-    if (event.pointerType === "mouse") hideHistoryTooltip();
-  });
-  if ("ResizeObserver" in window) {
-    historyView.resizeObserver = new ResizeObserver(([entry]) => {
-      const nextWidth = Math.round(entry.contentRect.width);
-      if (!nextWidth || nextWidth === historyView.observedWidth) return;
-      historyView.observedWidth = nextWidth;
-      window.requestAnimationFrame(() => drawHistoryChart());
-    });
-    historyView.resizeObserver.observe(frame);
-  }
-}
-
-function applyHistoryRange(rangeKey) {
-  const definition = HISTORY_RANGE_DEFINITIONS[rangeKey] || HISTORY_RANGE_DEFINITIONS.all;
-  historyView.range = HISTORY_RANGE_DEFINITIONS[rangeKey] ? rangeKey : "all";
-  const latestDate = parseHistoryDate(historyView.records.at(-1).period);
-  let threshold = null;
-  if (definition.days) {
-    threshold = new Date(latestDate);
-    threshold.setUTCDate(threshold.getUTCDate() - definition.days);
-  }
-  historyView.visibleRecords = threshold
-    ? historyView.records.filter((entry) => parseHistoryDate(entry.period) >= threshold)
-    : [...historyView.records];
-  if (!historyView.visibleRecords.length) historyView.visibleRecords = [historyView.records.at(-1)];
-  historyView.selectedIndex = -1;
-  hideHistoryTooltip(false);
-  updateHistoryRangeUi(definition);
-  drawHistoryChart();
-}
-
-function updateHistoryRangeUi(definition) {
-  const first = historyView.visibleRecords[0];
-  const latest = historyView.visibleRecords.at(-1);
-  document.querySelector("#history-period").textContent = `${formatHistoryDateShort(first.period)} — ${formatHistoryDateShort(latest.period)}`;
-  document.querySelector("#history-summary").textContent = `${formatHistoryDateLong(first.period)}の${formatYen(historyMarketValue(first))}から、${formatHistoryDateLong(latest.period)}の${formatYen(historyMarketValue(latest))}までの推移です。`;
-  document.querySelectorAll("button[data-history-range]").forEach((button) => {
-    const active = button.dataset.historyRange === historyView.range;
-    button.classList.toggle("is-active", active);
-    button.setAttribute("aria-pressed", String(active));
-    if (active) button.setAttribute("aria-label", `${definition.label}を表示中`);
-    else button.removeAttribute("aria-label");
-  });
-}
-
-function drawHistoryChart() {
-  if (!historyView.visibleRecords?.length) return;
-
-  const canvas = document.querySelector("#history-chart");
-  const { context, width, height } = setupCanvas(canvas);
-  const compact = width < 560;
-  const padding = { top: 24, right: compact ? 12 : 22, bottom: 44, left: compact ? 62 : 82 };
-  const chartWidth = width - padding.left - padding.right;
-  const chartHeight = height - padding.top - padding.bottom;
-  const values = historyView.visibleRecords.map(historyMarketValue);
-  const { yMin, yMax, ySpan, tickInterval } = calculateHistoryScale(values);
-  const pointCount = historyView.visibleRecords.length;
-  const xFor = (index) => padding.left + (pointCount === 1 ? chartWidth / 2 : (index / (pointCount - 1)) * chartWidth);
-  const yFor = (value) => padding.top + ((yMax - value) / ySpan) * chartHeight;
-
-  context.clearRect(0, 0, width, height);
-  context.font = `600 ${compact ? 10 : 11}px "Yu Gothic UI", sans-serif`;
-  context.fillStyle = "#8996a8";
-  context.strokeStyle = "rgba(178, 201, 218, 0.15)";
-  context.lineWidth = 1;
-
-  for (let value = yMin; value <= yMax + tickInterval * 0.5; value += tickInterval) {
-    const y = yFor(value);
-    context.beginPath();
-    context.moveTo(padding.left, y);
-    context.lineTo(width - padding.right, y);
-    context.stroke();
-    context.textAlign = "right";
-    context.textBaseline = "middle";
-    context.fillText(formatHistoryAxisValue(value), padding.left - 10, y);
-  }
-
-  const labelCount = Math.min(compact ? 4 : 6, pointCount);
-  const labelIndexes = new Set();
-  for (let index = 0; index < labelCount; index += 1) {
-    labelIndexes.add(Math.round((index / Math.max(labelCount - 1, 1)) * (pointCount - 1)));
-  }
-  context.fillStyle = "#8996a8";
-  context.textBaseline = "top";
-  [...labelIndexes].forEach((recordIndex, position, indexes) => {
-    const x = xFor(recordIndex);
-    context.textAlign = position === 0 ? "left" : position === indexes.length - 1 ? "right" : "center";
-    context.fillText(formatHistoryDateAxis(historyView.visibleRecords[recordIndex].period), x, padding.top + chartHeight + 14);
-  });
-
-  const gradient = context.createLinearGradient(0, padding.top, 0, padding.top + chartHeight);
-  gradient.addColorStop(0, "rgba(82, 230, 170, 0.24)");
-  gradient.addColorStop(1, "rgba(82, 230, 170, 0)");
-  context.beginPath();
-  historyView.visibleRecords.forEach((entry, index) => {
-    const x = xFor(index);
-    const y = yFor(historyMarketValue(entry));
-    if (index === 0) context.moveTo(x, y);
-    else context.lineTo(x, y);
-  });
-  context.lineTo(xFor(pointCount - 1), padding.top + chartHeight);
-  context.lineTo(xFor(0), padding.top + chartHeight);
-  context.closePath();
-  context.fillStyle = gradient;
-  context.fill();
-
-  const drawSeries = (resolver, color, options = {}) => {
-    context.beginPath();
-    historyView.visibleRecords.forEach((entry, index) => {
-      const x = xFor(index);
-      const yValue = resolver(entry);
-      const y = yFor(yValue);
-      if (index === 0) context.moveTo(x, y);
-      else context.lineTo(x, y);
-    });
-    context.strokeStyle = color;
-    context.lineWidth = options.lineWidth || 2.5;
-    context.lineJoin = "round";
-    context.lineCap = "round";
-    context.setLineDash(options.dash || []);
-    context.stroke();
-    context.setLineDash([]);
-  };
-
-  drawSeries((entry) => historyMarketValue(entry), "#52e6aa", { lineWidth: compact ? 2.2 : 2.8 });
-
-  if (historyView.selectedIndex >= 0 && historyView.visibleRecords[historyView.selectedIndex]) {
-    const entry = historyView.visibleRecords[historyView.selectedIndex];
-    const x = xFor(historyView.selectedIndex);
-    const displayValue = historyMarketValue(entry);
-    context.strokeStyle = "rgba(245, 247, 250, 0.25)";
-    context.lineWidth = 1;
-    context.beginPath();
-    context.moveTo(x, padding.top);
-    context.lineTo(x, padding.top + chartHeight);
-    context.stroke();
-    [[displayValue, "#52e6aa"]].forEach(([value, color]) => {
-      context.beginPath();
-      context.arc(x, yFor(value), 5, 0, Math.PI * 2);
-      context.fillStyle = "#07090d";
-      context.fill();
-      context.strokeStyle = color;
-      context.lineWidth = 3;
-      context.stroke();
-    });
-  }
-
-  historyView.geometry = { padding, chartWidth, xFor, yFor };
-}
-
-function showNearestHistoryPoint(event) {
-  if (!historyView.geometry || !historyView.visibleRecords.length) return;
-  const canvas = document.querySelector("#history-chart");
-  const bounds = canvas.getBoundingClientRect();
-  const localX = event.clientX - bounds.left;
-  const { padding, chartWidth, xFor, yFor } = historyView.geometry;
-  const clampedX = Math.min(chartWidth, Math.max(0, localX - padding.left));
-  const index = historyView.visibleRecords.length === 1
-    ? 0
-    : Math.round((clampedX / chartWidth) * (historyView.visibleRecords.length - 1));
-  const entry = historyView.visibleRecords[index];
-  historyView.selectedIndex = index;
-  drawHistoryChart();
-  renderHistoryTooltip(entry, xFor(index), yFor(historyMarketValue(entry)));
-}
-
-function renderHistoryTooltip(entry, x, y) {
-  const tooltip = document.querySelector("#history-tooltip");
-  const frame = document.querySelector(".chart-frame-history");
-  const canvas = document.querySelector("#history-chart");
-  const marketValue = historyMarketValue(entry);
-  const date = document.createElement("time");
-  date.dateTime = entry.period;
-  date.textContent = formatHistoryDateLong(entry.period);
-  const value = document.createElement("strong");
-  value.textContent = formatYen(marketValue);
-  tooltip.replaceChildren(date, value);
-  const tooltipHalf = 84;
-  const relativeX = canvas.offsetLeft + x;
-  tooltip.style.left = `${Math.min(frame.clientWidth - tooltipHalf, Math.max(tooltipHalf, relativeX))}px`;
-  tooltip.style.top = `${Math.max(92, canvas.offsetTop + y)}px`;
-  tooltip.hidden = false;
-}
-
-function hideHistoryTooltip(redraw = true) {
-  historyView.selectedIndex = -1;
-  document.querySelector("#history-tooltip").hidden = true;
-  if (redraw && historyView.visibleRecords?.length) drawHistoryChart();
-}
-
-function parseHistoryDate(value) {
-  return new Date(`${value}T00:00:00Z`);
-}
-
-function formatHistoryDateLong(value) {
-  const date = parseHistoryDate(value);
+function formatReportDate(value) {
+  const date = new Date(`${value}T00:00:00Z`);
   return `${date.getUTCFullYear()}年${date.getUTCMonth() + 1}月${date.getUTCDate()}日`;
-}
-
-function formatHistoryDateShort(value) {
-  const date = parseHistoryDate(value);
-  return `${date.getUTCFullYear()}.${String(date.getUTCMonth() + 1).padStart(2, "0")}.${String(date.getUTCDate()).padStart(2, "0")}`;
-}
-
-function formatHistoryDateAxis(value) {
-  const date = parseHistoryDate(value);
-  return `${date.getUTCMonth() + 1}/${date.getUTCDate()}`;
-}
-
-function formatHistoryAxisValue(value) {
-  return `${Math.round(value / 10000).toLocaleString("ja-JP")}万円`;
 }
 
 function renderComment() {
@@ -419,7 +166,7 @@ function renderReport() {
   const total = renderSummary();
   const updated = document.querySelector("#report-updated");
   updated.dateTime = reportData.period;
-  updated.textContent = formatHistoryDateLong(reportData.period) + (reportData.time ? ' ' + reportData.time : '');
+  updated.textContent = formatReportDate(reportData.period) + (reportData.time ? ' ' + reportData.time : '');
   currentPortfolioTotal = total;
   renderLegend(total);
   renderHoldings();
@@ -427,7 +174,6 @@ function renderReport() {
   document.querySelector('.allocation-panel').hidden = !reportData.hasBreakdown;
   document.querySelector('.holdings-panel').hidden = !reportData.hasBreakdown;
   if (reportData.hasBreakdown) drawAllocationChart(total);
-  initializeHistoryChart();
 }
 
 let resizeTimer;
@@ -435,22 +181,18 @@ window.addEventListener("resize", () => {
   window.clearTimeout(resizeTimer);
   resizeTimer = window.setTimeout(() => {
     if (reportData?.hasBreakdown) drawAllocationChart(currentPortfolioTotal);
-    drawHistoryChart();
   }, 120);
 });
 
 export function showReport(data) {
   reportData = data;
-  portfolio = createPortfolioModel(data);
-  ({ adjustmentForPeriod, historyMarketValue } = portfolio);
+  ({ adjustmentForPeriod } = createPortfolioModel(data));
   allocation = data.hasBreakdown ? adjustedAllocationGroups(data) : [];
   renderReport();
 }
 export function clearReport() {
   reportData = null; allocation = []; currentPortfolioTotal = 0;
-  historyView.records = []; historyView.visibleRecords = []; historyView.geometry = null; historyView.selectedIndex = -1;
   for (const canvas of document.querySelectorAll('canvas')) canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
   for (const id of ['holdings-body', 'allocation-legend', 'monthly-report-entries']) document.getElementById(id).replaceChildren();
-  for (const id of ['principal-value', 'market-value', 'profit-value', 'return-value', 'report-updated', 'donut-total', 'history-period', 'history-summary']) document.getElementById(id).textContent = '';
-  document.getElementById('history-tooltip').hidden = true;
+  for (const id of ['principal-value', 'market-value', 'profit-value', 'return-value', 'report-updated', 'donut-total']) document.getElementById(id).textContent = '';
 }

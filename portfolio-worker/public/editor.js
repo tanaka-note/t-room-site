@@ -213,7 +213,7 @@ $('editor-form').onsubmit = async event => {
     setBusy(true);
     await api('/save', { record, basePrincipal, expectedRevision: dataset.revision, requestId: crypto.randomUUID() });
     markDirty(false); $('editor-panel').hidden = true;
-    await load(record.period); message('保存しました。合計とチャートを更新しました。'); channel?.postMessage('data-changed');
+    await load(record.period); message('保存しました。表示を更新しました。'); channel?.postMessage('data-changed');
   } catch (error) { failure(error); } finally { setBusy(false); }
 };
 $('login-button').onclick = async () => {
