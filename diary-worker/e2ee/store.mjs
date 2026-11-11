@@ -10,11 +10,12 @@ import {
   trashScope,
   retentionIds,
 } from "./policy.mjs";
+import { writeLease,leaseSQL } from "./rollout.mjs";
 import { verifyRecord } from "./record.mjs";
 const fail = (message, status = 409) => {
   throw Object.assign(new Error(message), { status });
 };
-const parse = (row) =>
+export const parseRecord = (row) =>
   row
     ? {
         id: row.id,
@@ -36,7 +37,7 @@ const parse = (row) =>
     : null;
 export function createStore(db, registry) {
   const get = async (id) =>
-    parse(
+    parseRecord(
       await db
         .prepare("SELECT * FROM diary_e2ee_records WHERE id=?")
         .bind(String(id))
@@ -93,6 +94,8 @@ export function createStore(db, registry) {
   }
   async function mutation(actor, proposal, operation = "save") {
     validate(proposal);
+    const lease=registry.enforceRollout?await writeLease(db,operation):null;
+    const rolloutGuard=leaseSQL(lease),rolloutBindings=lease?[lease.generation]:[];
     assertActor(actor, proposal.household);
     owner(proposal.household);
     const fingerprint = b64(
@@ -244,6 +247,7 @@ export function createStore(db, registry) {
           attestation: proposal.attestation,
         },
         registry.directory,
+        {currentRecipients:true},
       );
     } catch {
       fail("InvalidAttestation", 400);
@@ -268,11 +272,14 @@ export function createStore(db, registry) {
         photo.household !== next.household ||
         (!current?.photoIds.includes(id) &&
           !draftSource?.photoIds.includes(id) &&
-          photo.accountId !== actor.accountId &&
+          (photo.accountId !== actor.accountId || registry.enforceRollout && (photo.status!=="ready"||photo.expiresAt<=Date.now())) &&
           operation !== "import")
       )
         fail("PhotoAccessDenied", 403);
     }
+    const addedPhotos=proposal.photoIds.filter(id=>!current?.photoIds.includes(id)&&!draftSource?.photoIds.includes(id));
+    const stagedGuard=registry.enforceRollout&&addedPhotos.length?` AND (SELECT COUNT(*) FROM diary_e2ee_media WHERE id IN (SELECT value FROM json_each(?)) AND status='ready' AND expires_at>?)=?`:'';
+    const stagedBindings=stagedGuard?[JSON.stringify(addedPhotos),Date.now(),addedPhotos.length]:[];
     const values = [
       next.household,
       next.scope,
@@ -306,7 +313,7 @@ export function createStore(db, registry) {
     const write = current
       ? db
           .prepare(
-            `UPDATE diary_e2ee_records SET household=?,scope=?,state=?,author=?,revision=?,epoch=?,source_id=?,source_revision=?,retained_for=?,envelope=?,summary=?,photo_ids=?,request_id=?,mutation_id=?,key_box=?,attestation=? WHERE id=? AND revision=?${publishGuard}${photoGuard}${mediaGuard}`,
+            `UPDATE diary_e2ee_records SET household=?,scope=?,state=?,author=?,revision=?,epoch=?,source_id=?,source_revision=?,retained_for=?,envelope=?,summary=?,photo_ids=?,request_id=?,mutation_id=?,key_box=?,attestation=? WHERE id=? AND revision=?${publishGuard}${photoGuard}${mediaGuard}${rolloutGuard}${stagedGuard}`,
           )
           .bind(
             ...values,
@@ -316,12 +323,13 @@ export function createStore(db, registry) {
               ? [proposal.draftId, proposal.draftRevision]
               : []),
             JSON.stringify(proposal.photoIds),
+            ...rolloutBindings,...stagedBindings,
           )
       : db
           .prepare(
-            `INSERT INTO diary_e2ee_records(household,scope,state,author,revision,epoch,source_id,source_revision,retained_for,envelope,summary,photo_ids,request_id,mutation_id,key_box,attestation,id) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM diary_e2ee_media_gc WHERE photo_id IN (SELECT value FROM json_each(?))) ON CONFLICT(id) DO NOTHING`,
+            `INSERT INTO diary_e2ee_records(household,scope,state,author,revision,epoch,source_id,source_revision,retained_for,envelope,summary,photo_ids,request_id,mutation_id,key_box,attestation,id) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM diary_e2ee_media_gc WHERE photo_id IN (SELECT value FROM json_each(?)))${rolloutGuard}${stagedGuard} ON CONFLICT(id) DO NOTHING`,
           )
-          .bind(...values, next.id, JSON.stringify(proposal.photoIds));
+          .bind(...values,next.id,JSON.stringify(proposal.photoIds),...rolloutBindings,...stagedBindings);
     const result = { ok: true, id: next.id, revision: next.revision };
     assertActor(actor, next.household);
     const statements = [
@@ -341,6 +349,7 @@ export function createStore(db, registry) {
           proposal.requestId,
         ),
     ];
+    if(registry.enforceRollout)statements.push(db.prepare(`UPDATE diary_e2ee_media SET status='attached' WHERE id IN (SELECT value FROM json_each(?)) AND household=? AND account_id=? AND status='ready' AND EXISTS(SELECT 1 FROM diary_e2ee_records WHERE id=? AND mutation_id=?)`).bind(JSON.stringify(addedPhotos),next.household,actor.accountId,next.id,proposal.requestId));
     if (operation === "publish")
       statements.push(
         db
@@ -387,6 +396,8 @@ export function createStore(db, registry) {
   async function remove(actor, proposal) {
     const { id, household, revision, requestId } = proposal;
     assertActor(actor, household);
+    const lease=registry.enforceRollout?await writeLease(db):null;
+    const rolloutGuard=leaseSQL(lease),rolloutBindings=lease?[lease.generation]:[];
     if (
       Object.keys(proposal).sort().join(",") !==
         "household,id,requestId,revision" ||
@@ -430,7 +441,7 @@ export function createStore(db, registry) {
     await db.batch([
       db
         .prepare(
-          `INSERT INTO diary_e2ee_requests(household,account_id,request_id,fingerprint,result) SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM diary_e2ee_records WHERE id=? AND household=? AND revision=?) ON CONFLICT DO NOTHING`,
+          `INSERT INTO diary_e2ee_requests(household,account_id,request_id,fingerprint,result) SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM diary_e2ee_records WHERE id=? AND household=? AND revision=?${rolloutGuard}) ON CONFLICT DO NOTHING`,
         )
         .bind(
           household,
@@ -441,10 +452,11 @@ export function createStore(db, registry) {
           id,
           household,
           revision,
+          ...rolloutBindings,
         ),
       db
         .prepare(
-          `DELETE FROM diary_e2ee_records WHERE id=? AND household=? AND revision=? AND EXISTS(SELECT 1 FROM diary_e2ee_requests WHERE household=? AND account_id=? AND request_id=? AND fingerprint=?)`,
+          `DELETE FROM diary_e2ee_records WHERE id=? AND household=? AND revision=? AND EXISTS(SELECT 1 FROM diary_e2ee_requests WHERE household=? AND account_id=? AND request_id=? AND fingerprint=?)${rolloutGuard}`,
         )
         .bind(
           id,
@@ -454,6 +466,7 @@ export function createStore(db, registry) {
           actor.accountId,
           requestId,
           fingerprint,
+          ...rolloutBindings,
         ),
       ...gcStatements(row.photoIds, household, requestId),
     ]);
@@ -490,8 +503,22 @@ export function createStore(db, registry) {
       delta: false,
       baseSequence: -1,
       removed: [],
-      records: records.results.map(parse).filter((row) => canRead(actor, row)),
+      records: records.results.map(parseRecord).filter((row) => canRead(actor, row)),
     };
+  }
+  const visibleSQL=`(r.state='published' OR (r.state='draft' AND ?=1) OR (r.state='preferences' AND r.author=?) OR (r.state='trash' AND ?=1 AND EXISTS(SELECT 1 FROM json_each(r.retained_for) owned WHERE owned.value IN (SELECT value FROM json_each(?)))))`;
+  const visibleBindings=(actor,household)=>[actor.canManageEntries?1:0,actor.accountId,actor.canViewTrash?1:0,JSON.stringify(retentionIds(actor,household))];
+  async function snapshotHead(actor,household) {
+    assertActor(actor,household);
+    const [sequence,records]=await db.batch([
+      db.prepare('SELECT COALESCE(MAX(seq),0) seq FROM diary_e2ee_changes WHERE household=?').bind(household),
+      db.prepare(`SELECT r.id,length(r.envelope)+length(r.summary)+length(r.key_box)+length(r.photo_ids)+length(r.attestation)+1000 bytes FROM diary_e2ee_records r WHERE r.household=? AND ${visibleSQL} ORDER BY r.id LIMIT 5001`).bind(household,...visibleBindings(actor,household))
+    ]);
+    if(records.results.length>5000||records.results.reduce((n,r)=>n+r.bytes,0)>50_000_000)fail('SnapshotLimit',413);
+    const pages=[];let after=null,previous=null,count=0,bytes=0;
+    for(const row of records.results){if(count&&(count===50||bytes+row.bytes>1_000_000)){pages.push({after,limit:count});after=previous;count=0;bytes=0;}count++;bytes+=row.bytes;previous=row.id;}
+    if(count)pages.push({after,limit:count});
+    return {version:1,household,sequence:sequence.results[0].seq,total:records.results.length,pages};
   }
   async function snapshotPage(
     actor,
@@ -513,9 +540,9 @@ export function createStore(db, registry) {
       since < 0
         ? db
             .prepare(
-              "SELECT *,id AS change_id FROM diary_e2ee_records WHERE household=? AND id>? ORDER BY id LIMIT ?",
+              `SELECT r.*,r.id change_id FROM diary_e2ee_records r WHERE r.household=? AND r.id>? AND ${visibleSQL} ORDER BY r.id LIMIT ?`,
             )
-            .bind(household, after || "", limit + 1)
+            .bind(household,after||"",...visibleBindings(actor,household),limit+1)
         : db
             .prepare(
               `SELECT r.*,c.id AS change_id FROM (SELECT id,MAX(seq) seq FROM diary_e2ee_changes WHERE household=? AND seq>? GROUP BY id) c LEFT JOIN diary_e2ee_records r ON r.id=c.id AND r.household=? WHERE c.id>? ORDER BY c.id LIMIT ?`,
@@ -535,7 +562,7 @@ export function createStore(db, registry) {
       records = [],
       removed = [];
     for (const raw of rows) {
-      const row = raw.id === null ? null : parse(raw);
+      const row = raw.id === null ? null : parseRecord(raw);
       if (row && canRead(actor, row)) records.push(row);
       else if (since >= 0) removed.push(raw.change_id);
     }
@@ -551,7 +578,7 @@ export function createStore(db, registry) {
       nextCursor: result.results.length > limit ? rows.at(-1).change_id : null,
     };
   }
-  return { get, mutation, remove, snapshot, snapshotPage, scope };
+  return { get, mutation, remove, snapshot, snapshotPage, snapshotHead, scope };
 }
 const equalIds = (a, b) =>
   JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());

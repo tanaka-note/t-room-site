@@ -1,3 +1,4 @@
+import { compressDocument,decompressDocument,MAX_DOCUMENT_BYTES } from "./codec.mjs";
 // Candidate protocol. No runtime secret or production binding is defined here.
 const encoder = new TextEncoder(),
   decoder = new TextDecoder("utf-8", { fatal: true });
@@ -86,25 +87,29 @@ export async function newKey() {
     "decrypt",
   ]);
 }
-export async function seal(key, value, binding) {
+export async function seal(key,value,binding,{format=1}={}) {
+  if(![1,2].includes(format))throw new Error("UnsupportedFormat");
+  const raw=encode(value);if(raw.length>MAX_DOCUMENT_BYTES)throw new Error("DocumentTooLarge");
+  const payload=format===2?await compressDocument(raw):raw;
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt(
     {
       name: "AES-GCM",
       iv,
-      additionalData: encode(context(binding)),
+      additionalData: encode({...context(binding),...(format===2?{envelopeVersion:2}:{})}),
       tagLength: 128,
     },
     key,
-    encode(value),
+    payload,
   );
-  return { version: VERSION, iv: b64(iv), ciphertext: b64(ciphertext) };
+  raw.fill(0);payload.fill(0);
+  const result={version:format,iv:b64(iv),ciphertext:b64(ciphertext)};validateEnvelope(result);return result;
 }
 export function validateEnvelope(value) {
   if (
     !value ||
     Object.keys(value).sort().join(",") !== "ciphertext,iv,version" ||
-    value.version !== VERSION ||
+    ![1,2].includes(value.version) ||
     unb64(value.iv, 16).length !== 12 ||
     base64Length(value.ciphertext, 2_000_000) < 16
   )
@@ -118,17 +123,20 @@ export async function open(key, envelope, binding) {
       {
         name: "AES-GCM",
         iv: unb64(envelope.iv),
-        additionalData: encode(context(binding)),
+        additionalData:encode({...context(binding),...(envelope.version===2?{envelopeVersion:2}:{})}),
         tagLength: 128,
       },
       key,
       unb64(envelope.ciphertext),
     ),
   );
+  let decoded=bytes;
   try {
-    return JSON.parse(decoder.decode(bytes));
+    if(envelope.version===2)decoded=await decompressDocument(bytes);
+    if(decoded.length>MAX_DOCUMENT_BYTES)throw new Error("DocumentTooLarge");
+    return JSON.parse(decoder.decode(decoded));
   } finally {
-    bytes.fill(0);
+    bytes.fill(0);decoded.fill(0);
   }
 }
 export async function fingerprint(publicKey) {
@@ -400,7 +408,8 @@ export async function recipientKeyBox(
     raw.fill(0);
   }
 }
-export async function openRecipientKey(box, binding, credentialId, privateKey) {
+export async function openRecipientKey(box,binding,credentialId,privateKey,{extractable=false}={}) {
+  if(extractable&&credentialId!==RECOVERY_RECIPIENT)throw new Error("RecoveryOnly");
   if (!box?.[credentialId]) throw new Error("GrantDenied");
   const raw = new Uint8Array(
     await crypto.subtle.decrypt(
@@ -410,7 +419,7 @@ export async function openRecipientKey(box, binding, credentialId, privateKey) {
     ),
   );
   try {
-    return await crypto.subtle.importKey("raw", raw, "AES-GCM", false, [
+    return await crypto.subtle.importKey("raw", raw, "AES-GCM", extractable, [
       "encrypt",
       "decrypt",
     ]);

@@ -134,7 +134,7 @@ export function validateRecord(row) {
   return row;
 }
 
-export async function verifyRecord(row, directory) {
+export async function verifyRecord(row,directory,{currentRecipients=false}={}) {
   validateRecord(row);
   const member = directory.members.find(
     (m) => m.credentialId === row.attestation.writer,
@@ -156,7 +156,7 @@ export async function verifyRecord(row, directory) {
   expected.push(RECOVERY_RECIPIENT);
   expected.sort();
   const actual = Object.keys(row.keyBox).sort();
-  if (actual.length && b64(encode(actual)) !== b64(encode(expected)))
+  if (actual.length && (!actual.includes(RECOVERY_RECIPIENT)||actual.some(id=>!expected.includes(id))||currentRecipients&&b64(encode(actual))!==b64(encode(expected))))
     throw new Error("InvalidRecipients");
   await verifySigned(
     { value: proofOf(row), signature: row.attestation.signature },

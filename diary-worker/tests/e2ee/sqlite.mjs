@@ -1,10 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
-export function memoryDatabase() {
+export function memoryDatabase({phase="encrypted"}={}) {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec(
     readFileSync(new URL("../../e2ee/schema.sql", import.meta.url), "utf8"),
   );
+  sqlite.prepare("UPDATE diary_e2ee_control SET phase=?").run(phase);
   const prepare = (sql) => {
     const bind = (...args) => ({
       first: async () => sqlite.prepare(sql).get(...args) || null,

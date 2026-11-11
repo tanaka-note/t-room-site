@@ -13,6 +13,8 @@ const TABLES = [
   "diary_e2ee_changes",
   "diary_e2ee_requests",
   "diary_e2ee_media_gc",
+  "diary_e2ee_media",
+  "diary_e2ee_uploads",
 ];
 const exact = (value, keys) =>
   value &&
@@ -170,11 +172,7 @@ export async function restoreEmpty(db, packet, { anchor, minimumGeneration }) {
   }
   // Record triggers generate change rows while restoring; replace them atomically
   // with the backed-up sequence (checksum detects accidental corruption; it is not a signature) before the database becomes visible.
-  const split =
-    statements.length -
-    value.tables.diary_e2ee_changes.length -
-    value.tables.diary_e2ee_requests.length -
-    value.tables.diary_e2ee_media_gc.length;
+  const split=value.tables.diary_e2ee_records.length;
   statements.splice(
     split,
     0,

@@ -41,7 +41,7 @@ export async function unlockSession({
       await signed({ credentialId: member.credentialId }, privateKeys.sign),
       member.signPublicKey,
     );
-    const keys = new Map();
+    const keys = new Map(),recordKeys=new Map();
     for (const grant of profile.grants) {
       const value = grant.value;
       if (keys.has(value.scope)) throw new Error("DuplicateGrant");
@@ -59,10 +59,12 @@ export async function unlockSession({
         }),
       );
     }
+    if((profile.recordGrants||[]).length>5000)throw new Error("GrantLimit");
+    for(const packet of profile.recordGrants||[]){const value=packet.value;if(value.kind!=="record"||!Number.isSafeInteger(value.revision)||value.revision<1||!value.id)throw new Error("InvalidRecordGrant");const id=`${value.id}:${value.revision}`;if(recordKeys.has(id))throw new Error("DuplicateGrant");recordKeys.set(id,await unwrapGrant(packet,{directory,anchor,accountId:member.accountId,credentialId:member.credentialId,household:value.household,scope:value.scope,epoch:profile.epochs[value.scope],privateKey:privateKeys.rsa}));}
     if (member.scopes.some((scope) => !keys.has(scope)))
       throw new Error("IncompleteGrants");
     if (!(await checkSession())) throw new Error("SessionExpired");
-    return { directory, keys, privateKeys };
+    return {directory,keys,privateKeys,recordKeys};
   } finally {
     prf?.fill(0);
   }

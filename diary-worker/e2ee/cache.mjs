@@ -21,7 +21,11 @@ export async function openCipherCache(name = "tlain-diary-encrypted-v1") {
       validateSnapshot(snapshot);
       if (snapshot.delta || snapshot.unchanged)
         throw new Error("IncompleteCacheSnapshot");
-      return operation("readwrite", (store) => store.put(snapshot, key));
+      return new Promise((resolve,reject)=>{
+        const tx=db.transaction('snapshots','readwrite'),store=tx.objectStore('snapshots'),read=store.get(key);let stale=false;
+        read.onsuccess=()=>{if(read.result&&read.result.sequence>snapshot.sequence){stale=true;tx.abort();return;}store.put(snapshot,key);};
+        tx.oncomplete=()=>resolve();tx.onerror=tx.onabort=()=>reject(new Error(stale?'CacheRollbackRejected':'CacheUnavailable'));
+      });
     },
     remove: (key) => operation("readwrite", (store) => store.delete(key)),
     close: () => db.close(),

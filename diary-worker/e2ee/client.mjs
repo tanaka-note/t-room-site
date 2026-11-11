@@ -41,15 +41,16 @@ const numericId = () =>
   );
 const equal = (a, b) => b64(encode(a)) === b64(encode(b));
 export class EncryptedDiaryClient {
-  constructor({ transport, profile, anchor, minimumGeneration = 1 }) {
+  constructor({ transport, profile, anchor, minimumGeneration=1,documentFormat=1,cache=null,minimumSequence=0 }) {
     this.transport = transport;
     this.profile = profile;
     this.anchor = anchor;
     this.minimumGeneration = minimumGeneration;
+    this.documentFormat=documentFormat;this.cache=cache;this.minimumSequence=minimumSequence;
     this.actions = new Map();
     this.revisionFloor = new Map();
     this.generation = 0;
-    this.keys = new Map();
+    this.keys = new Map();this.recordKeys=new Map();
     this.records = new Map();
     this.pending = new Map();
     this.closed = true;
@@ -60,7 +61,7 @@ export class EncryptedDiaryClient {
     const generation = ++this.generation;
     this.closed = true;
     this.records.clear();
-    this.keys.clear();
+    this.keys.clear();this.recordKeys.clear();
     this.sequence = undefined;
     this.revisionFloor.clear();
     this.pending.clear();
@@ -81,7 +82,7 @@ export class EncryptedDiaryClient {
   lock() {
     ++this.generation;
     this.closed = true;
-    this.keys.clear();
+    this.keys.clear();this.recordKeys.clear();
     this.records.clear();
     this.revisionFloor.clear();
     this.pending.clear();
@@ -104,8 +105,18 @@ export class EncryptedDiaryClient {
   async sync() {
     await this.check();
     const generation = this.generation;
-    const since = this.sequence ?? -1;
-    const snapshot = await this.transport.snapshot(this.household, since);
+    let cached=null;
+    const cacheKey=[this.actor.accountId,this.actor.credentialId,this.household,this.directory.generation].join('/');
+    if(this.sequence===undefined&&this.cache){try{cached=await this.cache.get(cacheKey);}catch{cached=null;}if(cached){validateSnapshot(cached);if(cached.delta||cached.unchanged||cached.household!==this.household)throw new Error('InvalidCache');}}
+    const since=this.sequence??cached?.sequence??-1;
+    let snapshot=await this.transport.snapshot(this.household,since);
+    validateSnapshot(snapshot);
+    if(snapshot.sequence<this.minimumSequence||snapshot.sequence<since)throw new Error('RollbackDetected');
+    if(cached){
+      const rows=new Map(cached.records.map(row=>[row.id,row]));
+      if(snapshot.delta&&snapshot.baseSequence!==since)throw new Error('InvalidSnapshot');
+      if(snapshot.delta||snapshot.unchanged){for(const id of snapshot.removed)rows.delete(id);for(const row of snapshot.records){const old=rows.get(row.id);if(old&&(row.revision<old.revision||row.revision===old.revision&&!equal(old,row)))throw new Error('RecordRollbackDetected');rows.set(row.id,row);}snapshot={version:1,household:this.household,sequence:snapshot.sequence,baseSequence:-1,delta:false,unchanged:false,removed:[],records:[...rows.values()]};}
+    }
     if (generation !== this.generation || this.closed)
       throw new Error("SessionChanged");
     validateSnapshot(snapshot);
@@ -147,12 +158,12 @@ export class EncryptedDiaryClient {
           await verifyRecord(row, this.directory);
           const binding = bindingOf(row);
           const key = Object.keys(row.keyBox).length
-            ? await openRecipientKey(
+            ? (row.keyBox[this.actor.credentialId]?await openRecipientKey(
                 row.keyBox,
                 { ...binding, kind: "record-key" },
                 this.actor.credentialId,
                 this.privateKeys.rsa,
-              )
+              ):this.recordKeys.get(`${row.id}:${row.revision}`))
             : this.keys.get(row.scope);
           if (!key) throw new Error("GrantDenied");
           const value = await open(key, row.envelope, {
@@ -191,7 +202,9 @@ export class EncryptedDiaryClient {
       this.revisionFloor.set(id, current.row.revision);
     this.records = records;
     this.sequence = snapshot.sequence;
-    return records;
+    if(this.cache){const value={version:1,household:this.household,sequence:this.sequence,baseSequence:-1,delta:false,unchanged:false,removed:[],records:[...records.values()].map(r=>r.row)};try{await this.cache.put(cacheKey,value);}catch{/* Cache failure cannot turn a durable save into a failed save. */}}
+    if(generation!==this.generation||this.closed)throw new Error("SessionChanged");
+    return this.records;
   }
   async prepare(
     entry,
@@ -281,6 +294,7 @@ export class EncryptedDiaryClient {
       key,
       { version: 1, entry },
       { ...binding, kind: "document" },
+      {format:this.documentFormat},
     );
     const summary = await seal(
       key,
@@ -556,6 +570,15 @@ export class EncryptedDiaryClient {
       current: record.row,
       operation,
     });
+  }
+  async attachPhotos(entryId,photos) {
+    const actionKey=`attachPhotos:${entryId}:${photos.map(p=>p.id).sort().join(',')}`;
+    if(this.actions.has(actionKey))return this.commitAction(actionKey);
+    await this.sync();const record=this.records.get(String(entryId));
+    if(!record||!['published','draft'].includes(record.row.state))throw new InputError(404,'NotFound');
+    const existing=new Set(record.row.photoIds),added=photos.filter(p=>!existing.has(p.id));
+    if(!added.length)return {ok:true,id:String(entryId),revision:record.row.revision};
+    return this.commitAction(actionKey,{...record.entry,photos:[...record.entry.photos,...added]},{current:record.row,state:record.row.state});
   }
   async deletePhoto(id, revision) {
     const actionKey = `deletePhoto:${id}:${revision}`;
