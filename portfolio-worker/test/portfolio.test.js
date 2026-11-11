@@ -25,7 +25,7 @@ test('public shell contains no financial data; protected APIs reject anonymous u
     f.setActive(false); assert.equal((await f.request('/api/data')).status,401);
   } finally {f.close();v.close();}
 });
-test('save recalculates totals and chart, allows past insertion and same-day correction without changing later records', async () => {
+test('save recalculates totals, allows past insertion and same-day correction without changing later records', async () => {
   const f=fixture();
   try {
     await f.login(); const original=await f.state();

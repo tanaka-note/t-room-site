@@ -35,8 +35,12 @@ try{
  await verifyMoneyInputs(browser, url, routeApi);
  for(const width of [1440,390,320]){
   const context=await browser.newContext({viewport:{width,height:1000}}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',dialog=>dialog.accept());await routeApi(page,owner);await page.goto(url);await page.locator('#report-app').waitFor({state:'visible'});
-  await page.waitForFunction(()=>document.querySelector('#history-period').textContent.includes('2026') || document.querySelector('#app-message').textContent);
+  await page.waitForFunction(()=>document.querySelector('#market-value').textContent.includes('1,168,000') || document.querySelector('#app-message').textContent);
   assert.equal(await page.locator('#app-message').textContent(),'','Initial render failed');
+  assert.equal(await page.locator('#history-section, #history-chart, #history-range-controls, #history-tooltip').count(),0);
+  assert.equal(await page.locator('#allocation-chart').isVisible(),true);
+  assert.equal(await page.locator('#allocation-legend li').count(),4);
+  assert.equal(await page.locator('#allocation-chart').evaluate(canvas=>canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data.some((value,index)=>index%4===3 && value>0)),true);
   assert.match(await page.locator('#report-updated').textContent(),/2026年10月31日/);assert.equal(await page.locator('#holdings-body tr').count(),6);assert.deepEqual(await page.locator('.holdings-panel th').allTextContents(),['銘柄名','時価総額']);
   assert.match(await page.locator('#market-value').textContent(),/1,168,000/);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   assert.equal(await page.locator('[data-pwa-install]').count(), 1);
@@ -46,15 +50,23 @@ try{
   if(width===1440) await verifyDirectPwaInstall(page);
   await page.locator('#edit-toggle').click();await page.locator('#asset-editors [data-field=amount]').first().fill('500000');assert.match(await page.locator('#editor-total').textContent(),/1,400,000/);
   if(width===1440){
-   const before=await page.locator('#history-chart').evaluate(canvas=>canvas.toDataURL());
+   const before=await page.locator('#allocation-chart').evaluate(canvas=>canvas.toDataURL());
    await pickDate(page, 'record-date', '2026-10-29');await page.waitForFunction(()=>document.querySelector('#editor-note').textContent.includes('新しい日付'));
-   await page.locator('#record-time').fill('14:35');await page.locator('#save-button').click();await page.waitForFunction(()=>document.querySelector('#app-message').textContent.includes('チャートを更新'));
-   assert.equal((await owner.state()).history.length,3);assert.notEqual(await page.locator('#history-chart').evaluate(canvas=>canvas.toDataURL()),before);
+   await page.locator('#record-time').fill('14:35');await page.locator('#save-button').click();await page.waitForFunction(()=>document.querySelector('#app-message').textContent.includes('保存しました'));
+   assert.equal((await owner.state()).history.length,3);assert.notEqual(await page.locator('#allocation-chart').evaluate(canvas=>canvas.toDataURL()),before);
    assert.equal(await page.locator('#view-date').inputValue(),'2026-10-29');assert.match(await page.locator('#report-updated').textContent(),/14:35/);
    assert.equal(await page.locator('.holdings-panel').isVisible(),true);assert.equal(await page.locator('#profit-value').isVisible(),false);assert.equal(await page.locator('#return-value').isVisible(),false);
    await pickDate(page, 'view-date', '2026-10-30');await page.waitForFunction(()=>document.querySelector('.holdings-panel').hidden);await page.locator('#edit-toggle').click();assert.equal(await page.locator('#legacy-total-label').isVisible(),true);
    await page.locator('#legacy-total').fill('1234567');await page.locator('#save-button').click();await page.waitForFunction(()=>document.querySelector('#app-message').textContent.includes('保存しました'));
    assert.equal((await owner.state()).history.find(r=>r.period==='2026-10-30').rawMarketValue,1234567);
+   const downloadReady=page.waitForEvent('download');await page.locator('#backup-button').click();
+   const download=await downloadReady,stream=await download.createReadStream(),chunks=[];
+   for await(const chunk of stream)chunks.push(chunk);
+   const backup=JSON.parse(Buffer.concat(chunks).toString('utf8'));
+   assert.equal(backup.records.length,3);assert.equal(backup.changes.length,2);
+   assert.equal(backup.records.find(r=>r.period==='2026-10-29').time,'14:35');
+   assert.equal(JSON.parse(backup.changes[1].previous_record).rawMarketValue,1100000);
+   assert.equal(JSON.parse(backup.changes[1].saved_record).rawMarketValue,1234567);
    await pickDate(page, 'view-date', '2026-10-31');await page.locator('.holdings-panel').waitFor({state:'visible'});
   }
   if(await page.locator('#cancel-edit').isVisible())await page.locator('#cancel-edit').click();await page.screenshot({path:new URL(`../../tmp/portfolio-screens/${width}.png`,import.meta.url).pathname,fullPage:true});
@@ -65,5 +77,5 @@ try{
  await pickDate(page,'view-date','2026-10-31');await page.locator('#profit-value').waitFor({state:'visible'});assert.equal(await page.locator('#return-value').isVisible(),true);
  viewer.setActive(false);await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));await page.locator('#login-panel').waitFor({state:'visible'});assert.equal(await page.locator('#holdings-body tr').count(),0);assert.equal(await page.locator('#market-value').textContent(),'');await context.close();
  const login=await browser.newContext(),lp=await login.newPage();await lp.route('**/asset-report/api/session',r=>r.fulfill({status:401,contentType:'application/json',body:JSON.stringify({error:'パスキーでログインしてください。'})}));await lp.goto(url);await lp.locator('#login-panel').waitFor({state:'visible'});assert.equal(await lp.locator('#report-app').isVisible(),false);await login.close();
- console.log('Portfolio Chromium: desktop/mobile, backdated save, corrected history, chart refresh, viewer and logout verified.');
+ console.log('Portfolio Chromium: desktop/mobile, backdated save, corrected D1 history, JSON export, retained allocation chart, retired trend chart, viewer and logout verified.');
 }finally{await browser.close();await new Promise(done=>server.close(done));owner.close();viewer.close();}
