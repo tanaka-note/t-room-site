@@ -143,6 +143,22 @@ test("content hashes normalize JavaScript module line endings", async () => {
   }
 });
 
+test("SQL schemas normalize checkout line endings but still invalidate builds on schema changes", async () => {
+  const directory = await createFixture(), app = fixtureApp("site-app", "t-room-site");
+  app.buildFiles = ["schema.sql"];
+  const schema = resolve(directory, "schema.sql"), source = "CREATE TABLE records (id TEXT PRIMARY KEY);\n-- fixture schema\n";
+  try {
+    await writeFile(schema, source);
+    const before = await syncContentHashApp(app, contract, directory);
+    await writeFile(schema, source.replaceAll("\n", "\r\n"));
+    assert.equal((await inspectBuildFreshness(app, contract, directory)).fresh, true);
+    assert.equal(await expectedBuild(app, contract, directory), before.build);
+    assert.deepEqual((await syncContentHashApp(app, contract, directory)).changed, []);
+    await writeFile(schema, source.replace("id TEXT", "id INTEGER"));
+    assert.equal((await inspectBuildFreshness(app, contract, directory)).fresh, false);
+  } finally { await rm(directory, {recursive:true, force:true}); }
+});
+
 test("JSONC configuration keeps build and freshness stable across LF, CRLF and mixed line endings", async () => {
   const directory = await createFixture();
   const app = fixtureApp("site-app", "t-room-site");
