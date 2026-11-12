@@ -11,6 +11,24 @@
   let sessionGeneration=0,expiryTimer=null,cleanupPlan=null,visibleEntries=200,entryCriteria='',entryType='expense';
   const pendingRequests=new Set(),downloadUrls=new Set();
   let encryptedLedger=null;
+  let keyShareFrame=null,keyShareTimer=null,keyShareForced=false;
+  function cancelKeySharing(){if(keyShareFrame!==null)cancelAnimationFrame(keyShareFrame);if(keyShareTimer!==null)clearTimeout(keyShareTimer);keyShareFrame=keyShareTimer=null;keyShareForced=false;}
+  function scheduleKeySharing(force,generation){
+    if(!encryptedLedger||session?.role!=='owner')return;
+    keyShareForced ||= force;
+    if(keyShareFrame!==null||keyShareTimer!==null)return;
+    // Yield one paint before optional sharing work. Live session/recipient
+    // checks still run, and stale callbacks cannot use a replacement ledger.
+    const ledger=encryptedLedger;
+    keyShareFrame=requestAnimationFrame(()=>{
+      keyShareFrame=null;
+      keyShareTimer=setTimeout(async()=>{
+        keyShareTimer=null;const forced=keyShareForced;keyShareForced=false;
+        try{currentGeneration(generation);await ledger.refreshSharedKeys({force:forced});currentGeneration(generation);}
+        catch(error){if(!error.discarded)report(error,'message',generation);}
+      },0);
+    });
+  }
   const discarded=()=>Object.assign(new Error('ログイン状態が変わりました。'),{discarded:true});
   function currentGeneration(generation){if(generation!==sessionGeneration)throw discarded();}
   function report(error,id='message',generation=sessionGeneration){if(!error.discarded&&generation===sessionGeneration)$(id).textContent=error.message;}
@@ -65,7 +83,7 @@
   function markDirty(){for(const [id,e]of editors){e.form.dataset.troomDirty=String($(id).open&&e.initial!==e.serialize());}document.body.dataset.troomUpdateBlock=String(busy||installPromptOpen||[...editors].some(([id,e])=>$(id).open&&e.initial!==e.serialize()));}
   function setBusy(value){busy=value;document.body.dataset.troomUpdateBlock=String(value);for(const b of document.querySelectorAll('button'))b.disabled=value;for(const form of document.querySelectorAll('dialog form'))form.inert=value;$('restore').disabled=value||!restoreFile;assetChart?.setBusy(value);updateItemControls();updateCategoryDelete();markDirty();updateInstallState();}
   function resetSession(broadcast=false){
-    sessionGeneration++;encryptedLedger?.clear();encryptedLedger=null;clearTimeout(expiryTimer);expiryTimer=null;
+    sessionGeneration++;cancelKeySharing();encryptedLedger?.clear();encryptedLedger=null;clearTimeout(expiryTimer);expiryTimer=null;
     for(const controller of pendingRequests)controller.abort();pendingRequests.clear();
     for(const url of downloadUrls)URL.revokeObjectURL(url);downloadUrls.clear();
     session=null;revision=0;visibleEntries=200;entryCriteria='';entryType='expense';data={accounts:[],transactions:[],categories:[],snapshots:[],historical:[]};assetPoints=[];chartPeriod='all';
@@ -96,19 +114,19 @@
       return result;
     }finally{pendingRequests.delete(controller);}
   }
-  function showSession(value){if(session?.sessionContext!==value.sessionContext){encryptedLedger?.clear();encryptedLedger=null;}session=value;observeExpiry(value.expiresAt);document.body.classList.toggle('is-viewer',value.role!=='owner');$('account-name').textContent=value.displayName;$('access-mode').textContent=value.role==='owner'?'編集可能':'閲覧専用';$('login-view').hidden= !value.cryptoRequired;$('app-view').hidden=Boolean(value.cryptoRequired);}
+  function showSession(value){if(session?.sessionContext!==value.sessionContext){cancelKeySharing();encryptedLedger?.clear();encryptedLedger=null;}session=value;observeExpiry(value.expiresAt);document.body.classList.toggle('is-viewer',value.role!=='owner');$('account-name').textContent=value.displayName;$('access-mode').textContent=value.role==='owner'?'編集可能':'閲覧専用';$('login-view').hidden= !value.cryptoRequired;$('app-view').hidden=Boolean(value.cryptoRequired);}
   async function prepareEncryption(prf){
     const generation=sessionGeneration;if(!session?.cryptoRequired)return;
     const {createEncryptedLedger}=await import('./encrypted-ledger.mjs');currentGeneration(generation);
     if(prf){
       const {prepareAutomaticKeys}=await import('./automatic-keys.mjs');currentGeneration(generation);
       const prepared=await prepareAutomaticKeys(api,session,prf,()=>currentGeneration(generation));currentGeneration(generation);
-      encryptedLedger?.clear();session.keyBundle=prepared.keyBundle;encryptedLedger=createEncryptedLedger(api,session);
+      cancelKeySharing();encryptedLedger?.clear();session.keyBundle=prepared.keyBundle;encryptedLedger=createEncryptedLedger(api,session);
       await encryptedLedger.unlock(prf,prepared.privateKey);
     }else if(!encryptedLedger)encryptedLedger=createEncryptedLedger(api,session);
     currentGeneration(generation);
   }
-  async function load(refreshKeys=false){const generation=sessionGeneration;await prepareEncryption();const result=encryptedLedger?await encryptedLedger.load({refreshKeys}):await api('/data');currentGeneration(generation);data=result.data;assetPoints=result.assetHistory||[];revision=result.revision;render();$('message').textContent='';$('login-view').hidden=true;$('app-view').hidden=false;}
+  async function load(refreshKeys=false){const generation=sessionGeneration;await prepareEncryption();const result=encryptedLedger?await encryptedLedger.load():await api('/data');currentGeneration(generation);data=result.data;assetPoints=result.assetHistory||[];revision=result.revision;render();$('message').textContent='';$('login-view').hidden=true;$('app-view').hidden=false;scheduleKeySharing(refreshKeys,generation);}
 
   async function mutate(operation,value,expectedRevision=revision,requestId=crypto.randomUUID()){if(encryptedLedger)await encryptedLedger.mutate(data,operation,value,expectedRevision,requestId);else await api('/mutate',{operation,value,expectedRevision,requestId});await load();channel?.postMessage('changed');}
   const formValues=form=>Object.fromEntries(new FormData(form));

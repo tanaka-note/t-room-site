@@ -71,9 +71,15 @@ try{
   await owner.page.locator('#entry-dialog').waitFor({state:'hidden'});
   await login(viewer);await viewer.page.getByText('Synthetic real PRF encrypted expense',{exact:true}).waitFor();
   assert.equal(await viewer.page.locator('#add-entry').isVisible(),false);
+  const viewerReload=requests.length;
+  await viewer.page.reload();await viewer.page.locator('#app-view').waitFor({state:'visible'});
+  await viewer.page.getByText('Synthetic real PRF encrypted expense',{exact:true}).waitFor();
+  assert.deepEqual(requests.slice(viewerReload).filter(r=>r.path.startsWith('/household/api/')).map(r=>r.path),['/household/api/session','/household/api/data'],'read-only cached startup needs only session and data');
   const auths=requests.filter(r=>r.path==='/security/api/auth/options').length;
+  const ownerReload=requests.length;
   await owner.page.reload();await owner.page.locator('#app-view').waitFor({state:'visible'});
   await owner.page.getByText('Synthetic real PRF encrypted expense',{exact:true}).waitFor();
+  assert.deepEqual(requests.slice(ownerReload).filter(r=>r.path.startsWith('/household/api/')).slice(0,2).map(r=>r.path),['/household/api/session','/household/api/data']);
   assert.equal(requests.filter(r=>r.path==='/security/api/auth/options').length,auths,'reload uses session-bound non-extractable keys');
   await login(other);assert.equal(f.db.prepare('SELECT COUNT(*) n FROM household_crypto_config').get().n,2);
   assert.equal(f.db.prepare("SELECT COUNT(*) n FROM household_datasets WHERE crypto_version=0").get().n,0);
