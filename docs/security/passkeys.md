@@ -149,3 +149,9 @@ member vaultの登録はcredential単位のINSERTのみとし、競合時は保�
 過去のmigration、固定データ対応、当時の公開範囲は[Identity・Passkey移行記録](../history/security/passkey-migrations.md)へ分離している。
 
 Cloud専用rolling RPCを使う版はSecurity Workerの対応が必要で、将来の公開時はSecurityを先に反映してからCloudを反映する。DB migration・既存ファイルの再暗号化・credential再登録は不要。旧Cloud sessionが端末cacheを持たない場合は初回だけPRF認証へfallbackする。
+
+## 家計簿の端末側暗号化
+
+家計簿の通常ログインでも既存credentialのPRFを要求する。既存のHousehold用鍵、または同じcredentialのT-Cloud用暗号化済み秘密鍵を端末内で解除し、いずれもなければHousehold用鍵を自動準備する。所有者は家計鍵の初期化・同じ家計の承認済み共有先への委譲・既存データの暗号化を通常ログインから自動実行する。別のSecurity Center準備・家計鍵承認は不要。既存の利用者鍵がない閲覧者への初回委譲だけは、本人の自動準備後に所有者の次の通常利用を必要とする。新規・追加パスキーの招待・承認、role、失効を維持する。他の家計には委譲せず、復号鍵の保有とAPIの編集権限は分ける。
+
+暗号化済み利用者秘密鍵・家計鍵の委譲envelope・T-Cloud管理者公開鍵で包んだ復旧用家計鍵の正本はHousehold D1。通常の自動準備は内部 `SECURITY.getHouseholdAutomaticContext` と `HOUSEHOLD_AUTH.describeKeyScope` で現在のsession・Identity／credential／連携と家計scopeを照合する。T-Cloudからは暗号化済みenvelopeと公開鍵だけを再利用し、Household D1に解除方式と共に保持する。既存の `HOUSEHOLD_AUTH.cryptoKeys` による第一管理者の復旧操作も維持する。公開API本文の家計ID・roleを採用しない。生のPRF・秘密鍵・家計鍵は渡さない。既存T-Cloud管理者鍵、登録・承認・失効の方式は変更しない。バックアップ・移行・PRF非対応と実端末確認の境界は[家計簿README](../../household-worker/README.md#cloudflareに内容を渡さない端末側暗号化)を正本とする。

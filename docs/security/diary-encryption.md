@@ -1,5 +1,16 @@
 # 日記D1暗号化：実装候補と移行仕様
 
+## 2026-11-12に確認した実装計画
+
+- 家計簿と同じく、既存の承認済みパスキーのPRFで端末内のサービス専用鍵を解除する。パスキー秘密鍵を日記のデータ鍵として直接使わず、PRF・平文の秘密鍵・復号鍵をサーバーへ渡さない。
+- 復旧の入口はSecurity Centerへ統一する。既存T-Cloud管理者復旧基盤のRSA鍵で日記専用の復旧bundleを保護し、利用者が別途保管する日記独自の復旧キーは発行しない。日記のscope鍵・署名authorityは他サービスのデータ鍵と分離する。
+- 第1段階はD1の本文・タイトル・タグ・日付・写真metadata等の暗号化と、その新規投稿・既存データ・バックアップの復旧検証。既存パスキーの追加／失効、複数account／世帯、既存Security Center経由の復旧を同じ境界で確認する。
+- 第2段階は大量の写真本体のゼロ知識暗号化。原本・表示用・サムネイル・EXIFを含めて保護し、Cloudflare側で復号する方式にしない。現在の写真は第1段階で暗号化済みと表示せず、既存R2 objectの再アップロードや削除を先行しない。
+- 写真表示の速さも受入条件とする。暗号化サムネイル／表示用画像の可視範囲取得、暗号文cacheの再利用、必要な分だけの端末復号と先読みを検討し、初回・再訪・スクロール・写真切替の表示時間、転送byte、メモリ、端末負荷を現行と比較する。全原本の一括取得／復号で一覧を待たせず、鍵の期限・失効・account／世帯境界を性能のために弱めない。具体方式と許容値は合成データと実端末の測定後に確定する。
+
+今回の作業は最新家計簿実装の取込み、復旧処理の不足修正、隔離試験と新しいDraft PRの作成まで。本番反映、本番schema適用、実データ移行・平文削除、写真本体の移行、PR mergeは行わない。未完成の全件rekeyと実端末確認は、通過していない公開条件として残す。
+
+
 状態：Draft。手順1（仕様）・手順2（隔離実装と合成データ検証）の成果物。本番接続、実端末の認証、本番データ移行、写真の再アップロード、公開は行わない。
 
 ## 対象と保護の境界
@@ -45,11 +56,11 @@ Cloudflareが配信するJavaScriptまで改ざんされた場合、復号後の
 
 現行UIそのものをlocalhostのfixtureへ接続し、投稿・詳細表示・お気に入りを確認する。fixtureのfetch差し替えは試験専用であり、本番の接続実装ではない。
 
-以下の本番接続は残っている。従って「既存機能を全て引き継いで公開可能」という判定はまだ出さない。
+回収版にはWorker・公開adapter・Security Centerの接続候補も含むが、以下は本番切替前の未通過条件である。「既存機能を全て引き継いで公開可能」という判定はまだ出さない。
 
 - Security Centerの実PRF取得、日記向けhandoff、再認証・期限切れ・世帯切替との接続。
 - 現行UIへの正式な暗号化adapter。新規写真のstaging・再送・commit・保存用manifest、写真ダウンロード、アルバム全量・検索、各端末の戻る操作の回帰確認。
-- Security Centerへの日記復旧envelopeの保存と、既存の管理者復旧操作・承認・監査への正式接続。暗号処理の合成試験と実際のSecurity Center経由の復旧試験は別である。
+- Security Centerへの日記復旧envelope保存・既存T-Cloud PRF envelope解除の接続候補は隔離試験する。既存の第一管理者PW復旧からの実端末での一連の操作、招待・承認・監査の確認は別の公開条件である。
 - 写真upload時に、ファイル名・撮影日時等を既存のFormDataやR2 HTTP metadataへ平文で送らない経路。画像のEXIF自体は後続移行まで残る。
 - `/diary/tag/タグ名/`、検索条件や戻り位置のsessionStorage・history、Service Worker/cache、旧画面の残留平文の対処。URLには不透明なIDを使い、保存する状態は暗号化する。
 - サーバー時刻の取得・投稿との接続。候補は表示用時刻も暗号化するため、サーバーが暗号文中の時刻を検査する現行と同一の保証はできない。通常UIはサーバー発行時刻を使用する。
@@ -57,7 +68,13 @@ Cloudflareが配信するJavaScriptまで改ざんされた場合、復号後の
 
 ## 復旧・失効
 
-利用者が保管する日記独自の復旧キーは発行しない。Security Centerにある第一管理者PWによるT-Cloud鍵復旧を利用し、体調管理と同様に既存の復旧基盤へ統合する。日記のscope鍵・署名authorityはサービス専用に生成し、T-Cloudのデータ鍵を日記暗号化へ使い回さない。
+利用者が保管する日記独自の復旧キーは発行しない。Security Centerにある第一管理者PWによるT-Cloud鍵復旧を利用し、家計簿と同様に既存の復旧基盤へ統合する。日記のscope鍵・署名authorityはサービス専用に生成し、T-Cloudのデータ鍵を日記暗号化へ使い回さない。
+
+現行T-Cloud／家計簿のRSA-OAEP鍵は3072 bitである。回収候補の4096 bit固定検証を改め、3072／4096 bitの復旧公開鍵を受け入れ、復旧bundle・個別記事鍵・backupのciphertext長は署名済みdirectoryの鍵サイズと一致させる。既存鍵の作り直しは行わない。公開信頼設定・vaultのJWKは公開フィールドだけを許可し、秘密鍵フィールドや未知のデータをlocalStorageやDBに保存しない。
+
+設定保存の応答喪失時は同じ署名済み設定・全grantsとの一致を照合して再試行でき、generationや配布行を重複作成しない。新しい承認済みパスキーには、scope鍵だけでなく個別レコード鍵も既存の中央復旧鍵で再ラップする。各更新で個別レコードの完全な一覧とgrantsをサーバーでも照合し、不足・revisionの相違は保存を拒否する。鍵設定と日記更新のWorker間で完全に同時なtransactionは未実装のため、将来の移行・全件rekeyには書込停止と固定snapshotを必須とする。
+
+credential／linkの失効、世帯・編集・ゴミ箱権限の縮小は現在のDiary accountと照合し、`rekeyRequired`で新規書込を停止する。失効後の全件再暗号化を済ませたことにはしない。既に渡した鍵や取得済みの内容を、API失効だけで端末から取り戻せるとは扱わない。
 
 信頼端末で日記の復旧kitを独立したランダムAES鍵で暗号化し、そのAES鍵だけを既存のT-Cloud復旧用RSA公開鍵へラップする。サーバーに保存するのは暗号文とラップ済み鍵だけである。復旧用公開鍵のfingerprintも信頼済み端末で照合し、同じAPIから受け取った公開鍵をそのまま信用しない。既存の管理者パスワードやT-Cloud鍵の保存方式・復旧経路は変更しない。
 
@@ -141,11 +158,14 @@ Cloudflareが配信するJavaScriptまで改ざんされた場合、復号後の
 - `tests/e2ee/`：毎回生成する合成の2世帯・5種類の利用者、SQLiteのD1 adapter、localhostの実UI試験。実PRF・本番dump・本番bindingを使わない。
 
 ```sh
-node tools/install-verify-dependencies.mjs diary
-node --test diary-worker/tests/e2ee/protocol.test.mjs
+node tools/install-verify-dependencies.mjs diary security
+node --test diary-worker/tests/e2ee/*.test.mjs
+node diary-worker/tests/e2ee/recovery.browser.mjs
 node diary-worker/tests/e2ee/browser.mjs
 # 上記ブラウザ試験に大きめの合成データでの計測も加える場合
 node diary-worker/tests/e2ee/browser.mjs --performance
 ```
 
 実行した結果と未実施項目はPRに記載する。マージ、公開、実データの読取移行、平文の削除はこのDraftの検証には含めない。
+
+`recovery.test.mjs`は実Diary Worker・Securityの鍵handler・隔離SQLiteで、現行3072 bit鍵からのbackup復号、新パスキーへの個別記事鍵配布、連続generation更新、保存応答の再試行、失効・権限縮小時の書込停止を確認する。従来の`protocol.test.mjs`は4096 bit復旧鍵との互換性も確認する。`recovery.browser.mjs`は公開adapterと実HTTP handlerを通すが、本人確認・PRF入力は合成fixtureであり実WebAuthn／第一管理者PW復旧を確認したとは報告しない。

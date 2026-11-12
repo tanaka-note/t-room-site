@@ -56,7 +56,8 @@ test('every scheduled service plus Diary has a Workflow DB ID and correctly scop
   for(const [service,id] of Object.entries(DATABASES))assert.equal(backup.d1_databases.find(d=>d.binding===exportSpec(service).binding)?.database_id,id);
   assert.ok(!backup.r2_buckets.some(b=>b.bucket_name==='t-room-cloud-private'));
   const diary=JSON.parse(readFileSync(new URL('../../diary-worker/wrangler.jsonc',import.meta.url)));
-  assert.deepEqual(diary.triggers.crons,['25 18 * * *','55 18 * * *','45 0-2,19-23 * * *','5,15,25,35,55 19,20 * * *']);
+  // Photo backup retirement left only the independent 03:25 JST D1 schedule.
+  assert.deepEqual(diary.triggers.crons,['25 18 * * *']);
   assert.equal(diary.workflows[0].script_name,backup.name);
 });
 

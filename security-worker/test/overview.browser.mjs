@@ -27,6 +27,8 @@ const server = createServer(async (request, response) => {
     "/security/health.html": ["../public/health.html", "text/html"],
     "/security/health-redirect.js": ["../public/health-redirect.js", "text/javascript"],
     "/security/health-setup.mjs": ["../public/health-setup.mjs", "text/javascript"],
+    "/security/household-setup.mjs": ["../public/household-setup.mjs", "text/javascript"],
+    "/household/household-crypto.mjs": ["../../household-worker/public/household-crypto.mjs", "text/javascript"],
     "/security/security.js": ["../public/security.js", "text/javascript"],
     "/security/security-display.js": ["../public/security-display.js", "text/javascript"],
     "/security/security.css": ["../public/security.css", "text/css"],
@@ -260,6 +262,13 @@ try {
     assert.equal(ownReads, readsBefore + 2);
     assert.deepEqual(authentications.at(-1), { service: "health", options: { handoff: false } });
     assert.equal(grants.length, 2, "self setup never delegates a key");
+    await page.close();
+  }
+  {
+    const page = await newPage();
+    await page.route('**/household/',route=>route.fulfill({contentType:'text/html',body:'<meta charset="utf-8"><title>家計簿</title>'}));
+    await page.goto(url+'#household-setup');await page.waitForURL('**/household/');
+    assert.equal(await page.title(),'家計簿');
     await page.close();
   }
   assert.deepEqual(errors, []);

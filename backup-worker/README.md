@@ -6,6 +6,7 @@
 
 - 専用Worker `t-room-backup` の `D1BackupWorkflow` が本番12 D1を扱う。Portfolio / Cloud / Security / Billing / Payments / Health / Inventory / AI / Calendar / HouseholdとDownloader利用集計は03:40 JSTのCron、日記D1は既存の03:25 JSTから、DBごとに独立したWorkflowを起動する。開始は30秒ずつずらす。Calendarのローカル利用は対象外。
 - Portfolio（資産運用報告）は他サービスD1と同じ `40 18 * * *`（毎日03:40 JST）のscheduled呼び出しで起動する。独立したCronは追加しない。`portfolio-db` のアカウント状態、報告設定とrevision、日付別評価額・更新時刻・銘柄内訳、訂正前後の履歴・保存IDを全て対象にする。保存先は既存の非公開R2の `d1/portfolio/v3/daily/` と `monthly/`、保持は日次30・月次12世代。手動JSON出力・旧静的ページとは独立し、動的ページの更新が対象になる。Backup-dataには「資産運用報告」として保存世代・成否を表示する。新規のSecretやパスキーは収集せず、新旧両形式の隔離復元では両アカウントを無効化しsession versionを進める。
+- Householdの端末側暗号化対応後は、家計の暗号文と `household_crypto_config/vaults/grants` の暗号化済み鍵情報を同じD1 snapshotへ保存する。復号鍵・PRFは取得しない。鍵IDと復旧用envelopeを保持し、Securityの別時点の保存に家計鍵の正本を依存させない。0006の旧平文v2/v3バックアップは旧schemaで隔離復元し、内容照合後に0007を適用する。暗号文の保存成功と、管理者の端末で復旧鍵を解除して実際に復号できることは別に検証する。移行中・過去世代の平文残存と公開手順は[家計簿README](../household-worker/README.md#移行公開手順)に従う。
 - Householdは専用D1のアカウント状態・現行世代/revision・家計record（保持中の旧世代を含む）・再送履歴を保存し、Backup-dataへ「家計簿」として表示する。手動JSON出力とは別の定期保存。Secret・Cookie・パスキーは収集せず、隔離復元ではアカウントを無効化してsession versionを進める。通常保存は公式exportをストリーム処理するため、旧方式の合計10,000行・行JSON 8MiB制約には依存しない。
 - 日次30世代・月次12世代。月次はその月の最初の成功分。同日・同月の正常世代は再実行で上書きしない。世代数で整理するため、障害が続けば暦上の30日・12か月より古い世代が残る。
 - 対象のテーブル・列・既知schemaは`src/registry.js`を正本とする。未知のテーブル、対象テーブルの列変更、取得失敗は保存を停止して要確認にする。schema変更と同じPRで許可リスト・復元fixture・src/schema-guard.jsのmigration由来fingerprintを更新する。列だけでなくindex・trigger・制約を含むDDL差分も停止対象とし、D1内部table/migration管理tableは除外する。本番の既存DDLがmigrationと異なる場合も停止するので、初回公開前に読取専用で差分を確認し、内容を精査してから基準を更新する。
@@ -45,6 +46,20 @@ DB単位のR2 CASリースを20分保持し、15分Workflow stepより長くす�
 5. 問題時はDiaryを先に旧versionへ戻して旧D1 Cronへ戻し、その後専用Workerを戻す。新旧世代・part・写真・証明は削除しない。初回の実環境時間・利用量が想定を超える場合は増枠で押し切らず処理分割を見直す。
 
 バックアップR2は既存の非公開構成・保存時暗号化を維持する。Securityの監査長期保管・Downloader一時R2の扱いは変更せず、バックアップ保管先を毎日再複製する機能は追加しない。
+
+## 家計簿の旧平文バックアップの移行準備
+
+`tools/household-archive.mjs` はCloudflare外の信頼できる復旧環境で使う、ネットワーク・削除機能を持たないNode専用helper。既存のT-Cloud管理者RSA公開鍵で、家計簿の旧v1/v2/v3世代と参照partをまとめてAES-GCM暗号化し、ランダムな一時鍵をRSA-OAEPで包む。暗号化の作成にはログイン・PRF・管理者秘密鍵は不要。公開鍵の指紋は現行Householdの復旧用公開鍵と照合する。秘密鍵・生の一時鍵をR2、ファイル、ログへ保存しない。
+
+原本のgzip bytes・key・bucket・SHA-256 metadataを暗号化内容に保持し、AADとRSA labelでarchive ID・作成時刻・recipientを固定する。元objectのSHA検証、全世代の隔離DB復元、暗号化前後のメモリー内照合、アップロードした暗号文の読戻し照合はそれぞれ別の検証として扱う。暗号化コピーは既存世代と別の `d1/household/sealed/v1/` に作成し、既存の日次・月次一覧と通常の保持処理を変更しない。上限は原本合計8 MiB・1,000 objectで、安全停止を優先する。
+
+`openHouseholdArchive(archive, privateKey)` は管理者の既存RSA秘密鍵CryptoKeyでのみ開く。`rehearseHouseholdArchive(objects)` は全世代を既存の隔離復元へ渡し、復旧したアカウントを無効のまま照合する。これらはT-Cloud/Householdの通常画面へ新しいログイン・復元操作を追加しない。実管理者鍵での開封確認前は `recipientPrivateKeyVerified=false` と記録し、原本を削除しない。このhelperに削除機能はなく、別途の原本整理でも現在のkey/ETag/参照集合の再照合が必要。
+
+このコピー作成だけでは、既存平文世代の削除、通常Cronの全DB snapshotの外側暗号化、Time Travelの完了を意味しない。未移行の家計が現行DBに残る間は、以降の定期snapshotにも平文が含まれる。`householdHistoryStatus()` は現在の全家計の `crypto_version` を検査し、平文があれば履歴移行を完了扱いしない。最後の平文を除去した検証済み時刻と保持期間（Free 7日、Paid 30日、契約未確認なら上限30日）が揃ってから期限経過を判定する。Time Travelへの過去時点の復元は古い履歴を消去しない。履歴消去目的で本番DBをrestore/deleteしない。公式仕様は[Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/)を参照。
+
+`node --use-env-proxy backup-worker/tools/check-household-history.mjs --state-file /secure/path/history-status.json` は既存のインフラ用認証でD1の世代metadataだけを読み、日時・件数だけをローカルへ記録する。最初に全家計の暗号化済みを観測した時刻から、上限30日を保守的に数える。平文の再出現・DB切替では開始時刻をリセットする。定期実行を追加するコマンドではなく、再確認時にも同じstate fileを使用する。期限経過の判定だけでR2原本の削除済み・管理者鍵での復元確認済みとは扱わない。
+
+隔離復元は0005形式の旧Household v2も扱う。元の列・行を照合してから信頼済み0006/0007 migrationを適用し、後から追加されるアカウントも含めて無効化する。本番のcapture schemaや復元APIは変更しない。
 
 ## 日記写真のバックアップ廃止
 

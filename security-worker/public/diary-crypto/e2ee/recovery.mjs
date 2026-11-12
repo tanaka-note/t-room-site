@@ -8,6 +8,7 @@ import {
   signed,
   verifySigned,
   verifyDirectory,
+  recoveryWrappedBytes,
 } from "./crypto.mjs";
 
 const binding = (generation) => ({
@@ -49,10 +50,7 @@ export async function createRecoveryEnvelope({
   if (
     !expectedRecoveryFingerprint ||
     recoveryFingerprint !== expectedRecoveryFingerprint ||
-    recoveryPublicKey.kty !== "RSA" ||
-    recoveryPublicKey.d ||
-    unb64(recoveryPublicKey.n).length !== 512 ||
-    recoveryPublicKey.e !== "AQAB"
+    !recoveryWrappedBytes(recoveryPublicKey)
   )
     throw new Error("UntrustedRecoveryKey");
   if (verified.recoveryFingerprint !== recoveryFingerprint)
@@ -122,6 +120,8 @@ export async function openRecoveryEnvelope({
 }) {
   if (
     packet?.version !== 1 ||
+    Object.keys(packet).sort().join(",") !== "authority,envelope,generation,recoveryFingerprint,version,wrappedKey" ||
+    unb64(packet.wrappedKey, 684).length !== recoveryPrivateKey.algorithm.modulusLength / 8 ||
     packet.authority !== (await fingerprint(anchor)) ||
     !Number.isSafeInteger(packet.generation) ||
     packet.generation < minimumGeneration
@@ -152,6 +152,8 @@ export async function openRecoveryEnvelope({
   );
   if (
     directory.generation !== packet.generation ||
+    packet.recoveryFingerprint !== directory.recoveryFingerprint ||
+    recoveryWrappedBytes(directory.recoveryPublicKey) !== recoveryPrivateKey.algorithm.modulusLength / 8 ||
     value.version !== 1 ||
     Object.keys(value.keys).sort().join(",") !==
       Object.keys(directory.epochs).sort().join(",")

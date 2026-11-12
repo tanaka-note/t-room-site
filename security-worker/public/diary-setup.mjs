@@ -1,4 +1,4 @@
-import { createVault,fingerprint } from '/security/diary-crypto/e2ee/crypto.mjs';
+import { createVault,validatePublicTrust } from '/security/diary-crypto/e2ee/crypto.mjs';
 import { prepareKeyConfiguration,publicTrustPackage } from '/security/diary-crypto/e2ee/setup.mjs';
 const PIN='tlain-diary-authority-public-v1';
 async function api(path,value) {
@@ -17,8 +17,7 @@ export async function prepareDiary() {
 }
 export async function importDiaryTrust(file) {
   if(!file||file.size>12000)throw new Error('信頼設定ファイルを確認してください。');
-  const value=JSON.parse(await file.text());
-  if(value.protocol!=='T-lain diary public trust'||value.version!==1||value.fingerprint!==await fingerprint(value.anchor)||!Number.isSafeInteger(value.minimumGeneration)||value.minimumGeneration<1)throw new Error('信頼設定ファイルを確認してください。');
+  const value=await validatePublicTrust(JSON.parse(await file.text()));
   localStorage.setItem(PIN,JSON.stringify(value));return value;
 }
 export async function configureDiary({identityId}={}) {
@@ -30,6 +29,7 @@ export async function configureDiary({identityId}={}) {
     if(!status.adminEnvelope||!status.recoveryPublicKey)throw new Error('既存の管理者パスキーのT-Cloud利用準備・復旧登録を先に完了してください。');
     const privateKey=await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput,status.adminEnvelope);
     const pin=JSON.parse(localStorage.getItem(PIN)||'null'),pending=JSON.parse(localStorage.getItem(PIN+'-pending')||'null');
+    if(pin)await validatePublicTrust(pin);
     if(pending){if(status.config&&JSON.stringify(status.config.directory)===JSON.stringify(pending.directory)){localStorage.removeItem(PIN+'-pending');return publicTrustPackage(pending);}if((status.config?.generation||0)!==pending.expectedGeneration)throw new Error('鍵の更新結果を照合できません。元の信頼設定を保持して管理者に確認してください。');await api('/config',pending);localStorage.removeItem(PIN+'-pending');return publicTrustPackage(pending);}
     const recoveryRecords=[];let after=null;
     if(status.config)do {const page=await api(`/recovery-records${after?`?after=${encodeURIComponent(after)}`:''}`);recoveryRecords.push(...page.records);after=page.nextCursor;if(recoveryRecords.length>5000)throw new Error('復旧対象が上限を超えています。');}while(after);

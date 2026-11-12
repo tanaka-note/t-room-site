@@ -2,6 +2,8 @@ import { diaryKeyBundle,handleDiaryKeys,diaryKeysEnabled } from "./diary-keys.js
 import { runState } from '../../backup-worker/src/monitor.js';
 import { archiveAuditEvents, archiveIfPending } from './audit-archive.js';
 import { healthKeyBundle, handleHealthKeys, healthMembershipStatement, assertHealthMemberAvailable } from './health-keys.js';
+import {handleHouseholdKeys} from './household-keys.js';
+import {householdAutomaticContext} from './household-automatic.js';
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName, identityDisplayName, auditDisplayNames, OWNER_DISPLAY_NAME } from "../../assets/account-display.mjs";
@@ -174,6 +176,10 @@ export default class SecurityWorker extends WorkerEntrypoint {
     return healthKeyBundle(this.env, input);
   }
 
+  async getHouseholdAutomaticContext(input) {
+    return householdAutomaticContext(this.env,input,validatePasskeySession);
+  }
+
   async getAiBudgetPolicy(identityId) {
     return aiBudgetPolicy(this.env, normalizeIdentityId(identityId));
   }
@@ -277,6 +283,17 @@ async function handleApi(request, env, url, path, context = null) {
     }
     try{return await handleDiaryKeys(path,request,env,actor,{readJson,json,audit:(eventType,identityId)=>writeLocalAudit(env,{eventType,identityId,service:'diary',outcome:'success',authMethod:'passkey'},request)});}
     catch(error){if([400,403,404,409,423,428].includes(error.status))throw new HttpError(error.status,'日記の暗号鍵を確認できません。本人確認と承認状態を確認してください。');throw error;}
+  }
+  if (path.startsWith("/api/household/")) {
+    if(request.method!=="GET")requireMutation(request,url);
+    const actor=await requireActiveIdentitySession(request,env);
+    if(!["/api/household/own","/api/household/vault"].includes(path)) {
+      const admin=await requireSecurityAdmin(request,env);
+      if(admin.identityId!==actor.identityId||admin.credentialId!==actor.credentialId)throw new HttpError(403,"管理者の本人確認が一致しません。");
+      requireFreshSecurityAdmin(admin);
+    }
+    return handleHouseholdKeys(path,request,env,actor,{HttpError,readJson,json,
+      audit:(eventType,identityId)=>writeLocalAudit(env,{eventType,identityId,service:'household',outcome:'success',authMethod:'passkey'},request)});
   }
   if (path.startsWith("/api/health/")) {
     if (request.method !== "GET") requireMutation(request, url);
@@ -492,7 +509,7 @@ async function authenticationOptions(request, env) {
     ORDER BY c.registered_at ASC`);
   const rows = await (["security", "cloud"].includes(service) ? statement.all() : statement.bind(service).all());
   if (!(rows.results || []).length) throw new HttpError(404, "パスキーが登録されていません。管理者からの招待を確認してください。");
-  const extensions = (["security", "cloud", "health"].includes(service)||(service==="diary"&&diaryKeysEnabled(env)))
+  const extensions = (["security", "cloud", "health", "household"].includes(service)||(service==="diary"&&diaryKeysEnabled(env)))
     ? prfAuthenticationExtensions(rows.results)
     : undefined;
   const options = await generateAuthenticationOptions({

@@ -154,6 +154,43 @@ export async function fingerprint(publicKey) {
     ),
   );
 }
+// Public trust files and server metadata must never retain private JWK fields
+// or arbitrary additional data. Existing T-Cloud recovery keys are 3072 bits;
+// the earlier diary candidate's 4096-bit recovery keys remain readable.
+export function validatePublicKey(key, kind) {
+  const signing = kind === "signing";
+  const fields = signing ? ["kty", "crv", "x", "y"] : ["kty", "n", "e"];
+  const allowed = new Set([...fields, "alg", "ext", "key_ops"]);
+  if (!key || typeof key !== "object" || Array.isArray(key) ||
+      !["signing", "recipient", "recovery"].includes(kind) ||
+      fields.some(name => !Object.hasOwn(key, name)) ||
+      Object.keys(key).some(name => !allowed.has(name)) ||
+      (Object.hasOwn(key, "ext") && typeof key.ext !== "boolean") ||
+      (Object.hasOwn(key, "alg") && key.alg !== (signing ? "ES256" : "RSA-OAEP-256")) ||
+      (Object.hasOwn(key, "key_ops") && (!Array.isArray(key.key_ops) ||
+        key.key_ops.length !== 1 || key.key_ops[0] !== (signing ? "verify" : "encrypt"))))
+    throw new Error("InvalidPublicKey");
+  if (signing) {
+    if (key.kty !== "EC" || key.crv !== "P-256" ||
+        unb64(key.x, 43).length !== 32 || unb64(key.y, 43).length !== 32)
+      throw new Error("InvalidPublicKey");
+  } else if (key.kty !== "RSA" || key.e !== "AQAB" ||
+      !(kind === "recovery" ? [384, 512] : [384]).includes(unb64(key.n, 684).length)) {
+    throw new Error("InvalidPublicKey");
+  }
+  return key;
+}
+export const recoveryWrappedBytes = key => unb64(validatePublicKey(key, "recovery").n, 684).length;
+export async function validatePublicTrust(value) {
+  if (!value || Object.keys(value).sort().join(",") !== "anchor,fingerprint,minimumGeneration,protocol,version" ||
+      value.protocol !== "T-lain diary public trust" || value.version !== 1 ||
+      !Number.isSafeInteger(value.minimumGeneration) || value.minimumGeneration < 1)
+    throw new Error("InvalidPublicTrust");
+  validatePublicKey(value.anchor, "signing");
+  if (value.fingerprint !== await fingerprint(value.anchor)) throw new Error("InvalidPublicTrust");
+  await crypto.subtle.importKey("jwk", value.anchor, {name:"ECDSA", namedCurve:"P-256"}, false, ["verify"]);
+  return value;
+}
 async function prfKey(prf, credentialId) {
   if (
     !(prf instanceof Uint8Array) ||
@@ -282,6 +319,7 @@ export async function signed(value, privateKey) {
   };
 }
 export async function verifySigned(packet, publicKey) {
+  validatePublicKey(publicKey, "signing");
   const key = await crypto.subtle.importKey(
     "jwk",
     publicKey,
@@ -325,10 +363,7 @@ export async function verifyDirectory(packet, anchor, minimumGeneration = 1) {
     )
       throw new Error("InvalidDirectory");
   if (
-    value.recoveryPublicKey?.kty !== "RSA" ||
-    value.recoveryPublicKey.d ||
-    unb64(value.recoveryPublicKey.n).length !== 512 ||
-    value.recoveryPublicKey.e !== "AQAB" ||
+    !recoveryWrappedBytes(value.recoveryPublicKey) ||
     (await fingerprint(value.recoveryPublicKey)) !== value.recoveryFingerprint
   )
     throw new Error("InvalidDirectory");
@@ -348,16 +383,8 @@ export async function verifyDirectory(packet, anchor, minimumGeneration = 1) {
       member.households.some((h) => !Object.hasOwn(value.households, h))
     )
       throw new Error("InvalidDirectory");
-    if (
-      member.publicKey.kty !== "RSA" ||
-      member.publicKey.d ||
-      unb64(member.publicKey.n).length !== 384 ||
-      member.publicKey.e !== "AQAB" ||
-      member.signPublicKey?.kty !== "EC" ||
-      member.signPublicKey?.crv !== "P-256" ||
-      member.signPublicKey?.d
-    )
-      throw new Error("InvalidDirectory");
+    validatePublicKey(member.publicKey, "recipient");
+    validatePublicKey(member.signPublicKey, "signing");
     await crypto.subtle.importKey(
       "jwk",
       member.signPublicKey,

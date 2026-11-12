@@ -131,7 +131,7 @@ export default {
     try {
       const url = new URL(request.url);
       const authentication=await proxyDiaryAuthentication(request,env);if(authentication)return secureResponse(authentication);
-      if(encryptionEnabled(env)&&url.pathname==="/assets/pwa-auto-update.js")return env.ASSETS.fetch(new Request(new URL("/origin-assets/pwa-auto-update.js",url),request));
+      if(url.pathname==="/assets/pwa-auto-update.js"&&encryptionEnabled(env))return env.ASSETS.fetch(new Request(new URL("/origin-assets/pwa-auto-update.js",url),request));
       if (url.pathname === `${BASE_PATH}.html`) {
         return secureResponse(Response.redirect(`${url.origin}${BASE_PATH}/`, 308));
       }

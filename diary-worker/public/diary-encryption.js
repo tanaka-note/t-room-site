@@ -4,18 +4,18 @@ import { openCipherCache } from './crypto/e2ee/cache.mjs';
 import { createPrivateNavigation } from './crypto/e2ee/privacy.mjs';
 import { createEncryptedDiaryApi } from './crypto/e2ee/ui-api.mjs';
 import { createEncryptedMediaClient } from './crypto/e2ee/media-client.mjs';
-import { fingerprint } from './crypto/e2ee/crypto.mjs';
+import { validatePublicTrust } from './crypto/e2ee/crypto.mjs';
 const PIN='tlain-diary-authority-public-v1';
 export async function importDiaryTrust(file) {
   if(!file||file.size>12000)throw new Error('信頼設定ファイルを確認してください。');
-  const value=JSON.parse(await file.text());
-  if(value.protocol!=='T-lain diary public trust'||value.version!==1||value.fingerprint!==await fingerprint(value.anchor)||!Number.isSafeInteger(value.minimumGeneration)||value.minimumGeneration<1)throw new Error('信頼設定ファイルを確認してください。');
+  const value=await validatePublicTrust(JSON.parse(await file.text()));
   localStorage.setItem(PIN,JSON.stringify(value));return value;
 }
 export async function startEncryptedDiary(session,authentication) {try{return await createEncryptedDiary(session,authentication);}finally{authentication?.prfOutput?.fill(0);}}
 async function createEncryptedDiary(session,authentication) {
   const pin=JSON.parse(localStorage.getItem(PIN)||'null');
   if(!pin)throw Object.assign(new Error('管理者から受け取った日記の信頼設定ファイルを読み込んでください。復旧キーの追加発行は不要です。'),{trustRequired:true});
+  await validatePublicTrust(pin);
   if(!authentication?.prfOutput)throw new Error('暗号鍵を解除するため、パスキーでログインしてください。');
   const nativeFetch=window.fetch.bind(window);
   const nativeApi=async(path,init={})=>{

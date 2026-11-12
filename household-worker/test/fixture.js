@@ -17,7 +17,14 @@ export const household=await bundle(new URL('../src/index.js',import.meta.url),'
 export function fixture(accountId='owner',identityId=accountId==='owner'?'primary-admin':'sample-viewer'){
   const sqlite=new DatabaseSync(':memory:');sqlite.exec('PRAGMA foreign_keys=ON');for(const file of readdirSync(new URL('../migrations/',import.meta.url)).filter(n=>n.endsWith('.sql')).sort())sqlite.exec(readFileSync(new URL(`../migrations/${file}`,import.meta.url),'utf8'));
   const sessions=new Map();let active=true,consumed=false,cookie='',sessionContext='';
-  const env={DB:d1(sqlite),SESSION_SECRET:randomBytes(32).toString('hex'),PASSKEY_ENABLED:'true',SESSION_VERSION:'1',SECURITY:{
+  const env={DB:d1(sqlite),ENCRYPTION_REQUIRED:'false',SESSION_SECRET:randomBytes(32).toString('hex'),PASSKEY_ENABLED:'true',SESSION_VERSION:'1',SECURITY:{
+    async getHouseholdAutomaticContext(input){
+      if(!active||input.identityId!==identityId||input.serviceAccountId!==accountId)throw new Error('Fixture authority revoked');
+      const account=await env.DB.prepare('SELECT household_id,role FROM household_accounts WHERE id=? AND is_active=1').bind(accountId).first();
+      const config=await env.DB.prepare('SELECT recovery_public_key FROM household_crypto_config WHERE household_id=?').bind(account.household_id).first();
+      return {householdId:account.household_id,role:account.role,recoveryPublicKey:config?JSON.parse(config.recovery_public_key):null,
+        members:[{identityId,credentialId:input.credentialId,serviceLinkId:input.serviceLinkId,serviceAccountId:accountId,source:null}]};
+    },
     async redeemHandoff(token,service){if(token!=='fixture-handoff'||consumed||service!=='household')return null;consumed=true;return {identityId,serviceAccountId:accountId,credentialId:'fixture-credential',serviceLinkId:'fixture-link',sessionEpoch:1};},
     async passkeyRollingSession(input){if(!active||input.service!=='household'||input.identityId!==identityId||input.serviceAccountId!==accountId)return {valid:false};if(input.action==='register')sessions.set(input.sessionIdHash,{valid:true,expiresAt:input.expiresAt});if(input.action==='end'){sessions.delete(input.sessionIdHash);return {valid:true};}return sessions.get(input.sessionIdHash)||{valid:false};},
     async recordAuditEvent(){return {stored:true};}

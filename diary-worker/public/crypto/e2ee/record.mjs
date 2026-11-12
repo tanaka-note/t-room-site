@@ -5,6 +5,7 @@ import {
   unb64,
   validateEnvelope,
   verifySigned,
+  recoveryWrappedBytes,
 } from "./crypto.mjs";
 import {
   publishedScope,
@@ -127,8 +128,8 @@ export function validateRecord(row) {
   for (const [id, value] of Object.entries(row.keyBox))
     if (
       !/^[\w-]{1,2048}$/.test(id) ||
-      unb64(value, id === RECOVERY_RECIPIENT ? 684 : 512).length !==
-        (id === RECOVERY_RECIPIENT ? 512 : 384)
+      !(id === RECOVERY_RECIPIENT ? [384, 512] : [384]).includes(
+        unb64(value, id === RECOVERY_RECIPIENT ? 684 : 512).length)
     )
       throw new Error("InvalidRecord");
   return row;
@@ -136,6 +137,8 @@ export function validateRecord(row) {
 
 export async function verifyRecord(row,directory,{currentRecipients=false}={}) {
   validateRecord(row);
+  if (row.keyBox[RECOVERY_RECIPIENT] && unb64(row.keyBox[RECOVERY_RECIPIENT], 684).length !== recoveryWrappedBytes(directory.recoveryPublicKey))
+    throw new Error("InvalidRecipients");
   const member = directory.members.find(
     (m) => m.credentialId === row.attestation.writer,
   );

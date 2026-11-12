@@ -1,4 +1,4 @@
-import { b64,encode,newKey,signingKey,signed,fingerprint,makeGrant,openRecipientKey,verifyDirectory } from './crypto.mjs';
+import { b64,encode,newKey,signingKey,signed,fingerprint,makeGrant,openRecipientKey,verifyDirectory,validatePublicKey } from './crypto.mjs';
 import { bindingOf,verifyRecord } from './record.mjs';
 import { canRead,publishedScope,draftScope,preferencesScope,trashScope } from './policy.mjs';
 import { createRecoveryEnvelope,openRecoveryEnvelope } from './recovery.mjs';
@@ -22,6 +22,7 @@ function scopeDefinitions(households,members) {
 // Prove the API's recovery public key matches the locally unlocked EXISTING
 // T-Cloud private key before releasing any diary key material to that recipient.
 async function proveRecoveryKey(publicKey,privateKey) {
+  validatePublicKey(publicKey,'recovery');
   const challenge=crypto.getRandomValues(new Uint8Array(32));let plain;
   try {
     const recipient=await crypto.subtle.importKey('jwk',publicKey,{name:'RSA-OAEP',hash:'SHA-256'},false,['encrypt']);
@@ -50,6 +51,10 @@ export async function prepareKeyConfiguration({status,recoveryPrivateKey,trusted
     const candidates=new Map((previous?.members||[]).map(m=>[m.credentialId,m]));
     for(const member of status.members)candidates.set(member.credentialId,member);
     const definitions=scopeDefinitions(status.households,[...candidates.values()]);
+    if(previous&&(b64(encode(previous.households))!==b64(encode(status.households))||previous.members.some(old=>{
+      const live=status.members.find(m=>m.credentialId===old.credentialId);
+      return old.scopes.some(scope=>{const row=definitions.find(d=>d.scope===scope);return !row||!canRead({...live,active:true},row);});
+    })))throw new Error('RekeyRequired');
     const epochs={...previous?.epochs};
     for(const row of definitions){epochs[row.scope]??=1;if(!scopeKeys.has(row.scope))scopeKeys.set(row.scope,await newKey());}
     const members=[];

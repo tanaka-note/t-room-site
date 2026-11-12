@@ -11,52 +11,22 @@
     {
       "id": "site",
       "name": "T-lain本体・公開ページ",
-      "publicUrls": [
-        "https://tanaka-note.com/"
-      ],
+      "publicUrls": ["https://tanaka-note.com/"],
       "entrypoints": [
-        "index.html",
-        "apps.html",
-        "articles.html",
-        "work.html",
-        "game.html",
-        "investment.html",
-        "life.html",
-        "thought.html",
-        "diary.html",
-        "diary/archive.html",
-        "diary/tags.html",
-        "investment-performance.html",
-        "investment-bitcoin-decline.html",
-        "investment-boj-rate-hike.html",
-        "investment-btc-four-year-cycle.html",
-        "blocks-game.html",
-        "hop-game.html",
-        "oni-type.html",
-        "oni-type-en.html",
-        "stone-stack.html",
-        "learning.html",
-        "learning/index.html",
-        "learning/sharoushi/index.html",
-        "learning/sharoushi/logs/index.html",
-        "learning/sharoushi/logs/001.html",
-        "learning/sharoushi/logs/002.html",
-        "learning/sharoushi/logs/003.html",
-        "learning/sharoushi/logs/004.html",
-        "learning/sharoushi/logs/005.html",
-        "learning/sharoushi/logs/006.html",
-        "learning/sharoushi/logs/007.html",
-        "learning/sharoushi/logs/008.html",
-        "learning/sharoushi/logs/009.html",
-        "learning/sharoushi/logs/010.html",
-        "learning/sharoushi/logs/011.html",
-        "learning/sharoushi/subjects/index.html",
-        "learning/sharoushi/topics/index.html",
-        "columns/music/index.html",
-        "columns/music/001.html",
-        "columns/music/002.html",
-        "columns/current-affairs/index.html",
-        "columns/current-affairs/001.html",
+        "index.html", "apps.html", "articles.html", "work.html", "game.html", "investment.html",
+        "life.html", "thought.html", "diary.html", "diary/archive.html", "diary/tags.html",
+        "investment-performance.html", "investment-bitcoin-decline.html", "investment-boj-rate-hike.html",
+        "investment-btc-four-year-cycle.html", "blocks-game.html", "hop-game.html", "oni-type.html",
+        "oni-type-en.html", "stone-stack.html", "learning.html", "learning/index.html",
+        "learning/sharoushi/index.html", "learning/sharoushi/logs/index.html",
+        "learning/sharoushi/logs/001.html", "learning/sharoushi/logs/002.html",
+        "learning/sharoushi/logs/003.html", "learning/sharoushi/logs/004.html",
+        "learning/sharoushi/logs/005.html", "learning/sharoushi/logs/006.html",
+        "learning/sharoushi/logs/007.html", "learning/sharoushi/logs/008.html",
+        "learning/sharoushi/logs/009.html", "learning/sharoushi/logs/010.html",
+        "learning/sharoushi/logs/011.html", "learning/sharoushi/subjects/index.html",
+        "learning/sharoushi/topics/index.html", "columns/music/index.html", "columns/music/001.html",
+        "columns/music/002.html", "columns/current-affairs/index.html", "columns/current-affairs/001.html",
         "transfer/index.html"
       ],
       "buildMode": "prepared-commit",
@@ -70,21 +40,10 @@
     {
       "id": "calculator",
       "name": "電卓",
-      "publicUrls": [
-        "https://tanaka-note.com/apps/calculator/"
-      ],
-      "entrypoints": [
-        "apps/calculator/index.html"
-      ],
-      "buildRoots": [
-        "apps/calculator"
-      ],
-      "assetCopies": [
-        {
-          "source": "tools/shared/pwa-install.js",
-          "copy": "apps/calculator/pwa-install.js"
-        }
-      ],
+      "publicUrls": ["https://tanaka-note.com/apps/calculator/"],
+      "entrypoints": ["apps/calculator/index.html"],
+      "buildRoots": ["apps/calculator"],
+      "assetCopies": [{ "source": "tools/shared/pwa-install.js", "copy": "apps/calculator/pwa-install.js" }],
       "buildMode": "content-hash",
       "serviceWorker": "apps/calculator/sw.js",
       "serviceWorkerUrl": "./sw.js",
@@ -101,15 +60,9 @@
     {
       "id": "ima-camera",
       "name": "今を撮る",
-      "publicUrls": [
-        "https://tanaka-note.com/apps/ima-camera/"
-      ],
-      "entrypoints": [
-        "apps/ima-camera/index.html"
-      ],
-      "buildRoots": [
-        "apps/ima-camera"
-      ],
+      "publicUrls": ["https://tanaka-note.com/apps/ima-camera/"],
+      "entrypoints": ["apps/ima-camera/index.html"],
+      "buildRoots": ["apps/ima-camera"],
       "buildMode": "content-hash",
       "serviceWorker": "apps/ima-camera/sw.js",
       "serviceWorkerUrl": "./sw.js",
@@ -126,15 +79,9 @@
     {
       "id": "kokoro-tenbin",
       "name": "心の天秤",
-      "publicUrls": [
-        "https://tanaka-note.com/apps/kokoro-tenbin/"
-      ],
-      "entrypoints": [
-        "apps/kokoro-tenbin/index.html"
-      ],
-      "buildRoots": [
-        "apps/kokoro-tenbin"
-      ],
+      "publicUrls": ["https://tanaka-note.com/apps/kokoro-tenbin/"],
+      "entrypoints": ["apps/kokoro-tenbin/index.html"],
+      "buildRoots": ["apps/kokoro-tenbin"],
       "buildMode": "content-hash",
       "serviceWorker": "apps/kokoro-tenbin/sw.js",
       "serviceWorkerUrl": "./sw.js",
@@ -151,15 +98,9 @@
     {
       "id": "motivation-switch",
       "name": "Motivation Switch",
-      "publicUrls": [
-        "https://tanaka-note.com/apps/motivation-switch/"
-      ],
-      "entrypoints": [
-        "apps/motivation-switch/index.html"
-      ],
-      "buildRoots": [
-        "apps/motivation-switch"
-      ],
+      "publicUrls": ["https://tanaka-note.com/apps/motivation-switch/"],
+      "entrypoints": ["apps/motivation-switch/index.html"],
+      "buildRoots": ["apps/motivation-switch"],
       "buildMode": "content-hash",
       "serviceWorker": "apps/motivation-switch/sw.js",
       "serviceWorkerUrl": "./sw.js",
@@ -176,15 +117,9 @@
     {
       "id": "omikuji",
       "name": "おみくじ",
-      "publicUrls": [
-        "https://tanaka-note.com/apps/omikuji/"
-      ],
-      "entrypoints": [
-        "apps/omikuji/index.html"
-      ],
-      "buildRoots": [
-        "apps/omikuji"
-      ],
+      "publicUrls": ["https://tanaka-note.com/apps/omikuji/"],
+      "entrypoints": ["apps/omikuji/index.html"],
+      "buildRoots": ["apps/omikuji"],
       "buildMode": "content-hash",
       "serviceWorker": "apps/omikuji/sw.js",
       "serviceWorkerUrl": "./sw.js",
@@ -340,26 +275,10 @@
     {
       "id": "billing",
       "name": "請求書管理システム",
-      "publicUrls": [
-        "https://tanaka-note.com/billing/"
-      ],
-      "entrypoints": [
-        "billing-worker/public/index.html"
-      ],
-      "buildRoots": [
-        "billing-worker/public"
-      ],
-      "buildFiles": [
-        "diary-worker/public/dialog-navigation.js",
-        "assets/session-secret.mjs",
-        "assets/session-policy.mjs",
-        "billing-worker/src/index.js",
-        "assets/password-auth-policy.mjs",
-        "assets/passkey-session-validation.mjs",
-        "assets/security-audit-worker.js",
-        "assets/account-display.mjs",
-        "security-worker/public/passkey-client.js",
-        "assets/passkey-rolling.mjs",
+      "publicUrls": ["https://tanaka-note.com/billing/"],
+      "entrypoints": ["billing-worker/public/index.html"],
+      "buildRoots": ["billing-worker/public"],
+      "buildFiles": ["diary-worker/public/dialog-navigation.js", "assets/session-secret.mjs", "assets/session-policy.mjs", "billing-worker/src/index.js", "assets/password-auth-policy.mjs", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js", "assets/passkey-rolling.mjs",
         "tools/shared/tlain-login.css",
         "tools/shared/tlain-login.js"
       ],
@@ -418,6 +337,8 @@
         "security-worker/src/rolling-sessions.js",
         "security-worker/wrangler.jsonc",
         "security-worker/src/health-keys.js",
+        "security-worker/src/household-keys.js",
+        "security-worker/src/household-automatic.js",
         "health-worker/public/health-crypto.mjs",
         "tools/shared/tlain-login.css",
         "tools/shared/tlain-login.js",
@@ -427,7 +348,8 @@
         "diary-worker/e2ee/record.mjs",
         "diary-worker/e2ee/policy.mjs",
         "diary-worker/e2ee/recovery.mjs",
-        "security-worker/src/diary-keys.js"
+        "security-worker/src/diary-keys.js",
+        "household-worker/public/household-crypto.mjs"
       ],
       "buildMode": "content-hash",
       "serviceWorker": null,
@@ -512,26 +434,10 @@
         }
       ],
       "name": "T-Cloud Web",
-      "publicUrls": [
-        "https://tanaka-note.com/cloud/",
-        "https://tanaka-note.com/cloud/share/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-      ],
-      "entrypoints": [
-        "cloud-worker/public/index.html",
-        "cloud-worker/public/share.html"
-      ],
-      "buildRoots": [
-        "cloud-worker/public"
-      ],
-      "buildFiles": [
-        "assets/session-secret.mjs",
-        "assets/session-policy.mjs",
-        "cloud-worker/src/index.js",
-        "cloud-worker/src/youtube-search.js",
-        "assets/passkey-session-validation.mjs",
-        "assets/security-audit-worker.js",
-        "assets/account-display.mjs",
-        "security-worker/public/passkey-client.js",
+      "publicUrls": ["https://tanaka-note.com/cloud/", "https://tanaka-note.com/cloud/share/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"],
+      "entrypoints": ["cloud-worker/public/index.html", "cloud-worker/public/share.html"],
+      "buildRoots": ["cloud-worker/public"],
+      "buildFiles": ["assets/session-secret.mjs", "assets/session-policy.mjs", "cloud-worker/src/index.js", "cloud-worker/src/youtube-search.js", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js",
         "tools/shared/tlain-login.css",
         "tools/shared/tlain-login.js"
       ],
@@ -540,9 +446,7 @@
         "cloud-worker/public/cloud-runtime-20260816-1.js",
         "cloud-worker/src/index.js"
       ],
-      "extraBuildMetas": [
-        "tcloud-build"
-      ],
+      "extraBuildMetas": ["tcloud-build"],
       "buildMode": "content-hash",
       "serviceWorker": "cloud-worker/public/media-worker.js",
       "serviceWorkerCopies": [
@@ -563,15 +467,9 @@
     {
       "id": "downloader",
       "name": "T-lain Downloader（非公開）",
-      "publicUrls": [
-        "https://tanaka-note.com/downloader/"
-      ],
-      "entrypoints": [
-        "downloader-worker/public/index.html"
-      ],
-      "buildRoots": [
-        "downloader-worker/public"
-      ],
+      "publicUrls": ["https://tanaka-note.com/downloader/"],
+      "entrypoints": ["downloader-worker/public/index.html"],
+      "buildRoots": ["downloader-worker/public"],
       "buildFiles": [
         "assets/session-secret.mjs",
         "downloader-worker/src/index.js",
@@ -579,9 +477,9 @@
         "downloader-worker/src/downloader-domain.js",
         "downloader-worker/container/Dockerfile",
         "downloader-worker/container/server.py",
-        "downloader-worker/container/resolver.py",
-        "downloader-worker/container/main_video.py",
-        "downloader-worker/src/main-video.js",
+          "downloader-worker/container/resolver.py",
+          "downloader-worker/container/main_video.py",
+          "downloader-worker/src/main-video.js",
         "downloader-worker/container/scanner.py",
         "downloader-worker/container/clamd.conf",
         "downloader-worker/container/ssrf.py",
@@ -613,15 +511,9 @@
     {
       "id": "downloader2",
       "name": "T-lain Downloader 2（非公開・ローカル保存）",
-      "publicUrls": [
-        "https://tanaka-note.com/downloader2/"
-      ],
-      "entrypoints": [
-        "downloader2-worker/public/index.html"
-      ],
-      "buildRoots": [
-        "downloader2-worker/public"
-      ],
+      "publicUrls": ["https://tanaka-note.com/downloader2/"],
+      "entrypoints": ["downloader2-worker/public/index.html"],
+      "buildRoots": ["downloader2-worker/public"],
       "buildFiles": [
         "assets/session-secret.mjs",
         "assets/session-policy.mjs",
@@ -651,31 +543,14 @@
     {
       "id": "inventory",
       "name": "在庫照会（非公開）",
-      "publicUrls": [
-        "https://tanaka-note.com/inventory/"
-      ],
-      "entrypoints": [
-        "inventory-worker/public/index.html"
-      ],
-      "buildRoots": [
-        "inventory-worker/public"
-      ],
-      "buildFiles": [
-        "inventory-worker/src/index.js",
-        "inventory-worker/src/domain.js",
-        "assets/session-secret.mjs",
-        "assets/session-policy.mjs",
-        "assets/passkey-rolling.mjs",
-        "assets/security-audit-worker.js",
-        "security-worker/public/passkey-client.js",
+      "publicUrls": ["https://tanaka-note.com/inventory/"],
+      "entrypoints": ["inventory-worker/public/index.html"],
+      "buildRoots": ["inventory-worker/public"],
+      "buildFiles": ["inventory-worker/src/index.js", "inventory-worker/src/domain.js", "assets/session-secret.mjs", "assets/session-policy.mjs", "assets/passkey-rolling.mjs", "assets/security-audit-worker.js", "security-worker/public/passkey-client.js",
         "tools/shared/tlain-login.css",
         "tools/shared/tlain-login.js"
       ],
-      "assetCopies": [
-        {
-          "source": "security-worker/public/passkey-client.js",
-          "copy": "inventory-worker/public/passkey-client.js"
-        },
+      "assetCopies": [{ "source": "security-worker/public/passkey-client.js", "copy": "inventory-worker/public/passkey-client.js" },
         {
           "source": "tools/shared/tlain-login.css",
           "copy": "inventory-worker/public/tlain-login.css"
@@ -739,11 +614,7 @@
     },
     {
       "id": "payments",
-      "assetCopies": [
-        {
-          "source": "diary-worker/public/dialog-navigation.js",
-          "copy": "payments-worker/public/dialog-navigation.js"
-        },
+      "assetCopies": [{ "source": "diary-worker/public/dialog-navigation.js", "copy": "payments-worker/public/dialog-navigation.js" },
         {
           "source": "tools/shared/tlain-login.css",
           "copy": "payments-worker/public/tlain-login.css"
@@ -811,7 +682,11 @@
         "payments-worker/public/date-wheel.js",
         "payments-worker/public/date-wheel.css",
         "tools/shared/tlain-login.css",
-        "tools/shared/tlain-login.js"
+        "tools/shared/tlain-login.js",
+        "household-worker/src/keys.js",
+        "household-worker/src/automatic-keys.js",
+        "household-worker/src/encrypted-api.js",
+        "cloud-worker/public/crypto-vault.js"
       ],
       "assetCopies": [
         {
@@ -841,6 +716,10 @@
         {
           "source": "tools/shared/tlain-login.js",
           "copy": "household-worker/public/tlain-login.js"
+        },
+        {
+          "source": "household-worker/src/domain.js",
+          "copy": "household-worker/public/household-domain.mjs"
         }
       ],
       "buildMode": "content-hash",
@@ -918,17 +797,8 @@
     }
   ],
   "excludedHtml": [
-    {
-      "path": "asset-report-k7m4q9x2/index.html",
-      "reason": "公開停止済みの移行検証用ソース。公開assetsに含めず終了用Workerだけを配信"
-    },
-    {
-      "path": "learning/sharoushi/logs/template.html",
-      "reason": "記事生成用テンプレート"
-    },
-    {
-      "path": "cloud-worker/public/offline.html",
-      "reason": "Service Workerオフラインfallback"
-    }
+    { "path": "asset-report-k7m4q9x2/index.html", "reason": "公開停止済みの移行検証用ソース。公開assetsに含めず終了用Workerだけを配信" },
+    { "path": "learning/sharoushi/logs/template.html", "reason": "記事生成用テンプレート" },
+    { "path": "cloud-worker/public/offline.html", "reason": "Service Workerオフラインfallback" }
   ]
 }

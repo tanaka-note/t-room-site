@@ -13,10 +13,11 @@ export function createEncryptedDiaryApi(client,{session,nativeApi,media,onHouseh
   };
   return async(path,options={})=>{
     const url=new URL(path,'https://diary.invalid'),method=options.method||'GET',body=options.body?typeof options.body==='string'?JSON.parse(options.body):options.body:{};
-    if(url.pathname==='/session'||url.pathname==='/passkey/handoff')return nativeApi(path,options);
+    if(url.pathname==='/passkey/handoff')return nativeApi(path,options);
+    if(url.pathname==='/session'){const result=await nativeApi(path,options);if(!result.authenticated||!result.encryption?.enabled||result.encryption.accountId!==client.actor.accountId||result.encryption.webAuthnCredentialId!==client.profile.webAuthnCredentialId){client.lock();fail(401,'SessionChanged');}return result;}
     if(url.pathname==='/logout'){try{return await nativeApi(path,options);}finally{client.lock();}}
     if(url.pathname==='/households'||url.pathname==='/households/select') {
-      const result=await nativeApi(path,options);if(method!=='GET'){await onHousehold(body.householdId);initialized=false;}return result;
+      const result=await nativeApi(path,options);if(method!=='GET'){await onHousehold(body.householdId);session.activeHouseholdId=body.householdId;initialized=false;}return result;
     }
     if(!initialized)await synchronize();
     if(url.pathname==='/bootstrap')return {session,households:await nativeApi('/households'),meta:client.meta(),entries:client.list(url.searchParams)};

@@ -4,6 +4,8 @@ import {
   verifyDirectory,
   validateEnvelope,
   unb64,
+  validatePublicKey,
+  recoveryWrappedBytes,
 } from "./crypto.mjs";
 import { verifyRecord } from "./record.mjs";
 const digest = async (value) =>
@@ -21,7 +23,7 @@ const exact = (value, keys) =>
   typeof value === "object" &&
   !Array.isArray(value) &&
   Object.keys(value).sort().join(",") === [...keys].sort().join(",");
-function validateKeyMetadata({ vaults, grants, recoveryEnvelope }) {
+function validateKeyMetadata({ vaults, grants, recoveryEnvelope }, directory) {
   for (const vault of Object.values(vaults || {})) {
     if (
       !exact(vault, ["publicKey", "signPublicKey", "privateEnvelope"]) ||
@@ -35,6 +37,8 @@ function validateKeyMetadata({ vaults, grants, recoveryEnvelope }) {
     )
       throw new Error("InvalidKeyMetadata");
     validateEnvelope(vault.privateEnvelope);
+    validatePublicKey(vault.publicKey, "recipient");
+    validatePublicKey(vault.signPublicKey, "signing");
   }
   for (const list of Object.values(grants || {})) {
     if (!Array.isArray(list)) throw new Error("InvalidKeyMetadata");
@@ -69,7 +73,9 @@ function validateKeyMetadata({ vaults, grants, recoveryEnvelope }) {
         "wrappedKey",
       ]) ||
       recoveryEnvelope.version !== 1 ||
-      unb64(recoveryEnvelope.wrappedKey, 684).length !== 512
+      unb64(recoveryEnvelope.wrappedKey, 684).length !== recoveryWrappedBytes(directory.recoveryPublicKey) ||
+      recoveryEnvelope.generation !== directory.generation ||
+      recoveryEnvelope.recoveryFingerprint !== directory.recoveryFingerprint
     )
       throw new Error("InvalidKeyMetadata");
     validateEnvelope(recoveryEnvelope.envelope);
@@ -80,7 +86,7 @@ export async function backup(
   db,
   { directory, vaults, grants, recoveryEnvelope = null },
 ) {
-  validateKeyMetadata({ vaults, grants, recoveryEnvelope });
+  validateKeyMetadata({ vaults, grants, recoveryEnvelope }, directory.value);
   const snapshots = await db.batch(
     TABLES.map((name) =>
       db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).bind(),
@@ -123,7 +129,7 @@ export async function restoreEmpty(db, packet, { anchor, minimumGeneration }) {
     anchor,
     minimumGeneration,
   );
-  validateKeyMetadata(value);
+  validateKeyMetadata(value, directory);
   const statements = [];
   for (const table of TABLES) {
     const present = await db

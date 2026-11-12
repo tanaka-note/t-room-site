@@ -33,7 +33,7 @@ export const SERVICES = {
     "label": "家計簿",
     "binding": "HOUSEHOLD_DB",
     "database": "household-db",
-    "migration": "0006_independent_households.sql",
+    "migration": "0007_client_encryption.sql",
     "tables": [
       {
         "name": "household_accounts",
@@ -85,9 +85,42 @@ export const SERVICES = {
           "activated_at",
           "retired_at",
           "lease_expires_at",
-          "household_id"
+          "household_id",
+          "crypto_version"
         ],
-        "sourceColumns": "id,created_at,activated_at,retired_at,lease_expires_at,household_id"
+        "sourceColumns": "id,created_at,activated_at,retired_at,lease_expires_at,household_id,crypto_version"
+      },
+      {
+        "name": "household_crypto_config",
+        "columns": [
+          "household_id",
+          "key_id",
+          "recovery_wrapped_key",
+          "recovery_public_key"
+        ],
+        "sourceColumns": "household_id,key_id,recovery_wrapped_key,recovery_public_key"
+      },
+      {
+        "name": "household_crypto_vaults",
+        "columns": [
+          "credential_id",
+          "identity_id",
+          "public_key_json",
+          "iv",
+          "ciphertext"
+        ],
+        "sourceColumns": "credential_id,identity_id,public_key_json,iv,ciphertext"
+      },
+      {
+        "name": "household_crypto_grants",
+        "columns": [
+          "household_id",
+          "credential_id",
+          "identity_id",
+          "service_link_id",
+          "wrapped_key"
+        ],
+        "sourceColumns": "household_id,credential_id,identity_id,service_link_id,wrapped_key"
       }
     ],
     "knownTables": [
@@ -95,7 +128,10 @@ export const SERVICES = {
       "household_state",
       "household_records",
       "household_requests",
-      "household_datasets"
+      "household_datasets",
+      "household_crypto_config",
+      "household_crypto_vaults",
+      "household_crypto_grants"
     ]
   },
   "cloud": {
@@ -1003,3 +1039,13 @@ export const SERVICES = {
     ]
   }
 };
+
+// Archived plaintext Household generations remain readable for isolated
+// recovery. This specification is never used to capture a live database.
+export function archiveSpec(service,migration) {
+  const spec=SERVICES[service];
+  if(service!=='household'||migration!=='0006_independent_households.sql')return spec;
+  const tables=spec.tables.filter(t=>!t.name.startsWith('household_crypto_')).map(t=>t.name==='household_datasets'
+    ? {...t,columns:t.columns.filter(c=>c!=='crypto_version'),sourceColumns:t.sourceColumns.replace(',crypto_version','')} : t);
+  return {...spec,migration,tables,knownTables:tables.map(t=>t.name)};
+}
