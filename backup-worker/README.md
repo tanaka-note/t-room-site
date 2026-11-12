@@ -47,6 +47,20 @@ DB単位のR2 CASリースを20分保持し、15分Workflow stepより長くす�
 
 バックアップR2は既存の非公開構成・保存時暗号化を維持する。Securityの監査長期保管・Downloader一時R2の扱いは変更せず、バックアップ保管先を毎日再複製する機能は追加しない。
 
+## 家計簿の旧平文バックアップの移行準備
+
+`tools/household-archive.mjs` はCloudflare外の信頼できる復旧環境で使う、ネットワーク・削除機能を持たないNode専用helper。既存のT-Cloud管理者RSA公開鍵で、家計簿の旧v1/v2/v3世代と参照partをまとめてAES-GCM暗号化し、ランダムな一時鍵をRSA-OAEPで包む。暗号化の作成にはログイン・PRF・管理者秘密鍵は不要。公開鍵の指紋は現行Householdの復旧用公開鍵と照合する。秘密鍵・生の一時鍵をR2、ファイル、ログへ保存しない。
+
+原本のgzip bytes・key・bucket・SHA-256 metadataを暗号化内容に保持し、AADとRSA labelでarchive ID・作成時刻・recipientを固定する。元objectのSHA検証、全世代の隔離DB復元、暗号化前後のメモリー内照合、アップロードした暗号文の読戻し照合はそれぞれ別の検証として扱う。暗号化コピーは既存世代と別の `d1/household/sealed/v1/` に作成し、既存の日次・月次一覧と通常の保持処理を変更しない。上限は原本合計8 MiB・1,000 objectで、安全停止を優先する。
+
+`openHouseholdArchive(archive, privateKey)` は管理者の既存RSA秘密鍵CryptoKeyでのみ開く。`rehearseHouseholdArchive(objects)` は全世代を既存の隔離復元へ渡し、復旧したアカウントを無効のまま照合する。これらはT-Cloud/Householdの通常画面へ新しいログイン・復元操作を追加しない。実管理者鍵での開封確認前は `recipientPrivateKeyVerified=false` と記録し、原本を削除しない。このhelperに削除機能はなく、別途の原本整理でも現在のkey/ETag/参照集合の再照合が必要。
+
+このコピー作成だけでは、既存平文世代の削除、通常Cronの全DB snapshotの外側暗号化、Time Travelの完了を意味しない。未移行の家計が現行DBに残る間は、以降の定期snapshotにも平文が含まれる。`householdHistoryStatus()` は現在の全家計の `crypto_version` を検査し、平文があれば履歴移行を完了扱いしない。最後の平文を除去した検証済み時刻と保持期間（Free 7日、Paid 30日、契約未確認なら上限30日）が揃ってから期限経過を判定する。Time Travelへの過去時点の復元は古い履歴を消去しない。履歴消去目的で本番DBをrestore/deleteしない。公式仕様は[Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/)を参照。
+
+`node --use-env-proxy backup-worker/tools/check-household-history.mjs --state-file /secure/path/history-status.json` は既存のインフラ用認証でD1の世代metadataだけを読み、日時・件数だけをローカルへ記録する。最初に全家計の暗号化済みを観測した時刻から、上限30日を保守的に数える。平文の再出現・DB切替では開始時刻をリセットする。定期実行を追加するコマンドではなく、再確認時にも同じstate fileを使用する。期限経過の判定だけでR2原本の削除済み・管理者鍵での復元確認済みとは扱わない。
+
+隔離復元は0005形式の旧Household v2も扱う。元の列・行を照合してから信頼済み0006/0007 migrationを適用し、後から追加されるアカウントも含めて無効化する。本番のcapture schemaや復元APIは変更しない。
+
 ## 日記写真のバックアップ廃止
 
 日記写真は既存の `t-room-diary-media` を正本とし、別R2への差分コピー・再検証・初回追いつき処理を廃止する。日記WorkerのCronは `25 18 * * *`（03:25 JST）のみで、D1と従来の通常cleanupを維持する。アップロード・表示・写真管理と `diary/staging/` の正式写真は変更しない。`backup_identity` 列と旧形式のDB復元互換性は維持し、列削除・migrationは行わない。旧写真形式の読取・隔離復元helperは互換試験用に残すが、本番からコピー処理は呼び出さない。
