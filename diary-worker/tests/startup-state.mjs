@@ -167,7 +167,7 @@ function positionFixture() {
   const elements = { appView: { hidden: false }, entryList: { querySelector: () => null },
     tagList: { scrollTo() {}, scrollBy() {} } };
   const controller = source.slice(source.indexOf('  let positionVersion ='), source.indexOf('  await boot();'));
-  const api = new Function('window', 'document', 'elements', `${controller}
+  const api = new Function('window', 'document', 'elements', `const diaryHistory=window.history; ${controller}
     function resetHeaderVisibilityTracking() {}
     ${body('restoreEntryListPosition')}
     ${body('restoreTagListPosition')}
@@ -289,8 +289,8 @@ test('new navigation starts at zero before any wait; reload/history leave positi
     if (type === 'navigate') assert.equal(calls[0].behavior, 'instant');
     else assert.equal(window.history.scrollRestoration, 'manual');
   }
-  assert.match(bootstrap, /}, initialScrollIntent\);/);
-  assert.match(body('enterDiary'), /initialScrollIntent\.interrupted \? -1 : positionVersion/);
+  assert.match(bootstrap, /},\s*initialScrollIntent,\s*encryptionRuntime\);/);
+  assert.match(body('enterDiary'), /initialScrollIntent\.interrupted\s*&&\s*!encryptedNavigationType\s*\? -1 : positionVersion/);
   const style = readFileSync(new URL('../public/diary.css', import.meta.url), 'utf8');
   assert.match(style, /html \{[^}]*scroll-behavior: auto/);
 });
@@ -318,6 +318,8 @@ function returnViewFixture() {
   const pagehide = source.slice(source.indexOf('    window.addEventListener("pagehide",'),
     source.indexOf('    document.querySelector("#passkey-login")'));
   const api = new Function('window', 'document', 'state', 'elements', 'cancelPositionRestoration', `
+    const diaryHistory=window.history, diaryStorage=window.sessionStorage, encryptionRuntime=null;
+    const encryptedNavigationType=null, encryptedReferrer='';
     const BASE_PATH = '/diary', RETURN_VIEW_STORAGE_KEY = 'troom-diary-return-view-v1';
     const RETURN_VIEW_HISTORY_KEY = 'troomDiaryReturnView', RETURN_NAVIGATION_KEY = 'troomDiaryReturnNavigation';
     const RETURN_VIEW_MAX_AGE_MS = 1800000, RETURN_NAVIGATION_MAX_AGE_MS = 30000;

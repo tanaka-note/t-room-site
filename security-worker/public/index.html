@@ -60,12 +60,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
   <meta name="referrer" content="no-referrer">
-  <meta name="troom-app-build" content="security-45797a1c81e6">
+  <meta name="troom-app-build" content="security-903931170fdb">
   <meta name="troom-auto-update" content="enabled">
   <title>T-lain セキュリティセンター</title>
-  <link rel="stylesheet" href="/security/security.css?v=security-45797a1c81e6">
-  <link rel="stylesheet" href="/security/tlain-login.css?v=security-45797a1c81e6">
-  <script src="/security/tlain-login.js?v=security-45797a1c81e6" defer></script>
+  <link rel="stylesheet" href="/security/security.css?v=security-903931170fdb">
+  <link rel="stylesheet" href="/security/tlain-login.css?v=security-903931170fdb">
+  <script src="/security/tlain-login.js?v=security-903931170fdb" defer></script>
 </head>
 <body>
   <main class="shell">
@@ -114,6 +114,13 @@
           <button type="submit">同じパスキーでT-Cloudの準備を再開</button>
         </form>
       </section>
+    <section id="diary-setup-notice" class="card setup-notice" hidden>
+      <h2>日記のパスキー利用準備</h2>
+      <p>日記の暗号鍵を準備します。復旧には既存の管理者復旧機能を使います。</p>
+      <button id="diary-setup-prepare" type="button">自分のパスキーで利用準備</button>
+      <p id="diary-setup-status" role="status" aria-live="polite"></p>
+      <p><a href="/security/">セキュリティセンターへ戻る</a></p>
+    </section>
     <section id="health-setup-notice" class="card setup-notice" hidden>
       <h2>体調管理のパスキー利用準備</h2>
       <p>サービス連携とパスキー登録の承認後、利用するパスキーで準備します。</p>
@@ -189,11 +196,11 @@
       </section>
     </section>
   </main>
-  <script src="/cloud/vendor/argon2.umd.min.js?v=security-45797a1c81e6"></script>
-  <script src="/cloud/crypto-vault.js?v=security-45797a1c81e6"></script>
-  <script src="/security/passkey-client.js?v=security-45797a1c81e6"></script>
-  <script src="/security/security-display.js?v=security-45797a1c81e6"></script>
-  <script src="/assets/pwa-auto-update.js?v=security-45797a1c81e6" defer></script>
-  <script src="/security/security.js?v=security-45797a1c81e6"></script>
+  <script src="/cloud/vendor/argon2.umd.min.js?v=security-903931170fdb"></script>
+  <script src="/cloud/crypto-vault.js?v=security-903931170fdb"></script>
+  <script src="/security/passkey-client.js?v=security-903931170fdb"></script>
+  <script src="/security/security-display.js?v=security-903931170fdb"></script>
+  <script src="/assets/pwa-auto-update.js?v=security-903931170fdb" defer></script>
+  <script src="/security/security.js?v=security-903931170fdb"></script>
 </body>
 </html>

@@ -136,13 +136,58 @@
     {
       "id": "diary",
       "name": "日記",
-      "publicUrls": ["https://tanaka-note.com/diary/", "https://tanaka-note.com/diary/investment/", "https://tanaka-note.com/diary/favorites/"],
-      "entrypoints": ["diary-worker/public/index.html", "diary-worker/public/investment.html"],
-      "buildRoots": ["diary-worker/public"],
-      "buildFiles": ["assets/session-secret.mjs", "assets/session-policy.mjs", "diary-worker/src/index.js", "diary-worker/src/entry-domain.js", "diary-worker/src/photo-save.js", "assets/password-auth-policy.mjs", "diary-worker/src/backup.js", "diary-worker/src/photo-backup.js", "backup-worker/src/dispatch.js",
-        "backup-worker/src/backup.js", "backup-worker/src/monitor.js", "backup-worker/src/registry.js", "backup-worker/src/integrity.js", "backup-worker/src/snapshot.js", "backup-worker/src/schema-guard.js", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js", "assets/passkey-rolling.mjs",
+      "publicUrls": [
+        "https://tanaka-note.com/diary/",
+        "https://tanaka-note.com/diary/investment/",
+        "https://tanaka-note.com/diary/favorites/"
+      ],
+      "entrypoints": [
+        "diary-worker/public/index.html",
+        "diary-worker/public/investment.html"
+      ],
+      "buildRoots": [
+        "diary-worker/public"
+      ],
+      "buildFiles": [
+        "assets/session-secret.mjs",
+        "assets/session-policy.mjs",
+        "diary-worker/src/index.js",
+        "diary-worker/src/entry-domain.js",
+        "diary-worker/src/photo-save.js",
+        "assets/password-auth-policy.mjs",
+        "diary-worker/src/backup.js",
+        "diary-worker/src/photo-backup.js",
+        "backup-worker/src/dispatch.js",
+        "backup-worker/src/backup.js",
+        "backup-worker/src/monitor.js",
+        "backup-worker/src/registry.js",
+        "backup-worker/src/integrity.js",
+        "backup-worker/src/snapshot.js",
+        "backup-worker/src/schema-guard.js",
+        "assets/passkey-session-validation.mjs",
+        "assets/security-audit-worker.js",
+        "assets/account-display.mjs",
+        "security-worker/public/passkey-client.js",
+        "assets/passkey-rolling.mjs",
         "tools/shared/tlain-login.css",
-        "tools/shared/tlain-login.js"
+        "tools/shared/tlain-login.js",
+        "diary-worker/e2ee/crypto.mjs",
+        "diary-worker/e2ee/codec.mjs",
+        "diary-worker/e2ee/client.mjs",
+        "diary-worker/e2ee/cache.mjs",
+        "diary-worker/e2ee/record.mjs",
+        "diary-worker/e2ee/policy.mjs",
+        "diary-worker/e2ee/session.mjs",
+        "diary-worker/e2ee/snapshot.mjs",
+        "diary-worker/e2ee/privacy.mjs",
+        "diary-worker/e2ee/ui-api.mjs",
+        "diary-worker/e2ee/media-client.mjs",
+        "diary-worker/e2ee/http.mjs",
+        "diary-worker/e2ee/store.mjs",
+        "diary-worker/e2ee/rollout.mjs",
+        "diary-worker/e2ee/media.mjs",
+        "diary-worker/e2ee/origin.mjs",
+        "diary-worker/e2ee/schema.sql"
       ],
       "buildMode": "content-hash",
       "serviceWorker": "diary-worker/public/service-worker.js",
@@ -164,6 +209,66 @@
         {
           "source": "tools/shared/tlain-login.js",
           "copy": "diary-worker/public/tlain-login.js"
+        },
+        {
+          "source": "diary-worker/e2ee/crypto.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/crypto.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/codec.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/codec.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/client.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/client.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/cache.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/cache.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/record.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/record.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/policy.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/policy.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/session.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/session.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/snapshot.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/snapshot.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/privacy.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/privacy.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/ui-api.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/ui-api.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/media-client.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/media-client.mjs"
+        },
+        {
+          "source": "diary-worker/src/entry-domain.js",
+          "copy": "diary-worker/public/crypto/src/entry-domain.js"
+        },
+        {
+          "source": "diary-worker/public/diary-search.js",
+          "copy": "diary-worker/public/crypto/public/diary-search.js"
+        },
+        {
+          "source": "diary-worker/public/diary-rich-text.js",
+          "copy": "diary-worker/public/crypto/public/diary-rich-text.js"
+        },
+        {
+          "source": "assets/pwa-auto-update.js",
+          "copy": "diary-worker/public/origin-assets/pwa-auto-update.js"
         }
       ]
     },
@@ -237,6 +342,13 @@
         "health-worker/public/health-crypto.mjs",
         "tools/shared/tlain-login.css",
         "tools/shared/tlain-login.js",
+        "diary-worker/e2ee/crypto.mjs",
+        "diary-worker/e2ee/codec.mjs",
+        "diary-worker/e2ee/setup.mjs",
+        "diary-worker/e2ee/record.mjs",
+        "diary-worker/e2ee/policy.mjs",
+        "diary-worker/e2ee/recovery.mjs",
+        "security-worker/src/diary-keys.js",
         "household-worker/public/household-crypto.mjs"
       ],
       "buildMode": "content-hash",
@@ -254,6 +366,30 @@
         {
           "source": "tools/shared/tlain-login.js",
           "copy": "security-worker/public/tlain-login.js"
+        },
+        {
+          "source": "diary-worker/e2ee/crypto.mjs",
+          "copy": "security-worker/public/diary-crypto/e2ee/crypto.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/codec.mjs",
+          "copy": "security-worker/public/diary-crypto/e2ee/codec.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/setup.mjs",
+          "copy": "security-worker/public/diary-crypto/e2ee/setup.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/record.mjs",
+          "copy": "security-worker/public/diary-crypto/e2ee/record.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/policy.mjs",
+          "copy": "security-worker/public/diary-crypto/e2ee/policy.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/recovery.mjs",
+          "copy": "security-worker/public/diary-crypto/e2ee/recovery.mjs"
         }
       ]
     },

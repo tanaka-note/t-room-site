@@ -67,7 +67,9 @@
     return pending;
   }
 
-  async function enterDiary(session) {
+  async function enterDiary(session,authentication=null) {
+    let encryptionRuntime=null;
+    if(session.encryption?.enabled){const encryption=await import(new URL(`diary-encryption.js${scriptUrl.search}`,scriptUrl).href);encryptionRuntime=await encryption.startEncryptedDiary(session,authentication);}
     // A rejected load can be retried, without fetching the runtime before authentication.
     if (!runtimePromise) {
       runtimePromise = Promise.all([
@@ -83,9 +85,17 @@
       button.querySelector(".passkey-login-label").textContent = "パスキーでログイン";
       events.abort();
       return deferredInstallPrompt;
-    }, initialScrollIntent);
+    },initialScrollIntent,encryptionRuntime);
   }
 
+  let trust;
+  function showTrustImport() {
+    if(!trust){
+      trust=document.createElement('input');trust.type='file';trust.accept='application/json';trust.setAttribute('aria-label','日記の信頼設定ファイル');message.after(trust);
+      trust.addEventListener('change',async()=>{try{const encryption=await import(new URL(`diary-encryption.js${scriptUrl.search}`,scriptUrl).href);await encryption.importDiaryTrust(trust.files[0]);trust.hidden=true;message.textContent='信頼設定を保存しました。パスキーでログインしてください。';}catch(error){message.textContent=error.message;}finally{trust.value='';}});
+    }
+    trust.hidden=false;
+  }
   button.addEventListener("click", async () => {
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
@@ -94,9 +104,10 @@
     try {
       const authentication = await TRoomPasskeys.authenticate("diary", links => TRoomPasskeys.chooseLinkDialog(links, "diary"));
       const session = await api("/passkey/handoff", { handoffToken: authentication.handoff.handoffToken });
-      await enterDiary(session);
+      await enterDiary(session,authentication);
     } catch (error) {
       if (events.signal.aborted) return;
+      if(error.trustRequired)showTrustImport();
       showLogin(/ID・パスワード/.test(error.message)
         ? "パスキーを利用できるブラウザで開いてください。復旧が必要な場合は管理者へご相談ください。"
         : error.message);
@@ -135,6 +146,6 @@
       const session = await api("/session");
       if (session.authenticated) await enterDiary(session);
       else showLogin();
-    } catch (error) { showLogin(error.message); }
+    } catch (error) { if(error.trustRequired)trust.hidden=false;showLogin(error.message); }
   })();
 })();

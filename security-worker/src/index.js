@@ -1,3 +1,4 @@
+import { diaryKeyBundle,handleDiaryKeys,diaryKeysEnabled } from "./diary-keys.js";
 import { runState } from '../../backup-worker/src/monitor.js';
 import { archiveAuditEvents, archiveIfPending } from './audit-archive.js';
 import { healthKeyBundle, handleHealthKeys, healthMembershipStatement, assertHealthMemberAvailable } from './health-keys.js';
@@ -169,6 +170,8 @@ export default class SecurityWorker extends WorkerEntrypoint {
     return runState(result.results || [], { hour: service === 'diary-photo-verification' ? 11 : 3, minute: service === 'diary' ? 25 : service === 'diary-photos' ? 55 : service === 'diary-photo-verification' ? 45 : 41 });
   }
 
+  async getDiaryKeyBundle(input) { return diaryKeyBundle(this.env,input); }
+
   async getHealthKeyBundle(input) {
     return healthKeyBundle(this.env, input);
   }
@@ -268,6 +271,18 @@ async function handleApi(request, env, url, path, context = null) {
   if (path === "/api/tcloud/envelope" && request.method === "POST") {
     requireMutation(request, url);
     return saveOwnTCloudEnvelope(request, env);
+  }
+  if(path.startsWith('/api/diary/')) {
+    if(!diaryKeysEnabled(env))throw new HttpError(404,'この機能はまだ有効になっていません。');
+    if(request.method!=='GET')requireMutation(request,url);
+    const actor=await requireActiveIdentitySession(request,env);
+    if(!['/api/diary/own','/api/diary/vault'].includes(path)) {
+      const admin=await requireSecurityAdmin(request,env);
+      if(admin.identityId!==actor.identityId||admin.credentialId!==actor.credentialId)throw new HttpError(403,'管理者の本人確認が一致しません。');
+      requireFreshSecurityAdmin(admin);
+    }
+    try{return await handleDiaryKeys(path,request,env,actor,{readJson,json,audit:(eventType,identityId)=>writeLocalAudit(env,{eventType,identityId,service:'diary',outcome:'success',authMethod:'passkey'},request)});}
+    catch(error){if([400,403,404,409,423,428].includes(error.status))throw new HttpError(error.status,'日記の暗号鍵を確認できません。本人確認と承認状態を確認してください。');throw error;}
   }
   if (path.startsWith("/api/household/")) {
     if(request.method!=="GET")requireMutation(request,url);
@@ -494,7 +509,7 @@ async function authenticationOptions(request, env) {
     ORDER BY c.registered_at ASC`);
   const rows = await (["security", "cloud"].includes(service) ? statement.all() : statement.bind(service).all());
   if (!(rows.results || []).length) throw new HttpError(404, "パスキーが登録されていません。管理者からの招待を確認してください。");
-  const extensions = ["security", "cloud", "health", "household"].includes(service)
+  const extensions = (["security", "cloud", "health", "household"].includes(service)||(service==="diary"&&diaryKeysEnabled(env)))
     ? prfAuthenticationExtensions(rows.results)
     : undefined;
   const options = await generateAuthenticationOptions({
@@ -1117,6 +1132,7 @@ async function identityDetail(id, env) {
   const firstCandidate = approvalCandidates[0] || null;
   const sessionState = await activeSessionState(env, id);
   return json({
+    diaryEncryptionEnabled:diaryKeysEnabled(env),
     identity: { id: identity.id, displayName: identityDisplayName(identity.id, identity.display_name), status: identity.status, isSecurityAdmin: Boolean(identity.is_security_admin), lastLoginAt: normalizeUtcTimestamp(identity.last_login_at), lastSeenAt: normalizeUtcTimestamp(identity.last_seen_at) },
     links: linkDetails,
     credentials: credentialRows.map((row) => ({ ...withUtcTimes(row), backed_up: Boolean(row.backed_up), prf_enabled: Boolean(row.prf_enabled) })),

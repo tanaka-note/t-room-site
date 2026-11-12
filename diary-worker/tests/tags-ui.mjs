@@ -56,7 +56,7 @@ assert.doesNotMatch(script, /\.slice\(0,\s*6\)/);
 assert.match(script, /setRangeText\(tag, context\.start, context\.end, "end"\)/);
 assert.match(script, /\["ArrowDown", "ArrowUp", "Enter", "Escape"\]/);
 assert.match(script, /scrollIntoView\(\{ block: "nearest" \}\)/);
-assert.match(script, /href = `\$\{BASE_PATH\}\/tag\/\$\{encodeURIComponent\(tag\)\}\//);
+assert.match(script, /link\.href\s*=\s*encryptionRuntime\?encryptionRuntime\.tagRoute\(tag\):`\$\{BASE_PATH\}\/tag\/\$\{encodeURIComponent\(tag\)\}\//);
 assert.match(style, /\.diary-tag-cloud \{[^}]*max-height:[^}]*overflow-y: auto;/s);
 assert.match(style, /overscroll-behavior-y: auto/);
 assert.match(style, /\.tag-directory-link \{/);
