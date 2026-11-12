@@ -1,6 +1,6 @@
-import { SERVICES } from './registry.js';
+import { SERVICES,archiveSpec } from './registry.js';
 import { BACKUP_TABLES } from '../../diary-worker/src/backup.js';
-import { assertSchema } from './schema-guard.js';
+import { assertSchema,assertArchiveSchema } from './schema-guard.js';
 import { compress, decode, digest, verifiedPut, verifiedGeneration } from './integrity.js';
 import { sqlStatements, exportedRows } from './export-sql.js';
 import { listObjects } from './backup.js';
@@ -83,7 +83,7 @@ async function openExport(env, service, tables, fetcher, sleep) {
 }
 
 export function validateExportManifest(manifest, service) {
-  const spec = exportSpec(service), prefix = exportPrefix(service);
+  const spec = service==='household'?archiveSpec(service,manifest?.expectedMigration):exportSpec(service), prefix = exportPrefix(service);
   if (manifest?.format !== FORMAT || manifest.service !== service || manifest.database !== spec.database || manifest.expectedMigration !== spec.migration
     || manifest.consistency !== 'single-database-export' || !Number.isFinite(Date.parse(manifest.scheduledFor))
     || !Number.isFinite(Date.parse(manifest.createdAt)) || !Number.isFinite(Date.parse(manifest.completedAt))
@@ -125,7 +125,7 @@ export async function readExportManifest(bucket, key, service, deep = true) {
   if (!verified) return null;
   const day = exportDay(Date.parse(verified.payload.scheduledFor)), prefix = exportPrefix(service);
   if (key !== `${prefix}daily/${day}.json.gz` && key !== `${prefix}monthly/${day.slice(0,7)}.json.gz`) throw new Error('SnapshotInvalid');
-  await assertSchema(service, verified.payload.schema);
+  await assertArchiveSchema(service,verified.payload.expectedMigration,verified.payload.schema);
   if (deep) for await (const _part of readExportParts(bucket, verified.payload, service)) { /* verifies one bounded part at a time */ }
   return verified;
 }

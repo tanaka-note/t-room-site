@@ -3,15 +3,15 @@
 import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import { SERVICES } from '../src/registry.js';
+import { SERVICES,archiveSpec } from '../src/registry.js';
 import { validateSnapshot } from '../src/backup.js';
 import { verifiedGeneration } from '../src/integrity.js';
 import { BACKUP_TABLES } from '../../diary-worker/src/backup.js';
 import { validateExportManifest, readExportParts } from '../src/export-backup.js';
-import { assertSchema } from '../src/schema-guard.js';
+import { assertArchiveSchema } from '../src/schema-guard.js';
 
 export async function restoreIsolated(bucket, key, service) {
-  const tables=service==='diary'?BACKUP_TABLES:SERVICES[service]?.tables;
+  let tables=service==='diary'?BACKUP_TABLES:SERVICES[service]?.tables;
   if(!tables) throw new Error('UnsupportedService');
   const verified=await verifiedGeneration(bucket,key,p=>{
     if (p?.format === 'troom-d1-export-v3') return validateExportManifest(p,service);
@@ -24,12 +24,15 @@ export async function restoreIsolated(bucket, key, service) {
     }
   });
   if(!verified) throw new Error('GenerationMissing');
+  if(service==='household')tables=archiveSpec(service,verified.payload.expectedMigration).tables;
   const exported=verified.payload.format==='troom-d1-export-v3';
-  if(exported)await assertSchema(service,verified.payload.schema);
+  if(exported)await assertArchiveSchema(service,verified.payload.expectedMigration,verified.payload.schema);
   const db=new DatabaseSync(':memory:');
   try {
     const dir=new URL(`../../${service}-worker/migrations/`,import.meta.url);
-    for(const file of readdirSync(dir).filter(f=>f.endsWith('.sql')).sort()) db.exec(readFileSync(new URL(file,dir),'utf8'));
+    const migrations=readdirSync(dir).filter(f=>f.endsWith('.sql')).sort();
+    const legacyHousehold=service==='household'&&verified.payload.expectedMigration==='0006_independent_households.sql';
+    for(const file of migrations.filter(f=>!legacyHousehold||f<=verified.payload.expectedMigration))db.exec(readFileSync(new URL(file,dir),'utf8'));
     // Triggers are from trusted migrations, never from the archive. Disable
     // replay side effects (inventory stock, immutable audit, etc.) only here.
     const triggers=db.prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger'").all();
@@ -62,6 +65,7 @@ export async function restoreIsolated(bucket, key, service) {
     if(service==='diary') db.exec('UPDATE diary_accounts SET active=0,session_version=session_version+1,must_change_password=1');
     if(service==='ai') db.exec("UPDATE ai_accounts SET status='disabled'; UPDATE ai_request_claims SET status='failed',error_code='isolated_restore' WHERE status='processing'");
     for(const t of triggers) db.exec(t.sql);
+    if(legacyHousehold)for(const file of migrations.filter(f=>f>verified.payload.expectedMigration))db.exec(readFileSync(new URL(file,dir),'utf8'));
     assert.equal(db.prepare('PRAGMA integrity_check').get().integrity_check,'ok');
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
     db.exec('COMMIT');

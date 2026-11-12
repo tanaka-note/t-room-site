@@ -7,6 +7,8 @@ import { sessionCookieValue, sessionPolicyForAuthMethod } from '../../assets/ses
 import { recordSecurityAudit } from '../../assets/security-audit-worker.js';
 import { HttpError, text } from './domain.js';
 import { ledgerApi } from './api.js';
+import { keyBundle,keyConfig,manageKeys } from './keys.js';
+import { encryptedApi } from './encrypted-api.js';
 const BASE = '/household', SERVICE = 'household', COOKIE = 'troom_household_session';
 const encoder = new TextEncoder();
 const authorized = new WeakMap();
@@ -31,6 +33,10 @@ export default class HouseholdWorker extends WorkerEntrypoint {
 }
 
 export class SecurityIntegration extends WorkerEntrypoint {
+  async cryptoKeys(action,input) {
+    try { return await manageKeys(this.env.DB,action,input); }
+    catch(error) { if(error instanceof HttpError)return {error:error.message,status:error.status}; throw new Error('HouseholdKeyOperationFailed'); }
+  }
   async getSessionRuntimeState(input) {
     const account = await accountRecord(this.env,input?.serviceAccountId);
     return account ? { sessionVersion: sessionVersion(this.env, account), passkeyEnabled: enabled(this.env) } : null;
@@ -56,7 +62,7 @@ export async function handleRequest(request, env, context) {
   const path = url.pathname.slice(BASE.length);
   if (!path.startsWith('/api/')) {
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(405, 'この操作は利用できません。');
-    if (!['/', '/index.html', '/tlain-login.css', '/tlain-login.js', '/household.css', '/household.js', '/asset-chart.js', '/dialog-navigation.js', '/troom-date-picker.js', '/troom-date-picker.css', '/date-wheel.js', '/date-wheel.css', '/manifest.webmanifest', '/icons/icon-32.png', '/icons/icon-180.png', '/icons/icon-192.png', '/icons/icon-512.png'].includes(path)) throw new HttpError(404, 'ページが見つかりません。');
+    if (!['/', '/index.html', '/tlain-login.css', '/tlain-login.js', '/household.css', '/household.js', '/household-crypto.mjs', '/household-domain.mjs', '/encrypted-ledger.mjs', '/asset-chart.js', '/dialog-navigation.js', '/troom-date-picker.js', '/troom-date-picker.css', '/date-wheel.js', '/date-wheel.css', '/manifest.webmanifest', '/icons/icon-32.png', '/icons/icon-180.png', '/icons/icon-192.png', '/icons/icon-512.png'].includes(path)) throw new HttpError(404, 'ページが見つかりません。');
     const response = await env.ASSETS.fetch(new Request(new URL(path === '/index.html' ? '/' : path, url.origin), request));
     const headers = new Headers(response.headers); headers.set('Cache-Control', 'no-store');
     return new Response(response.body, { status: response.status, headers });
@@ -74,14 +80,20 @@ export async function handleRequest(request, env, context) {
   authorized.set(request, session);
   if (path === '/api/session' && request.method === 'GET') {
     await audit(env, request, session, 'session_resume');
-    return json({ authenticated: true, displayName: (await accountRecord(env,session.serviceAccountId)).display_name, role: session.role, expiresAt: session.expiresAt, sessionContext: session.sessionId });
+    return json({ authenticated: true, displayName: (await accountRecord(env,session.serviceAccountId)).display_name, role: session.role, expiresAt: session.expiresAt, sessionContext: session.sessionId,...await cryptoSession(env,session) });
   }
   if (path === '/api/logout' && request.method === 'POST') {
     if (!(await serviceRollingSession(env, SERVICE, session, 'end')).valid) throw new HttpError(503, 'ログアウトを完了できませんでした。');
     await audit(env, request, session, 'logout');
     return json({ ok: true }, 200, { 'Set-Cookie': `${COOKIE}=; Path=${BASE}; Max-Age=0; HttpOnly; SameSite=Strict${url.protocol === 'https:' ? '; Secure' : ''}` });
   }
+  if(env.ENCRYPTION_REQUIRED!=='false' || await keyConfig(env.DB,session.householdId))return encryptedApi(request,env,path,session,readJson,audit);
   return ledgerApi(request,env,path,session,readJson,audit);
+}
+
+async function cryptoSession(env,session) {
+  const bundle=await keyBundle(env.DB,session);
+  return {cryptoRequired:env.ENCRYPTION_REQUIRED!=='false'||Boolean(await keyConfig(env.DB,session.householdId)),keyBundle:bundle};
 }
 
 async function handoff(request, env, url) {
@@ -95,7 +107,7 @@ async function handoff(request, env, url) {
     sessionId: crypto.randomUUID(), contextVersion: 1, startedAt: new Date().toISOString(), sessionVersion: sessionVersion(env, account), expiresAt: Math.floor(Date.now() / 1000) + sessionPolicyForAuthMethod(env, 'passkey').ttlSeconds };
   if (!(await serviceRollingSession(env, SERVICE, session, 'register')).valid) throw new HttpError(503, 'セッションを開始できませんでした。');
   await audit(env, request, session, 'passkey_login_success');
-  return json({ authenticated: true, displayName: account.display_name, role: account.role, expiresAt: session.expiresAt, sessionContext: session.sessionId }, 200, { 'Set-Cookie': cookie(await signSession(session, env), url, env) });
+  return json({ authenticated: true, displayName: account.display_name, role: account.role, expiresAt: session.expiresAt, sessionContext: session.sessionId,...await cryptoSession(env,{...session,householdId:account.household_id}) }, 200, { 'Set-Cookie': cookie(await signSession(session, env), url, env) });
 }
 async function requireSession(request, env) {
   const raw = (request.headers.get('Cookie') || '').split(';').map(s => s.trim()).find(s => s.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
@@ -137,7 +149,7 @@ function mutationGuard(request, url) {
 async function readJson(request) {
   const reader = request.body?.getReader(); if (!reader) throw new HttpError(400, '入力内容を確認してください。');
   const chunks = []; let size = 0;
-  for (;;) { const { done, value } = await reader.read(); if (done) break; size += value.byteLength; if (size > 16 * 1024 * 1024) { await reader.cancel(); throw new HttpError(413, '入力内容が大きすぎます。'); } chunks.push(value); }
+  for (;;) { const { done, value } = await reader.read(); if (done) break; size += value.byteLength; if (size > 26 * 1024 * 1024) { await reader.cancel(); throw new HttpError(413, '入力内容が大きすぎます。'); } chunks.push(value); }
   try { const all = new Uint8Array(size); let offset = 0; for (const chunk of chunks) { all.set(chunk, offset); offset += chunk.length; }
     const value = JSON.parse(new TextDecoder().decode(all)); if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error(); return value;
   } catch { throw new HttpError(400, '入力内容を確認してください。'); }

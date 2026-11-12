@@ -194,7 +194,9 @@ jobs:
           TROOM_BROWSER: webkit
           TROOM_TRACE_DIR: tmp/verify-artifacts/household-webkit-macos
           CI: 'true'
-        run: node --require ./tools/browser-trace.cjs household-worker/test/household.browser.mjs
+        run: |
+          node --require ./tools/browser-trace.cjs household-worker/test/household.browser.mjs
+          node --require ./tools/browser-trace.cjs household-worker/test/encryption.browser.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
