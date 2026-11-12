@@ -30,7 +30,7 @@ const validKeys=keys=>keys?.aes instanceof CryptoKey && keys.aes.extractable===f
 export function createEncryptedLedger(api,session) {
   const config=session.keyBundle;
   const cacheId=config?`${session.sessionContext}|${keyScope(config)}`:null;
-  let keys=null,epoch=0,lastRows=[],decoded=new Map(),sharedAt=0;const requests=new Map();
+  let keys=null,epoch=0,lastRows=[],decoded=new Map(),sharedAt=0,sharing=null;const requests=new Map();
   const check=token=>{if(token!==epoch)throw Object.assign(new Error('ログイン状態が変わりました。'),{discarded:true});};
   async function map(items,fn,token=epoch){
     const result=[];
@@ -88,20 +88,35 @@ export function createEncryptedLedger(api,session) {
       else keys=await cache('get',cacheId);
       check(token);
       if(!validKeys(keys)){keys=null;throw new Error('パスキーで家計簿の暗号鍵を解除してください。');}
-      await cache('put',cacheId,keys);
-      if(token!==epoch){await cache('delete',cacheId);check(token);}
-      await migrate(token);
+      // Cache hits already contain validated, session-bound keys. Keep their
+      // persisted representation intact instead of cloning them back into IDB.
+      if(prf){
+        await cache('put',cacheId,keys);
+        if(token!==epoch){await cache('delete',cacheId);check(token);}
+      }
+      // Missing hints from an older server retain the conservative migration
+      // check. The hint never authorizes data access or plaintext writes.
+      if(session.encryptionMigrationRequired!==false)await migrate(token);
     }finally{material?.fill(0);prf?.fill(0);}
   }
-  async function load({refreshKeys=false}={}){
+  async function refreshSharedKeys({force=false}={}){
+    const token=epoch;
+    if(session.role!=='owner'||!keys?.privateKey)return;
+    if(sharing)return sharing;
+    if(!force&&Date.now()-sharedAt<=60000)return;
+    sharedAt=Date.now();
+    const privateKey=keys.privateKey;
+    sharing=(async()=>{
+      try{await shareAutomaticKeys(api,session,privateKey,()=>check(token));}
+      catch(error){if(error.discarded||[401,403].includes(error.status))throw error;}
+      finally{sharing=null;}
+      check(token);
+    })();
+    return sharing;
+  }
+  async function load(){
     const token=epoch;
     if(!keys)await unlock();check(token);
-    if(session.role==='owner'&&keys.privateKey&&(refreshKeys||Date.now()-sharedAt>60000)){
-      sharedAt=Date.now();
-      try{await shareAutomaticKeys(api,session,keys.privateKey,()=>check(token));}
-      catch(error){if(error.discarded||[401,403].includes(error.status))throw error;}
-      check(token);
-    }
     const result=await api('/data');check(token);
     if(result.encrypted!==true||result.keyId!==config.keyId||!Number.isSafeInteger(result.revision))throw new Error('暗号化データを確認できません。');
     const data=await decode(result.records,keys,config,token);check(token);lastRows=result.records;
@@ -145,7 +160,7 @@ export function createEncryptedLedger(api,session) {
       const data=await decode(value.records,sourceKeys,value.crypto,token);check(token);return data;
     }finally{material?.fill(0);}
   }
-  return {unlock,load,mutate,backup,readBackup,
+  return {unlock,load,refreshSharedKeys,mutate,backup,readBackup,
     csv:data=>domain.csv(data),
     restore:(data,expectedRevision,requestId)=>send('/restore',requestId,expectedRevision,async()=>({records:await encode(data)}),JSON.stringify({data,expectedRevision})),
     clear(){epoch++;keys=null;lastRows=[];decoded.clear();requests.clear();if(cacheId)cache('delete',cacheId);}
