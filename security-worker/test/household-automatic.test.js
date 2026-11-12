@@ -8,6 +8,8 @@ import {createClientVault,unwrapMaster,keyScope} from '../../household-worker/pu
 import {keyBundle,manageKeys} from '../../household-worker/src/keys.js';
 globalThis.window=globalThis;
 await import('../../cloud-worker/public/crypto-vault.js');
+// Ciphertext compatibility context, retained exactly as used by T-Cloud.
+const ADMIN_WRAP_CONTEXT = "T-ROOM Cloud Storage admin private key v1";
 const prf=()=>crypto.getRandomValues(new Uint8Array(32));
 async function person(f,identityId,accountId,{prepared=true,status='active',linkStatus='active'}={}){
   const secret=prf(),vault=prepared?await TRoomCrypto.createPasskeyClientVault(secret):null;
@@ -97,7 +99,7 @@ test('primary-admin PRF envelope supports automatic initialization and recovery;
     const owner=await person(f,'primary-admin','owner',{prepared:false});
     const accountKey=await crypto.subtle.generateKey({name:'AES-GCM',length:256},false,['encrypt','decrypt']);
     const privateBytes=new Uint8Array(await crypto.subtle.exportKey('pkcs8',f.recovery.privateKey)),iv=crypto.getRandomValues(new Uint8Array(12));
-    const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:new TextEncoder().encode('T-ROOM Cloud Storage admin private key v1')},accountKey,privateBytes);privateBytes.fill(0);
+    const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:new TextEncoder().encode(ADMIN_WRAP_CONTEXT)},accountKey,privateBytes);privateBytes.fill(0);
     const encoded=v=>Buffer.from(v).toString('base64url');
     const envelope=await TRoomCrypto.wrapAdminPrivateKeyForPasskey(accountKey,{adminPrivateCipher:encoded(cipher),adminPrivateIv:encoded(iv)},owner.prf);
     f.securityDb.prepare("INSERT INTO security_tcloud_key_envelopes(id,identity_id,credential_id,service_link_id,envelope_type,encrypted_payload,payload_iv) VALUES (?,'primary-admin',?,?,'admin_private_prf',?,?)").run(crypto.randomUUID(),owner.credentialId,owner.serviceLinkId,envelope.encryptedPayload,envelope.payloadIv);
