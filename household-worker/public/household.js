@@ -97,8 +97,18 @@
     }finally{pendingRequests.delete(controller);}
   }
   function showSession(value){if(session?.sessionContext!==value.sessionContext){encryptedLedger?.clear();encryptedLedger=null;}session=value;observeExpiry(value.expiresAt);document.body.classList.toggle('is-viewer',value.role!=='owner');$('account-name').textContent=value.displayName;$('access-mode').textContent=value.role==='owner'?'編集可能':'閲覧専用';$('login-view').hidden= !value.cryptoRequired;$('app-view').hidden=Boolean(value.cryptoRequired);}
-  async function prepareEncryption(prf){const generation=sessionGeneration;if(!session?.cryptoRequired)return;if(!encryptedLedger){const {createEncryptedLedger}=await import('./encrypted-ledger.mjs');currentGeneration(generation);encryptedLedger=createEncryptedLedger(api,session);}if(prf)await encryptedLedger.unlock(prf);currentGeneration(generation);}
-  async function load(){const generation=sessionGeneration;await prepareEncryption();const result=encryptedLedger?await encryptedLedger.load():await api('/data');currentGeneration(generation);data=result.data;assetPoints=result.assetHistory||[];revision=result.revision;render();$('message').textContent='';$('login-view').hidden=true;$('app-view').hidden=false;}
+  async function prepareEncryption(prf){
+    const generation=sessionGeneration;if(!session?.cryptoRequired)return;
+    const {createEncryptedLedger}=await import('./encrypted-ledger.mjs');currentGeneration(generation);
+    if(prf){
+      const {prepareAutomaticKeys}=await import('./automatic-keys.mjs');currentGeneration(generation);
+      const prepared=await prepareAutomaticKeys(api,session,prf,()=>currentGeneration(generation));currentGeneration(generation);
+      encryptedLedger?.clear();session.keyBundle=prepared.keyBundle;encryptedLedger=createEncryptedLedger(api,session);
+      await encryptedLedger.unlock(prf,prepared.privateKey);
+    }else if(!encryptedLedger)encryptedLedger=createEncryptedLedger(api,session);
+    currentGeneration(generation);
+  }
+  async function load(refreshKeys=false){const generation=sessionGeneration;await prepareEncryption();const result=encryptedLedger?await encryptedLedger.load({refreshKeys}):await api('/data');currentGeneration(generation);data=result.data;assetPoints=result.assetHistory||[];revision=result.revision;render();$('message').textContent='';$('login-view').hidden=true;$('app-view').hidden=false;}
 
   async function mutate(operation,value,expectedRevision=revision,requestId=crypto.randomUUID()){if(encryptedLedger)await encryptedLedger.mutate(data,operation,value,expectedRevision,requestId);else await api('/mutate',{operation,value,expectedRevision,requestId});await load();channel?.postMessage('changed');}
   const formValues=form=>Object.fromEntries(new FormData(form));
@@ -270,7 +280,7 @@
   $('restore').onclick=()=>{if(!restoreFile||busy)return;const saved=restoreFile,expected=revision,id=crypto.randomUUID();ask('バックアップを復元しますか？',`${$('restore-preview').textContent}\n現在の家計データを、このバックアップの内容へ切り替えます。`,async()=>{if(encryptedLedger)await encryptedLedger.restore(saved.data,expected,id);else await api('/restore',{requestId:id,expectedRevision:expected,backup:saved});restoreFile=null;$('restore-file').value='';$('restore-preview').textContent='';await load();channel?.postMessage('changed');});};
   $('login').onclick=async()=>{if(busy)return;const generation=sessionGeneration;let auth,issued=false;$('login-error').textContent='';$('passkey-login-label').textContent='確認中…';setBusy(true);try{auth=await TRoomPasskeys.authenticate('household',links=>TRoomPasskeys.chooseLinkDialog(links,'household'));currentGeneration(generation);showSession(await api('/passkey/handoff',{handoffToken:auth.handoff.handoffToken}));issued=true;channel?.postMessage('session-changed');if(session.cryptoRequired){if(!auth.prfOutput)throw new Error('この環境ではパスキーによる暗号鍵の解除を利用できません。対応するブラウザでお試しください。');$('boot-message').textContent='家計データを安全に準備しています…';await prepareEncryption(auth.prfOutput);}await load();}catch(error){if(generation===sessionGeneration&&issued){await api('/logout',{}).catch(()=>{});if(generation===sessionGeneration){resetSession();$('login-error').textContent=error.message;}}else report(error,'login-error',generation);}finally{auth?.prfOutput?.fill(0);if(generation===sessionGeneration){$('passkey-login-label').textContent='パスキーでログイン';setBusy(false);}}};
   $('logout').onclick=async()=>{if(busy)return;setBusy(true);try{await api('/logout',{});}catch(error){if(!error.discarded)$('login-error').textContent='ログアウトの通信を完了できませんでした。この画面の家計データは消去しました。';}finally{resetSession(true);}};
-  $('refresh').onclick=async()=>{const generation=sessionGeneration;setBusy(true);try{await load();}catch(error){report(error,'message',generation);}finally{if(generation===sessionGeneration)setBusy(false);}};
+  $('refresh').onclick=async()=>{const generation=sessionGeneration;setBusy(true);try{await load(true);}catch(error){report(error,'message',generation);}finally{if(generation===sessionGeneration)setBusy(false);}};
   for(const type of ['pointerdown','keydown','touchstart','wheel'])window.addEventListener(type,event=>{if(event.isTrusted)activity=Date.now();},{passive:true,capture:true});
   channel&&(channel.onmessage=event=>{if(event.data==='session-changed'){resetSession();return;}if(session)$('message').textContent='別の画面で状態が変わりました。「最新の状態に更新」で確認してください。';});
   window.addEventListener('troom-session-expired',()=>resetSession());

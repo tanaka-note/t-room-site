@@ -1,6 +1,15 @@
 import {HttpError, uuid} from './domain.js';
 export const b64 = (v, min, max = min) => typeof v === 'string' && v.length >= min && v.length <= max && /^[A-Za-z0-9_-]+$/.test(v) && v.length % 4 !== 1;
 const fail = (status, message) => { throw new HttpError(status, message); };
+export function publicKey(value) {
+  if(value?.kty!=='RSA'||!b64(value.n,512)||value.e!=='AQAB'||value.d)fail(400,'公開鍵を確認してください。');
+  return {kty:'RSA',n:value.n,e:'AQAB',alg:'RSA-OAEP-256',key_ops:['encrypt'],ext:true};
+}
+export function vaultValue(row) {
+  const value=JSON.parse(row.public_key_json);
+  return {publicKey:publicKey(value),iv:row.iv,ciphertext:row.ciphertext,...(value.householdKeySource?{keySource:value.householdKeySource}:{})};
+}
+export const publicKeyFingerprint=async value=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(publicKey(value))))),n=>n.toString(16).padStart(2,'0')).join('');
 export async function keyConfig(db, householdId) {
   const row = await db.prepare('SELECT * FROM household_crypto_config WHERE household_id=?').bind(householdId).first();
   return row ? {householdId, keyId:row.key_id, recoveryWrappedKey:row.recovery_wrapped_key, recoveryPublicKey:JSON.parse(row.recovery_public_key)} : null;
@@ -12,7 +21,7 @@ export async function keyBundle(db, session) {
     JOIN household_crypto_grants g ON g.credential_id=v.credential_id AND g.identity_id=v.identity_id
     WHERE v.credential_id=? AND v.identity_id=? AND g.service_link_id=? AND g.household_id=?`)
     .bind(session.credentialId, session.identityId, session.serviceLinkId, session.householdId).first();
-  return row ? {...config,vault:{iv:row.iv,ciphertext:row.ciphertext,publicKey:JSON.parse(row.public_key_json)},wrappedKey:row.wrapped_key} : null;
+  return row ? {...config,vault:vaultValue(row),wrappedKey:row.wrapped_key} : null;
 }
 // Internal Service Binding only. Security Center authenticates the actor, checks
 // live credential/link state and requires fresh primary-admin auth for changes.
@@ -45,7 +54,7 @@ export async function manageKeys(db, action, input) {
       const target=await db.prepare('SELECT household_id FROM household_accounts WHERE id=? AND is_active=1').bind(m.serviceAccountId).first();
       if(target?.household_id!==householdId)continue;
       const vault=await db.prepare('SELECT public_key_json FROM household_crypto_vaults WHERE credential_id=? AND identity_id=?').bind(m.credentialId,m.identityId).first();
-      if(vault)members.push({...m,publicKey:JSON.parse(vault.public_key_json),granted:Boolean(await keyBundle(db,{...m,householdId}))});
+      if(vault)members.push({...m,publicKey:publicKey(JSON.parse(vault.public_key_json)),granted:Boolean(await keyBundle(db,{...m,householdId}))});
     }
     return {householdId,config:await keyConfig(db,householdId),members};
   }

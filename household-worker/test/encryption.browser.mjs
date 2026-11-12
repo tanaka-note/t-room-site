@@ -3,8 +3,17 @@ import {createServer} from 'node:http';
 import {readFileSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {encryptedFixture} from './encryption-fixture.mjs';
+import {keyBundle,publicKey} from '../src/keys.js';
 const require=createRequire(import.meta.url),engine=require('../../diary-worker/node_modules/playwright')[process.env.TROOM_BROWSER||'chromium'];
 const f=await encryptedFixture();f.seed('Synthetic private browser entry');
+// Exercise the reused T-Cloud PRF envelope and its non-extractable RSA cache
+// in Chromium and WebKit; actual WebAuthn is covered in Security's CDP test.
+globalThis.window=globalThis;await import('../../cloud-worker/public/crypto-vault.js');
+const reused=await TRoomCrypto.createPasskeyClientVault(f.prf);
+const wrapped=await f.client.wrapMaster(f.master,reused.publicKeyJwk,f.client.keyScope(f.config));
+f.sqlite.prepare('UPDATE household_crypto_vaults SET public_key_json=?,iv=?,ciphertext=? WHERE credential_id=?').run(JSON.stringify({...publicKey(reused.publicKeyJwk),householdKeySource:'tcloud-member'}),reused.payloadIv,reused.encryptedPayload,'fixture-credential');
+f.sqlite.prepare('UPDATE household_crypto_grants SET wrapped_key=? WHERE credential_id=?').run(wrapped,'fixture-credential');
+f.session.keyBundle=await keyBundle(f.env.DB,{householdId:'main',identityId:'primary-admin',credentialId:'fixture-credential',serviceLinkId:'fixture-link'});
 const requests=[];let authentications=0,oldBootstrap=true;
 const server=createServer(async(req,res)=>{
   try{

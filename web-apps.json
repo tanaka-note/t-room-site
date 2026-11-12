@@ -233,6 +233,7 @@
         "security-worker/wrangler.jsonc",
         "security-worker/src/health-keys.js",
         "security-worker/src/household-keys.js",
+        "security-worker/src/household-automatic.js",
         "health-worker/public/health-crypto.mjs",
         "tools/shared/tlain-login.css",
         "tools/shared/tlain-login.js",
@@ -547,6 +548,7 @@
         "tools/shared/tlain-login.css",
         "tools/shared/tlain-login.js",
         "household-worker/src/keys.js",
+        "household-worker/src/automatic-keys.js",
         "household-worker/src/encrypted-api.js",
         "cloud-worker/public/crypto-vault.js"
       ],

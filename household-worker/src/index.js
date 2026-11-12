@@ -9,6 +9,7 @@ import { HttpError, text } from './domain.js';
 import { ledgerApi } from './api.js';
 import { keyBundle,keyConfig,manageKeys } from './keys.js';
 import { encryptedApi } from './encrypted-api.js';
+import {automaticKeysApi} from './automatic-keys.js';
 const BASE = '/household', SERVICE = 'household', COOKIE = 'troom_household_session';
 const encoder = new TextEncoder();
 const authorized = new WeakMap();
@@ -33,6 +34,10 @@ export default class HouseholdWorker extends WorkerEntrypoint {
 }
 
 export class SecurityIntegration extends WorkerEntrypoint {
+  async describeKeyScope(input) {
+    const account=await accountRecord(this.env,input?.serviceAccountId);
+    return account?{valid:true,householdId:account.household_id,role:account.role}:{valid:false};
+  }
   async cryptoKeys(action,input) {
     try { return await manageKeys(this.env.DB,action,input); }
     catch(error) { if(error instanceof HttpError)return {error:error.message,status:error.status}; throw new Error('HouseholdKeyOperationFailed'); }
@@ -62,7 +67,7 @@ export async function handleRequest(request, env, context) {
   const path = url.pathname.slice(BASE.length);
   if (!path.startsWith('/api/')) {
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(405, 'この操作は利用できません。');
-    if (!['/', '/index.html', '/tlain-login.css', '/tlain-login.js', '/household.css', '/household.js', '/household-crypto.mjs', '/household-domain.mjs', '/encrypted-ledger.mjs', '/asset-chart.js', '/dialog-navigation.js', '/troom-date-picker.js', '/troom-date-picker.css', '/date-wheel.js', '/date-wheel.css', '/manifest.webmanifest', '/icons/icon-32.png', '/icons/icon-180.png', '/icons/icon-192.png', '/icons/icon-512.png'].includes(path)) throw new HttpError(404, 'ページが見つかりません。');
+    if (!['/', '/index.html', '/tlain-login.css', '/tlain-login.js', '/household.css', '/household.js', '/household-crypto.mjs', '/household-domain.mjs', '/automatic-keys.mjs', '/encrypted-ledger.mjs', '/asset-chart.js', '/dialog-navigation.js', '/troom-date-picker.js', '/troom-date-picker.css', '/date-wheel.js', '/date-wheel.css', '/manifest.webmanifest', '/icons/icon-32.png', '/icons/icon-180.png', '/icons/icon-192.png', '/icons/icon-512.png'].includes(path)) throw new HttpError(404, 'ページが見つかりません。');
     const response = await env.ASSETS.fetch(new Request(new URL(path === '/index.html' ? '/' : path, url.origin), request));
     const headers = new Headers(response.headers); headers.set('Cache-Control', 'no-store');
     return new Response(response.body, { status: response.status, headers });
@@ -87,6 +92,7 @@ export async function handleRequest(request, env, context) {
     await audit(env, request, session, 'logout');
     return json({ ok: true }, 200, { 'Set-Cookie': `${COOKIE}=; Path=${BASE}; Max-Age=0; HttpOnly; SameSite=Strict${url.protocol === 'https:' ? '; Secure' : ''}` });
   }
+  if(path.startsWith('/api/keys/automatic'))return automaticKeysApi(request,env,path,session,readJson,audit);
   if(env.ENCRYPTION_REQUIRED!=='false' || await keyConfig(env.DB,session.householdId))return encryptedApi(request,env,path,session,readJson,audit);
   return ledgerApi(request,env,path,session,readJson,audit);
 }
