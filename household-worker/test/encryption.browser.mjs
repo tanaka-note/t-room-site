@@ -59,4 +59,7 @@ try{
   const keyCount=await page.evaluate(async()=>new Promise(resolve=>{const open=indexedDB.open('troom-household-keys',1);open.onsuccess=()=>{const db=open.result,tx=db.transaction('sessions');const get=tx.objectStore('sessions').getAll();get.onsuccess=()=>resolve(get.result.length);tx.oncomplete=()=>db.close();};}));
   assert.equal(keyCount,0);assert.deepEqual(errors,[]);
   console.log('Encrypted Household browser: migration, input, reload without WebAuthn, encrypted export/restore and logout passed (synthetic PRF).');
+}catch(error){
+  console.error(JSON.stringify({loginError:await page.locator('#login-error').textContent().catch(()=>''),bootMessage:await page.locator('#boot-message').textContent().catch(()=>''),pageErrors:errors}));
+  throw error;
 }finally{await context.close();await browser.close();await new Promise(resolve=>server.close(resolve));f.close();}

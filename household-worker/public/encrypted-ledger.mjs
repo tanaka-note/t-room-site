@@ -22,7 +22,7 @@ async function cache(action,id,value) {
   }catch{return null;}
 }
 const validKeys=keys=>keys?.aes instanceof CryptoKey && keys.aes.extractable===false && keys.aes.algorithm.name==='AES-GCM' && keys.aes.algorithm.length===256
-  && keys.aes.usages.join(',')==='encrypt,decrypt' && keys.index instanceof CryptoKey && keys.index.extractable===false && keys.index.algorithm.name==='HMAC'
+  && [...keys.aes.usages].sort().join(',')==='decrypt,encrypt' && keys.index instanceof CryptoKey && keys.index.extractable===false && keys.index.algorithm.name==='HMAC'
   && keys.index.algorithm.hash.name==='SHA-256' && keys.index.usages.join(',')==='sign';
 
 export function createEncryptedLedger(api,session) {
