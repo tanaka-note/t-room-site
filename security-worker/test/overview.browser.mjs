@@ -265,18 +265,10 @@ try {
     await page.close();
   }
   {
-    const page = await newPage();let prepared=false,ready=false,vault=null;
-    await page.route('**/security/api/household/own',route=>fulfill(route,{prepared,ready,targets:[]}));
-    await page.route('**/security/api/household/vault',route=>{vault=route.request().postDataJSON();prepared=true;return fulfill(route,{ok:true});});
-    await page.goto(url+'#household-setup');await page.locator('#household-setup-prepare').waitFor();
-    assert.equal(await page.locator('#admin-view').isVisible(),false);
-    await page.evaluate(()=>{window.TRoomPasskeys={...window.TRoomPasskeys,authenticate:async()=>({prfOutput:crypto.getRandomValues(new Uint8Array(32))})};});
-    await page.locator('#household-setup-prepare').click();
-    await page.waitForFunction(()=>document.getElementById('household-setup-status').textContent.includes('承認をお待ち'));
-    assert.deepEqual(Object.keys(vault).sort(),['ciphertext','iv','publicKey']);assert.equal(vault.publicKey.kty,'RSA');assert.equal(vault.publicKey.d,undefined);
-    assert.equal(await page.locator('#household-setup-prepare').isEnabled(),true);
-    ready=true;await page.locator('#household-setup-prepare').click();
-    await page.waitForFunction(()=>document.getElementById('household-setup-status').textContent.includes('利用準備は完了'));
+    const page = await newPage();
+    await page.route('**/household/',route=>route.fulfill({contentType:'text/html',body:'<meta charset="utf-8"><title>家計簿</title>'}));
+    await page.goto(url+'#household-setup');await page.waitForURL('**/household/');
+    assert.equal(await page.title(),'家計簿');
     await page.close();
   }
   assert.deepEqual(errors, []);

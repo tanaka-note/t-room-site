@@ -2,6 +2,7 @@ import { runState } from '../../backup-worker/src/monitor.js';
 import { archiveAuditEvents, archiveIfPending } from './audit-archive.js';
 import { healthKeyBundle, handleHealthKeys, healthMembershipStatement, assertHealthMemberAvailable } from './health-keys.js';
 import {handleHouseholdKeys} from './household-keys.js';
+import {householdAutomaticContext} from './household-automatic.js';
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName, identityDisplayName, auditDisplayNames, OWNER_DISPLAY_NAME } from "../../assets/account-display.mjs";
@@ -170,6 +171,10 @@ export default class SecurityWorker extends WorkerEntrypoint {
 
   async getHealthKeyBundle(input) {
     return healthKeyBundle(this.env, input);
+  }
+
+  async getHouseholdAutomaticContext(input) {
+    return householdAutomaticContext(this.env,input,validatePasskeySession);
   }
 
   async getAiBudgetPolicy(identityId) {
@@ -489,7 +494,7 @@ async function authenticationOptions(request, env) {
     ORDER BY c.registered_at ASC`);
   const rows = await (["security", "cloud"].includes(service) ? statement.all() : statement.bind(service).all());
   if (!(rows.results || []).length) throw new HttpError(404, "パスキーが登録されていません。管理者からの招待を確認してください。");
-  const extensions = ["security", "cloud", "health"].includes(service)
+  const extensions = ["security", "cloud", "health", "household"].includes(service)
     ? prfAuthenticationExtensions(rows.results)
     : undefined;
   const options = await generateAuthenticationOptions({

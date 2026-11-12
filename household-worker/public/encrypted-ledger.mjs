@@ -1,5 +1,6 @@
 import * as domain from './household-domain.mjs';
-import {unlockClient,unwrapMaster,recordKeys,encryptRow,decryptRow,opaqueId,keyScope} from './household-crypto.mjs';
+import {unwrapMaster,recordKeys,encryptRow,decryptRow,opaqueId,keyScope} from './household-crypto.mjs';
+import {unlockAutomaticPrivate,shareAutomaticKeys} from './automatic-keys.mjs';
 const kinds=['accounts','transactions','categories','snapshots','historical'];
 const identity=r=>`${r.kind}:${r.id}`;
 const sortRows=rows=>[...rows].sort((a,b)=>identity(a)<identity(b)?-1:identity(a)>identity(b)?1:0);
@@ -21,14 +22,15 @@ async function cache(action,id,value) {
     });
   }catch{return null;}
 }
+const validPrivate=key=>key instanceof CryptoKey&&key.type==='private'&&key.extractable===false&&key.algorithm.name==='RSA-OAEP'&&key.algorithm.hash.name==='SHA-256'&&key.algorithm.modulusLength===3072&&key.usages.join(',')==='decrypt';
 const validKeys=keys=>keys?.aes instanceof CryptoKey && keys.aes.extractable===false && keys.aes.algorithm.name==='AES-GCM' && keys.aes.algorithm.length===256
   && [...keys.aes.usages].sort().join(',')==='decrypt,encrypt' && keys.index instanceof CryptoKey && keys.index.extractable===false && keys.index.algorithm.name==='HMAC'
-  && keys.index.algorithm.hash.name==='SHA-256' && keys.index.usages.join(',')==='sign';
+  && keys.index.algorithm.hash.name==='SHA-256' && keys.index.usages.join(',')==='sign' && (!keys.privateKey||validPrivate(keys.privateKey));
 
 export function createEncryptedLedger(api,session) {
   const config=session.keyBundle;
   const cacheId=config?`${session.sessionContext}|${keyScope(config)}`:null;
-  let keys=null,epoch=0,lastRows=[],decoded=new Map();const requests=new Map();
+  let keys=null,epoch=0,lastRows=[],decoded=new Map(),sharedAt=0;const requests=new Map();
   const check=token=>{if(token!==epoch)throw Object.assign(new Error('ログイン状態が変わりました。'),{discarded:true});};
   async function map(items,fn,token=epoch){
     const result=[];
@@ -77,12 +79,12 @@ export function createEncryptedLedger(api,session) {
       await send('/encryption/migration',crypto.randomUUID(),source.revision,async()=>({sourceDataset:source.sourceDataset,sourceFingerprint:source.sourceFingerprint,sourceRecords:source.records.map(({kind,id})=>({kind,id})),records:rows}),source.sourceFingerprint,token);
     }
   }
-  async function unlock(prf){
+  async function unlock(prf,preparedPrivate){
     const token=epoch;
-    if(!config)throw new Error('Security Centerで家計簿の鍵の利用準備・承認を完了してください。');
+    if(!config)throw new Error('パスキーでログインすると、暗号鍵の準備が自動で進みます。');
     let material;
     try{
-      if(prf){const privateKey=await unlockClient(prf,config.vault);check(token);material=await unwrapMaster(privateKey,config.wrappedKey,keyScope(config));check(token);keys=await recordKeys(material);}
+      if(prf){const privateKey=preparedPrivate||await unlockAutomaticPrivate(prf,config.vault);check(token);material=await unwrapMaster(privateKey,config.wrappedKey,keyScope(config));check(token);keys=await recordKeys(material);check(token);if(session.role==='owner')keys.privateKey=privateKey;sharedAt=preparedPrivate?Date.now():0;}
       else keys=await cache('get',cacheId);
       check(token);
       if(!validKeys(keys)){keys=null;throw new Error('パスキーで家計簿の暗号鍵を解除してください。');}
@@ -91,9 +93,15 @@ export function createEncryptedLedger(api,session) {
       await migrate(token);
     }finally{material?.fill(0);prf?.fill(0);}
   }
-  async function load(){
+  async function load({refreshKeys=false}={}){
     const token=epoch;
     if(!keys)await unlock();check(token);
+    if(session.role==='owner'&&keys.privateKey&&(refreshKeys||Date.now()-sharedAt>60000)){
+      sharedAt=Date.now();
+      try{await shareAutomaticKeys(api,session,keys.privateKey,()=>check(token));}
+      catch(error){if(error.discarded||[401,403].includes(error.status))throw error;}
+      check(token);
+    }
     const result=await api('/data');check(token);
     if(result.encrypted!==true||result.keyId!==config.keyId||!Number.isSafeInteger(result.revision))throw new Error('暗号化データを確認できません。');
     const data=await decode(result.records,keys,config,token);check(token);lastRows=result.records;

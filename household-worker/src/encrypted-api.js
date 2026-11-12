@@ -27,7 +27,7 @@ const publicRows=rows=>rows.map(r=>({...r,payload:JSON.parse(r.payload)}));
 export async function encryptedApi(request,env,path,session,readJson,audit){
   const db=env.DB,hid=session.householdId;
   const config=await keyConfig(db,hid),bundle=await keyBundle(db,session);
-  if(!config||!bundle)throw new HttpError(409,'Security Centerで家計簿の鍵の利用準備・承認を完了してください。','key_setup_required');
+  if(!config||!bundle)throw new HttpError(409,'パスキーでログインして暗号鍵の準備をやり直してください。','key_setup_required');
   if(['/api/backup','/api/export.csv'].includes(path))throw new HttpError(409,'暗号化対応版の画面から書き出してください。','encrypted_client_required');
   const current=await db.prepare(`SELECT s.revision,s.active_dataset,d.crypto_version FROM household_state s
     JOIN household_datasets d ON d.id=s.active_dataset AND d.household_id=s.id WHERE s.id=?`).bind(hid).first();

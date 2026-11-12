@@ -7,12 +7,15 @@ import {backupService} from '../src/backup.js';
 import {restoreIsolated} from '../tools/restore-isolated.mjs';
 import {compress,verifiedPut} from '../src/integrity.js';
 import {archiveSpec} from '../src/registry.js';
-import {decryptRow,encryptRow,createClientVault,wrapMaster,unwrapMaster,recordKeys,keyScope} from '../../household-worker/public/household-crypto.mjs';
+import {decryptRow,encryptRow,wrapMaster,unwrapMaster,recordKeys,keyScope} from '../../household-worker/public/household-crypto.mjs';
+import {unlockAutomaticPrivate} from '../../household-worker/public/automatic-keys.mjs';
 
-import {manageKeys} from '../../household-worker/src/keys.js';
+import {manageKeys,keyBundle,publicKey} from '../../household-worker/src/keys.js';
 import {dataFromRecords,mutateData,records} from '../../household-worker/src/domain.js';
 import {saveExport} from '../src/export-backup.js';
 import {exportEnv,exportFetcher} from './export-fixtures.mjs';
+globalThis.window=globalThis;
+await import('../../cloud-worker/public/crypto-vault.js');
 
 test('scheduled backup keeps ciphertext and matching recovery envelopes together; isolated restore actually decrypts records without reactivating accounts',async()=>{
   const sqlite=database('household'),bucket=new Bucket(),audit=recorder();let restored;
@@ -20,8 +23,10 @@ test('scheduled backup keeps ciphertext and matching recovery envelopes together
   try{
     const configInput={householdId:'main',keyId:crypto.randomUUID()},DB=d1(sqlite);
     const recovery=await crypto.subtle.generateKey({name:'RSA-OAEP',modulusLength:3072,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},true,['encrypt','decrypt']);
-    const pub=await crypto.subtle.exportKey('jwk',recovery.publicKey),vault=await createClientVault(prf);
+    const pub=await crypto.subtle.exportKey('jwk',recovery.publicKey),source=await TRoomCrypto.createPasskeyClientVault(prf);
+    const vault={publicKey:source.publicKeyJwk,iv:source.payloadIv,ciphertext:source.encryptedPayload};
     await manageKeys(DB,'vault',{identityId:'primary-admin',credentialId:'fixture-credential',vault});
+    sqlite.prepare('UPDATE household_crypto_vaults SET public_key_json=?').run(JSON.stringify({...publicKey(vault.publicKey),householdKeySource:'tcloud-member'}));
     await manageKeys(DB,'initialize',{serviceAccountId:'owner',...configInput,recoveryPublicKey:pub,recoveryWrappedKey:await wrapMaster(master,pub,keyScope(configInput))});
     await manageKeys(DB,'grant',{serviceAccountId:'owner',identityId:'primary-admin',credentialId:'fixture-credential',serviceLinkId:'fixture-link',keyId:configInput.keyId,wrappedKey:await wrapMaster(master,vault.publicKey,keyScope(configInput))});
     const original=dataFromRecords(sqlite.prepare("SELECT kind,id,payload FROM household_records WHERE dataset_id='initial'").all());
@@ -37,9 +42,15 @@ test('scheduled backup keeps ciphertext and matching recovery envelopes together
     assert.ok(restored.db.prepare('SELECT * FROM household_accounts').all().every(a=>a.is_active===0&&a.session_version===2));
     const saved=config[0],scope={householdId:saved.household_id,keyId:saved.key_id};
     const recoveredMaster=await unwrapMaster(recovery.privateKey,saved.recovery_wrapped_key,keyScope(scope)),keys=await recordKeys(recoveredMaster);recoveredMaster.fill(0);
+    const bundle=await keyBundle(d1(restored.db),{householdId:'main',identityId:'primary-admin',credentialId:'fixture-credential',serviceLinkId:'fixture-link'});
+    assert.equal(bundle.vault.keySource,'tcloud-member');
+    const privateKey=await unlockAutomaticPrivate(prf,bundle.vault),passkeyMaster=await unwrapMaster(privateKey,bundle.wrappedKey,keyScope(bundle));
+    const passkeyKeys=await recordKeys(passkeyMaster);passkeyMaster.fill(0);
     const dataset=restored.db.prepare("SELECT active_dataset FROM household_state WHERE id='main'").get().active_dataset;
     const rows=restored.db.prepare('SELECT kind,id,payload FROM household_records WHERE dataset_id=?').all(dataset);
     const values=await Promise.all(rows.map(row=>decryptRow(keys,scope,{...row,payload:JSON.parse(row.payload)})));
+    const passkeyValues=await Promise.all(rows.map(row=>decryptRow(passkeyKeys,scope,{...row,payload:JSON.parse(row.payload)})));
+    assert.deepEqual(passkeyValues,values,'the isolated snapshot alone must retain the reused PRF envelope and its KDF source');
     assert.deepEqual(values.find(v=>v.id===plain.transactions[0].id),plain.transactions[0]);
     assert.doesNotMatch(JSON.stringify(restored.payload),/synthetic-private|synthetic-private-notes/);
     assert.equal(restored.db.prepare('SELECT COUNT(*) n FROM household_crypto_grants').get().n,1);
