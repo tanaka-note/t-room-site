@@ -2,7 +2,7 @@
 import { digest } from './integrity.js';
 const EXPECTED = {
   "portfolio": "0f996aabee4cfcdec8a1ee2f5d5429b170727d19eba88351ec82577bdedc939a",
-  "household": "87c3caeb5b1bd4363759e93de4fe377f03064dc96e226fc531546a16146a2ede",
+  "household": "2f7780c5512b5b1fbd610fc9860e4417832050d941773542871189032bfca10f",
   "cloud": "c319c54132d640262b215ffdac570407df82f54e07a1f2395ea3b68291a7625c",
   "security": "597cec608e96b2eb5e7704d8e3216a12aaab1ab5279c8355c0291899dad3313e",
   "billing": "e3d7d3288312675f4635221c89d6dde4a9a5cdccd4d53848feaa308b1b7c725f",
@@ -31,4 +31,12 @@ export function reviewedSchemaMatches(service, baseline, actual) {
 export async function assertSchema(service, rows) {
   const schema=rows.filter(r=>r.tbl_name!=='d1_migrations').map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
   if(!reviewedSchemaMatches(service, EXPECTED[service], await digest(new TextEncoder().encode(JSON.stringify(schema))))) throw new Error('SchemaReviewRequired');
+}
+export async function assertArchiveSchema(service,migration,rows) {
+  if(service==='household'&&migration==='0006_independent_households.sql') {
+    const schema=rows.filter(r=>r.tbl_name!=='d1_migrations').map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
+    if(await digest(new TextEncoder().encode(JSON.stringify(schema)))!=='87c3caeb5b1bd4363759e93de4fe377f03064dc96e226fc531546a16146a2ede')throw new Error('SchemaReviewRequired');
+    return;
+  }
+  return assertSchema(service,rows);
 }

@@ -220,16 +220,23 @@
         "security-worker/src/definition-status.js",
         "security-worker/src/identity-cleanup.js",
         "security-worker/src/audit-archive.js",
-        "backup-worker/src/backup.js", "backup-worker/src/monitor.js", "backup-worker/src/registry.js", "backup-worker/src/integrity.js", "backup-worker/src/snapshot.js", "backup-worker/src/schema-guard.js",
+        "backup-worker/src/backup.js",
+        "backup-worker/src/monitor.js",
+        "backup-worker/src/registry.js",
+        "backup-worker/src/integrity.js",
+        "backup-worker/src/snapshot.js",
+        "backup-worker/src/schema-guard.js",
         "assets/account-display.mjs",
         "assets/passkey-rolling.mjs",
         "assets/session-policy.mjs",
         "security-worker/src/rolling-sessions.js",
         "security-worker/wrangler.jsonc",
         "security-worker/src/health-keys.js",
+        "security-worker/src/household-keys.js",
         "health-worker/public/health-crypto.mjs",
         "tools/shared/tlain-login.css",
-        "tools/shared/tlain-login.js"
+        "tools/shared/tlain-login.js",
+        "household-worker/public/household-crypto.mjs"
       ],
       "buildMode": "content-hash",
       "serviceWorker": null,
@@ -538,7 +545,10 @@
         "payments-worker/public/date-wheel.js",
         "payments-worker/public/date-wheel.css",
         "tools/shared/tlain-login.css",
-        "tools/shared/tlain-login.js"
+        "tools/shared/tlain-login.js",
+        "household-worker/src/keys.js",
+        "household-worker/src/encrypted-api.js",
+        "cloud-worker/public/crypto-vault.js"
       ],
       "assetCopies": [
         {
@@ -568,6 +578,10 @@
         {
           "source": "tools/shared/tlain-login.js",
           "copy": "household-worker/public/tlain-login.js"
+        },
+        {
+          "source": "household-worker/src/domain.js",
+          "copy": "household-worker/public/household-domain.mjs"
         }
       ],
       "buildMode": "content-hash",

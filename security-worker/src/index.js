@@ -1,6 +1,7 @@
 import { runState } from '../../backup-worker/src/monitor.js';
 import { archiveAuditEvents, archiveIfPending } from './audit-archive.js';
 import { healthKeyBundle, handleHealthKeys, healthMembershipStatement, assertHealthMemberAvailable } from './health-keys.js';
+import {handleHouseholdKeys} from './household-keys.js';
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName, identityDisplayName, auditDisplayNames, OWNER_DISPLAY_NAME } from "../../assets/account-display.mjs";
@@ -262,6 +263,17 @@ async function handleApi(request, env, url, path, context = null) {
   if (path === "/api/tcloud/envelope" && request.method === "POST") {
     requireMutation(request, url);
     return saveOwnTCloudEnvelope(request, env);
+  }
+  if (path.startsWith("/api/household/")) {
+    if(request.method!=="GET")requireMutation(request,url);
+    const actor=await requireActiveIdentitySession(request,env);
+    if(!["/api/household/own","/api/household/vault"].includes(path)) {
+      const admin=await requireSecurityAdmin(request,env);
+      if(admin.identityId!==actor.identityId||admin.credentialId!==actor.credentialId)throw new HttpError(403,"管理者の本人確認が一致しません。");
+      requireFreshSecurityAdmin(admin);
+    }
+    return handleHouseholdKeys(path,request,env,actor,{HttpError,readJson,json,
+      audit:(eventType,identityId)=>writeLocalAudit(env,{eventType,identityId,service:'household',outcome:'success',authMethod:'passkey'},request)});
   }
   if (path.startsWith("/api/health/")) {
     if (request.method !== "GET") requireMutation(request, url);

@@ -1,4 +1,4 @@
-import { SERVICES } from './registry.js';
+import { SERVICES,archiveSpec } from './registry.js';
 import { assertSchema } from './schema-guard.js';
 import { reportRun } from './monitor.js';
 
@@ -104,7 +104,7 @@ async function backupServiceUnlocked(env, service, now, sleep) {
 }
 
 export function validateSnapshot(p, service) {
-  const spec = SERVICES[service];
+  const spec = archiveSpec(service,p?.expectedMigration);
   if (!p || ![1,2].includes(p.formatVersion) || p.service !== service || p.database !== spec.database || !Array.isArray(p.schema)) throw new Error('SnapshotInvalid');
   if (Object.keys(p.tables || {}).sort().join(',') !== spec.tables.map(t => t.name).sort().join(',')) throw new Error('SnapshotInvalid');
   for (const t of spec.tables) {

@@ -60,12 +60,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
   <meta name="referrer" content="no-referrer">
-  <meta name="troom-app-build" content="security-3777e9d6ceb3">
+  <meta name="troom-app-build" content="security-2adb88ff5707">
   <meta name="troom-auto-update" content="enabled">
   <title>T-lain セキュリティセンター</title>
-  <link rel="stylesheet" href="/security/security.css?v=security-3777e9d6ceb3">
-  <link rel="stylesheet" href="/security/tlain-login.css?v=security-3777e9d6ceb3">
-  <script src="/security/tlain-login.js?v=security-3777e9d6ceb3" defer></script>
+  <link rel="stylesheet" href="/security/security.css?v=security-2adb88ff5707">
+  <link rel="stylesheet" href="/security/tlain-login.css?v=security-2adb88ff5707">
+  <script src="/security/tlain-login.js?v=security-2adb88ff5707" defer></script>
 </head>
 <body>
   <main class="shell">
@@ -114,6 +114,12 @@
           <button type="submit">同じパスキーでT-Cloudの準備を再開</button>
         </form>
       </section>
+    <section id="household-setup-notice" class="card setup-notice" hidden>
+      <h2>家計簿の利用準備</h2>
+      <p>本人のパスキーで準備し、第一管理者に鍵の承認を依頼してください。</p>
+      <button id="household-setup-prepare" type="button">自分のパスキーで利用準備</button>
+      <p id="household-setup-status" role="status" aria-live="polite"></p>
+    </section>
     <section id="health-setup-notice" class="card setup-notice" hidden>
       <h2>体調管理のパスキー利用準備</h2>
       <p>サービス連携とパスキー登録の承認後、利用するパスキーで準備します。</p>
@@ -189,11 +195,11 @@
       </section>
     </section>
   </main>
-  <script src="/cloud/vendor/argon2.umd.min.js?v=security-3777e9d6ceb3"></script>
-  <script src="/cloud/crypto-vault.js?v=security-3777e9d6ceb3"></script>
-  <script src="/security/passkey-client.js?v=security-3777e9d6ceb3"></script>
-  <script src="/security/security-display.js?v=security-3777e9d6ceb3"></script>
-  <script src="/assets/pwa-auto-update.js?v=security-3777e9d6ceb3" defer></script>
-  <script src="/security/security.js?v=security-3777e9d6ceb3"></script>
+  <script src="/cloud/vendor/argon2.umd.min.js?v=security-2adb88ff5707"></script>
+  <script src="/cloud/crypto-vault.js?v=security-2adb88ff5707"></script>
+  <script src="/security/passkey-client.js?v=security-2adb88ff5707"></script>
+  <script src="/security/security-display.js?v=security-2adb88ff5707"></script>
+  <script src="/assets/pwa-auto-update.js?v=security-2adb88ff5707" defer></script>
+  <script src="/security/security.js?v=security-2adb88ff5707"></script>
 </body>
 </html>

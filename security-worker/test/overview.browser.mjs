@@ -27,6 +27,8 @@ const server = createServer(async (request, response) => {
     "/security/health.html": ["../public/health.html", "text/html"],
     "/security/health-redirect.js": ["../public/health-redirect.js", "text/javascript"],
     "/security/health-setup.mjs": ["../public/health-setup.mjs", "text/javascript"],
+    "/security/household-setup.mjs": ["../public/household-setup.mjs", "text/javascript"],
+    "/household/household-crypto.mjs": ["../../household-worker/public/household-crypto.mjs", "text/javascript"],
     "/security/security.js": ["../public/security.js", "text/javascript"],
     "/security/security-display.js": ["../public/security-display.js", "text/javascript"],
     "/security/security.css": ["../public/security.css", "text/css"],
@@ -260,6 +262,21 @@ try {
     assert.equal(ownReads, readsBefore + 2);
     assert.deepEqual(authentications.at(-1), { service: "health", options: { handoff: false } });
     assert.equal(grants.length, 2, "self setup never delegates a key");
+    await page.close();
+  }
+  {
+    const page = await newPage();let prepared=false,ready=false,vault=null;
+    await page.route('**/security/api/household/own',route=>fulfill(route,{prepared,ready,targets:[]}));
+    await page.route('**/security/api/household/vault',route=>{vault=route.request().postDataJSON();prepared=true;return fulfill(route,{ok:true});});
+    await page.goto(url+'#household-setup');await page.locator('#household-setup-prepare').waitFor();
+    assert.equal(await page.locator('#admin-view').isVisible(),false);
+    await page.evaluate(()=>{window.TRoomPasskeys={...window.TRoomPasskeys,authenticate:async()=>({prfOutput:crypto.getRandomValues(new Uint8Array(32))})};});
+    await page.locator('#household-setup-prepare').click();
+    await page.waitForFunction(()=>document.getElementById('household-setup-status').textContent.includes('承認をお待ち'));
+    assert.deepEqual(Object.keys(vault).sort(),['ciphertext','iv','publicKey']);assert.equal(vault.publicKey.kty,'RSA');assert.equal(vault.publicKey.d,undefined);
+    assert.equal(await page.locator('#household-setup-prepare').isEnabled(),true);
+    ready=true;await page.locator('#household-setup-prepare').click();
+    await page.waitForFunction(()=>document.getElementById('household-setup-status').textContent.includes('利用準備は完了'));
     await page.close();
   }
   assert.deepEqual(errors, []);

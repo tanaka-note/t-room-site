@@ -51,6 +51,10 @@
       $("#invite-register").onclick = () => registerInvite(inviteToken);
       return;
     }
+    if (params.has("household-setup")) {
+      $("#household-setup-notice").hidden = false;
+      return;
+    }
     if (params.has("health-setup")) {
       $("#health-setup-notice").hidden = false;
       return;
@@ -59,6 +63,33 @@
   }
 
   function bind() {
+    window.addEventListener("hashchange", () => {
+      const open = new URLSearchParams(location.hash.replace(/^#/, "")).has("household-setup");
+      const previousTop = window.scrollY;
+      const wasOpen = !$("#household-setup-notice").hidden;
+      $("#household-setup-notice").hidden = !open;
+      if (open) {
+        state.householdSetupScroll ??= previousTop;
+        $("#household-setup-prepare").focus({ preventScroll: true });
+        $("#household-setup-notice").scrollIntoView({ block: "start" });
+      } else if (wasOpen && state.householdSetupScroll != null) {
+        const top = state.householdSetupScroll;
+        requestAnimationFrame(() => window.scrollTo(0, top));
+      }
+    });
+    $("#household-setup-prepare").addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      $("#household-setup-status").textContent = "利用準備を行っています。";
+      try {
+        const { prepareHousehold } = await import("/security/household-setup.mjs");
+        const result = await prepareHousehold();
+        $("#household-setup-status").textContent = result.ready
+          ? "利用準備は完了しています。パスキーで家計簿を利用できます。"
+          : "利用準備が完了しました。第一管理者の承認をお待ちください。";
+      } catch (error) { $("#household-setup-status").textContent = TRoomPasskeys.safeJapaneseMessage(error.message); }
+      finally { button.disabled = false; }
+    });
     window.addEventListener("hashchange", () => {
       const open = new URLSearchParams(location.hash.replace(/^#/, "")).has("health-setup");
       const previousTop = window.scrollY;
@@ -71,7 +102,7 @@
       } else if (wasOpen && state.healthSetupScroll !== null) {
         const top = state.healthSetupScroll;
         requestAnimationFrame(() => window.scrollTo(0, top));
-      } else if ($("#admin-view").hidden && $("#admin-login-view").hidden && !state.inviteFlow) {
+      } else if (!new URLSearchParams(location.hash.replace(/^#/, "")).has("household-setup") && $("#admin-view").hidden && $("#admin-login-view").hidden && !state.inviteFlow) {
         routeStatus();
       }
     });
@@ -657,7 +688,8 @@
     const currentLinks = data.links.filter((item) => ["pending", "active"].includes(item.status));
     const linkHistory = data.links.filter((item) => !["pending", "active"].includes(item.status));
     const linkRow = (item, historical = false) => `<div class="link detail-item"><strong>${escapeHtml(item.account_display_name || item.display_label)}</strong>${item.service === "cloud" && item.service_account_id === "folder-member" && item.account_display_name ? `<small> / ${escapeHtml(item.display_label)}</small>` : ""}${item.folderUnavailable ? '<span class="warning-text">（連携先を取得できません）</span>' : ""}<br><small>${escapeHtml(display.serviceLabel(item.service))} / ${escapeHtml(item.role_label || display.roleLabel(item.role))} / ${escapeHtml(display.serviceLinkStatusLabel(item.status, { identityStatus: data.identity.status, service: item.service, hasCredential }))}</small>${historical ? "" : item.protected ? '<span class="protected-link">基幹連携</span>' : `<button class="danger" data-remove-link="${escapeHtml(item.id)}">連携解除</button>`}</div>`;
-    const links = currentLinks.map((item) => linkRow(item) + (item.service === "health" && item.status === "active"
+    const links = currentLinks.map((item) => linkRow(item) + (item.service === "household" && item.status === "active"
+      ? `<div class="detail-editor"><button type="button" class="secondary" data-household-manage="${escapeHtml(item.id)}">家計簿の鍵の準備・承認</button><div role="status" aria-live="polite"></div></div>` : "") + (item.service === "health" && item.status === "active"
       ? `<div class="detail-editor"><button type="button" class="secondary" data-health-manage="${escapeHtml(item.id)}">体調管理の鍵の準備・承認</button><div data-health-members="${escapeHtml(item.id)}" role="status" aria-live="polite"></div></div>` : "")).join("");
     const invitationRows = data.invitations.map((item) => ({ ...item, effectiveStatus: display.invitationEffectiveStatus(item) }))
       .sort((left, right) => Number(right.effectiveStatus === "active") - Number(left.effectiveStatus === "active"));
@@ -688,7 +720,7 @@
     $("#identity-detail").innerHTML = `
       <section class="detail-section detail-summary"><h2>${escapeHtml(data.identity.displayName)}</h2><p class="status-${escapeHtml(data.identity.status)}">${escapeHtml(display.identityStatusLabel(data.identity.status))}</p><small>${data.identity.lastLoginAt ? `最終認証 ${escapeHtml(formatDate(data.identity.lastLoginAt))}` : "認証履歴なし"}${data.identity.lastSeenAt ? ` / 最終アクセス ${escapeHtml(formatDate(data.identity.lastSeenAt))}` : ""}</small></section>
       <section class="detail-section"><h3>現在のログイン状況</h3><div class="session-status-grid">${loginStates}</div></section>
-      <section class="detail-section"><h3>サービス連携</h3>${links || "<p>サービス連携はありません。</p>"}<button id="detail-open-link" type="button" class="secondary">＋ サービス連携を追加</button><div id="detail-link-editor" class="detail-editor" hidden><div id="detail-link-row"></div><p id="detail-link-empty" class="muted" hidden>追加できるサービス連携はありません</p><div class="editor-actions"><button id="detail-add-link" type="button">追加</button><button id="detail-cancel-link" type="button" class="secondary">キャンセル</button></div></div><p class="hint">日記・請求書は管理者確認後すぐ利用できます。T-Cloud・体調管理はパスキーごとの利用準備と鍵の承認が必要です。</p></section>
+      <section class="detail-section"><h3>サービス連携</h3>${links || "<p>サービス連携はありません。</p>"}<button id="detail-open-link" type="button" class="secondary">＋ サービス連携を追加</button><div id="detail-link-editor" class="detail-editor" hidden><div id="detail-link-row"></div><p id="detail-link-empty" class="muted" hidden>追加できるサービス連携はありません</p><div class="editor-actions"><button id="detail-add-link" type="button">追加</button><button id="detail-cancel-link" type="button" class="secondary">キャンセル</button></div></div><p class="hint">日記・請求書は管理者確認後すぐ利用できます。T-Cloud・体調管理・家計簿はパスキーごとの利用準備と鍵の承認が必要です。</p></section>
       <section class="detail-section"><h3>パスキー</h3>${credentials || "<p>まだパスキーは登録されていません</p>"}</section>
       <section class="detail-section"><h3>招待</h3>${invitations || "<p>有効な招待はありません。</p>"}</section>
       ${historyRows ? `<section class="detail-section"><details class="identity-history"><summary>過去の履歴を表示</summary><div class="identity-history-rows">${historyRows}</div></details></section>` : ""}
@@ -702,6 +734,7 @@
     document.querySelectorAll("[data-revoke-credential]").forEach((button) => button.addEventListener("click", () => revokeCredential(button.dataset.revokeCredential, button)));
     document.querySelectorAll("[data-revoke-invitation]").forEach((button) => button.addEventListener("click", () => revokeInvitation(button.dataset.revokeInvitation, button)));
     document.querySelectorAll("[data-remove-link]").forEach((button) => button.addEventListener("click", () => removeLink(button.dataset.removeLink, button)));
+    document.querySelectorAll("[data-household-manage]").forEach((button) => button.addEventListener("click", () => manageHealthKeys(data, button)));
     document.querySelectorAll("[data-health-manage]").forEach((button) => button.addEventListener("click", () => manageHealthKeys(data, button)));
     if ($("#disable-identity-button")) $("#disable-identity-button").onclick = (event) => disableIdentity(id, event.currentTarget);
     $("#detail-open-link").onclick = () => openDetailLinkEditor().catch((error) => showMessage(error.message, true));
@@ -714,8 +747,9 @@
     button.disabled = true;
     members.textContent = "鍵の状態を確認しています。";
     try {
-      const { loadHealthApprovals } = await import("/security/health-setup.mjs");
-      const approvals = await loadHealthApprovals(data.identity.id, button.dataset.healthManage);
+      const household = Boolean(button.dataset.householdManage);
+      const module = await import(household ? "/security/household-setup.mjs" : "/security/health-setup.mjs");
+      const approvals = await (household ? module.loadHouseholdApprovals : module.loadHealthApprovals)(data.identity.id, button.dataset.householdManage || button.dataset.healthManage);
       if (state.selectedIdentity !== data || !members.isConnected) return;
       members.replaceChildren();
       for (const item of approvals) {
@@ -743,19 +777,20 @@
       const help = document.createElement("p");
       help.textContent = "本人の端末で利用準備を行い、その後ここで鍵を承認してください。";
       const link = document.createElement("a");
-      link.href = "/security/#health-setup";
+      link.href = household ? "/security/#household-setup" : "/security/#health-setup";
       link.textContent = "本人の利用準備";
       link.onclick = (event) => {
-        if (location.hash === "#health-setup") {
+        const kind = household ? "household" : "health";
+        if (location.hash === `#${kind}-setup`) {
           event.preventDefault();
-          $("#health-setup-prepare").focus({ preventScroll: true });
-          $("#health-setup-notice").scrollIntoView({ block: "start" });
-        } else state.healthSetupScroll = window.scrollY;
+          $(`#${kind}-setup-prepare`).focus({ preventScroll: true });
+          $(`#${kind}-setup-notice`).scrollIntoView({ block: "start" });
+        } else state[`${kind}SetupScroll`] = window.scrollY;
       };
       help.append(" ", link);
       members.append(help);
     } catch (error) {
-      members.textContent = "鍵の状態を確認できませんでした。オーナー自身の体調管理連携と、T-Cloudの利用準備も確認してください。";
+      members.textContent = "鍵の状態を確認できませんでした。本人の利用準備と、第一管理者のT-Cloud鍵準備を確認してください。";
       showMessage(error.message, true);
     } finally { button.disabled = false; }
   }

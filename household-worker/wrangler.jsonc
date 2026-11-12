@@ -37,6 +37,7 @@
     ]
   },
   "vars": {
+    "ENCRYPTION_REQUIRED": "true",
     "SESSION_VERSION": "1",
     "PASSKEY_ENABLED": "true"
   },
