@@ -99,7 +99,11 @@ export async function handleRequest(request, env, context) {
 
 async function cryptoSession(env,session) {
   const bundle=await keyBundle(env.DB,session);
-  return {cryptoRequired:env.ENCRYPTION_REQUIRED!=='false'||Boolean(await keyConfig(env.DB,session.householdId)),keyBundle:bundle};
+  const cryptoRequired=env.ENCRYPTION_REQUIRED!=='false'||Boolean(await keyConfig(env.DB,session.householdId));
+  // Check every retained generation in the live, authorized Household scope.
+  // A fresh bootstrap can then skip a separate migration request on warm opens.
+  const encryptionMigrationRequired=Boolean(cryptoRequired&&session.role==='owner'&&(await env.DB.prepare('SELECT EXISTS(SELECT 1 FROM household_datasets WHERE household_id=? AND crypto_version=0) AS required').bind(session.householdId).first()).required);
+  return {cryptoRequired,keyBundle:bundle,encryptionMigrationRequired};
 }
 
 async function handoff(request, env, url) {
