@@ -26,6 +26,7 @@ export async function verifyAccountOrder(browser,url,initial,chooseDate){
    assert.deepEqual(await names(),expected);
    assert.equal((await page.locator('#current-assets').textContent()).normalize('NFKC'),new Intl.NumberFormat('ja-JP',{style:'currency',currency:'JPY',maximumFractionDigits:0}).format(-91810).normalize('NFKC'));
    assert.deepEqual(state.data.accounts,original);assert.equal(writes,0);
+   await page.reload();await page.locator('#app-view').waitFor({state:'visible'});assert.deepEqual(await names(),expected);
    if(role==='owner'){
     const small=page.locator('#accounts .account-card').filter({has:page.getByRole('heading',{name:'Small',exact:true})});
     const save=async(amount,date)=>{
@@ -38,7 +39,9 @@ export async function verifyAccountOrder(browser,url,initial,chooseDate){
     // An older record must not replace the latest balance or its display position.
     await save(-200000,'2026-09-01');assert.deepEqual(await names(),['Small','Large','Tie','Zero','Near zero','Debt']);
     await save(-200000);assert.deepEqual(await names(),['Large','Tie','Zero','Near zero','Debt','Small']);
-    await page.reload();await page.locator('#app-view').waitFor({state:'visible'});assert.deepEqual(await names(),['Large','Tie','Zero','Near zero','Debt','Small']);
+    // Reload after dialog history traversal crashes macOS WebKit itself. A fresh
+    // document still re-fetches saved balances using the same browser session.
+    await page.goto('about:blank');await page.goto(url+'#accounts');await page.locator('#app-view').waitFor({state:'visible'});assert.deepEqual(await names(),['Large','Tie','Zero','Near zero','Debt','Small']);
     assert.deepEqual(state.data.accounts.map(a=>a.id),originalIds);
     for(const a of original.filter(a=>a.name!=='Small'))assert.deepEqual(state.data.accounts.find(row=>row.id===a.id),a);
     assert.deepEqual(state.data.transactions,transactions);assert.equal(writes,3);
