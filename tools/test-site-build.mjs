@@ -46,6 +46,7 @@ test('root build creates deployable static assets from a checkout without genera
     const run=command=>spawnSync(shell,process.platform==='win32'?['/d','/c',command]:['-c',command],{cwd:fixture,encoding:'utf8',env:{...process.env,WRANGLER_SEND_METRICS:'false'}});
     const build=run('pnpm run build');assert.equal(build.status,0,build.stdout+build.stderr);
     assert.equal((await stat(join(fixture,'.site-assets/index.html'))).isFile(),true);
+    await assert.rejects(stat(join(fixture,'.site-assets/asset-report-k7m4q9x2')), {code:'ENOENT'});
     assert.equal((await stat(join(fixture,'.site-assets/pagefind/pagefind.js'))).isFile(),true);
     const deploy=run('pnpm exec wrangler deploy --dry-run');assert.equal(deploy.status,0,deploy.stdout+deploy.stderr);
   } finally {
@@ -53,4 +54,17 @@ test('root build creates deployable static assets from a checkout without genera
     assert.match(fixture.split(/[\\/]/).at(-1),/^tlain-site-build-/);
     await rm(fixture,{recursive:true,force:true});
   }
+});
+
+test('retired report redirects documents, denies old data and serves only its cleanup worker', async () => {
+  const {default: worker, retirementWorker} = await import('../site-worker/index.mjs');
+  const request = (path, method='GET') => worker.fetch(new Request(`https://tanaka-note.com${path}`, {method}), {ASSETS:{fetch:()=>new Response('unrelated')}});
+  for (const path of ['/asset-report-k7m4q9x2', '/asset-report-k7m4q9x2/?source=pwa', '/asset-report-k7m4q9x2/index.html']) {
+    const response=request(path);assert.equal(response.status,308);assert.equal(response.headers.get('Location'),'/asset-report/');assert.equal(response.headers.get('Cache-Control'),'no-store');
+  }
+  for(const path of ['data/portfolio-data.mjs?v=old','report.js','manifest.webmanifest','icons/icon-192.png']) assert.equal(request(`/asset-report-k7m4q9x2/${path}`).status,410);
+  const sw=request('/asset-report-k7m4q9x2/service-worker.js?v=old');assert.equal(sw.status,200);assert.match(sw.headers.get('Content-Type'),/javascript/);assert.equal(await sw.text(),retirementWorker);
+  assert.equal(request('/asset-report-k7m4q9x2/','POST').status,405);
+  assert.equal(await request('/unrelated').text(),'unrelated');
+  assert.equal(await request('/asset-report-k7m4q9x2-other').text(),'unrelated');
 });

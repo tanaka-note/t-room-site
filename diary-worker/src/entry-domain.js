@@ -140,7 +140,8 @@ export function createDiaryEntryDomain({ HttpError, basePath }) {
   }
 
   function isUuid(value) {
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
+    // Normal uploads use v4; one-time migration uses stable, namespaced v5 IDs.
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[45][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
   }
 
   function isValidDate(value) {

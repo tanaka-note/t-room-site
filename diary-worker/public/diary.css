@@ -686,33 +686,72 @@ button {
 }
 
 .diary-archive-nav {
-  display: grid;
-  gap: 2px;
   margin-top: 14px;
 }
 
-.archive-button {
+.archive-year {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  width: 100%;
-  border: 0;
-  border-bottom: 1px solid rgba(216, 222, 230, 0.72);
-  padding: 11px 2px;
+  margin: 0 0 12px;
+  font-weight: 700;
+}
+
+.archive-year > span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.archive-year select {
+  min-height: 44px;
+  min-width: 120px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 10px;
+  color: var(--ink);
+  background: #fff;
+  font: inherit;
+}
+
+.archive-month-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.archive-button {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: 60px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 7px 3px;
   background: transparent;
   color: inherit;
-  text-align: left;
+  font-weight: 700;
 }
 
 .archive-button:hover,
-.archive-button:focus-visible,
-.archive-button[aria-pressed="true"] {
+.archive-button:focus-visible {
+  border-color: var(--teal-dark);
+  background: #f5f9f7;
   color: var(--teal-dark);
+}
+
+.archive-button[aria-pressed="true"] {
+  border-color: var(--teal-dark);
+  background: #eaf3ef;
+  color: var(--teal-dark);
+  box-shadow: inset 0 0 0 1px var(--teal-dark);
 }
 
 .archive-button small {
   color: var(--muted);
+  font-weight: 400;
 }
 
 .diary-search-card {
@@ -1692,12 +1731,33 @@ button:disabled {
   line-height: 1.3;
 }
 
+.camera-roll-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#photo-sort-button[aria-pressed="true"] svg {
+  transform: scaleY(-1);
+}
+
 .camera-roll-filters {
   display: grid;
   grid-template-columns: minmax(220px, 1.5fr) repeat(2, minmax(140px, 0.6fr));
   gap: 12px;
   margin: 24px 0 10px;
+  align-items: end;
 }
+
+#photo-save-button { min-height: 44px; }
+
+.photo-save-dialog { width: min(600px, calc(100% - 28px)); }
+.photo-save-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 24px 0 16px; }
+.photo-save-fields label { display: grid; gap: 6px; min-width: 0; color: var(--muted); font-size: 0.85rem; font-weight: 700; }
+.photo-save-fields input { width: 100%; min-width: 0; min-height: 44px; border: 1px solid var(--line); border-radius: 7px; padding: 0 11px; color: var(--ink); background: #fff; }
+.photo-save-fields .date-input-shell input { padding-right: 40px; }
+.photo-save-fields .date-input-shell { position: relative; display: flex; }
+.photo-save-fields .date-picker-button { position: absolute; right: 0; top: 50%; height: 44px; }
 
 .camera-roll-filters label {
   display: grid;
@@ -1708,7 +1768,8 @@ button:disabled {
 }
 
 .camera-roll-filters input,
-.camera-roll-filters select {
+.camera-roll-filters select,
+#photo-month-filter {
   width: 100%;
   min-height: 44px;
   border: 1px solid var(--line);
@@ -1717,6 +1778,8 @@ button:disabled {
   color: var(--ink);
   background: #fff;
 }
+
+#photo-month-filter { text-align: left; }
 
 .camera-roll-grid {
   display: grid;
@@ -1778,20 +1841,65 @@ button:disabled {
 }
 
 .photo-viewer-dialog {
-  width: min(1380px, calc(100% - 16px));
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  border-radius: 0;
+  overflow: hidden;
   background: #111715;
   color: #fff;
 }
 
 .photo-viewer-shell {
-  display: grid;
-  grid-template-rows: auto minmax(260px, 1fr) auto;
-  min-height: min(880px, calc(100vh - 16px));
-  padding: 18px;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #080b0a;
+}
+
+.photo-viewer-shell:fullscreen {
+  width: 100vw;
+  height: 100dvh;
 }
 
 .photo-viewer-head {
-  padding: 0 0 14px;
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 1;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 28px max(12px, env(safe-area-inset-left));
+  background: linear-gradient(rgba(0, 0, 0, 0.7), transparent);
+  pointer-events: none;
+}
+
+.photo-viewer-head > div:first-child {
+  min-width: 0;
+}
+
+.photo-viewer-head h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1rem;
+}
+
+.photo-viewer-tools {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.photo-viewer-tools button {
+  width: auto;
+  min-width: 44px;
+  padding-inline: 10px;
+  font-size: 0.85rem;
 }
 
 .photo-viewer-head .entry-date {
@@ -1812,28 +1920,41 @@ button:disabled {
 }
 
 .photo-stage {
-  position: relative;
+  position: absolute;
+  inset: 0;
   display: grid;
   place-items: center;
   min-height: 0;
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: 0;
   background: #080b0a;
-  touch-action: pan-y pinch-zoom;
+  touch-action: none;
+  cursor: default;
+}
+
+.photo-stage.is-zoomed {
+  cursor: grab;
+}
+
+.photo-stage.is-zoomed:active {
+  cursor: grabbing;
 }
 
 .photo-stage img {
   display: block;
   width: 100%;
   height: 100%;
-  max-height: calc(100vh - 220px);
+  min-width: 0;
+  min-height: 0;
   object-fit: contain;
   user-select: none;
+  transform: translate(var(--photo-x, 0px), var(--photo-y, 0px)) scale(var(--photo-scale, 1));
 }
 
 .photo-viewer-status {
   position: absolute;
-  bottom: 12px;
+  top: 50%;
+  z-index: 1;
   margin: 0 12px;
   padding: 6px 10px;
   border-radius: 8px;
@@ -1843,11 +1964,16 @@ button:disabled {
 }
 
 .photo-viewer-meta {
+  position: absolute;
+  inset: auto 0 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding-top: 14px;
+  padding: 28px max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+  pointer-events: none;
 }
 
 .photo-viewer-meta p {
@@ -1864,6 +1990,7 @@ button:disabled {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+  pointer-events: auto;
 }
 
 .photo-viewer-actions a {
@@ -1932,6 +2059,40 @@ button:disabled {
   padding-top: 10px;
 }
 
+.date-wheel-window[data-mode="month"] { grid-template-columns: 1fr 1.25fr; }
+
+.date-wheel-all {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.date-wheel-all[hidden], .date-wheel-group[hidden] { display: none; }
+
+.date-wheel-window[data-mode="month"] #date-wheel-month .date-wheel-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.date-wheel-count {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.date-wheel-option[data-empty="true"] .date-wheel-count { opacity: 0.65; }
+
 .date-wheel-highlight {
   position: absolute;
   z-index: 0;
@@ -1965,7 +2126,7 @@ button:disabled {
   height: 220px;
   overflow-y: auto;
   padding: 88px 0;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
   scroll-snap-type: y mandatory;
   scrollbar-width: none;
   overscroll-behavior: contain;
@@ -2109,20 +2270,12 @@ button:disabled {
     gap: 6px;
   }
 
-  .photo-viewer-dialog {
-    width: 100%;
-    max-height: 100vh;
-    border-radius: 0;
-    margin: 0;
+  .photo-viewer-head {
+    gap: 8px;
   }
 
-  .photo-viewer-shell {
-    min-height: 100vh;
-    padding: 12px;
-  }
-
-  .photo-stage img {
-    max-height: calc(100vh - 300px);
+  .photo-viewer-tools {
+    gap: 4px;
   }
 
   .photo-viewer-actions {
@@ -2254,8 +2407,3 @@ mark.diary-search-match {
 }
 
 /* Keep the login action identical to the billing passkey button. */
-button.passkey-login-button { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 44px; padding: 10px 18px; border: 1px solid transparent; border-radius: 10px; color: #fff; background: #577263; font: 800 16px/normal "Noto Sans JP", "Yu Gothic", system-ui, sans-serif; letter-spacing: normal; cursor: pointer; }
-button.passkey-login-button:hover { background: #3d584a; }
-button.passkey-login-button:focus-visible { outline: 3px solid #8ca895; outline-offset: 3px; }
-button.passkey-login-button:disabled { opacity: .6; cursor: wait; }
-button.passkey-login-button .passkey-icon { width: 24px; height: 24px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }

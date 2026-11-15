@@ -70,7 +70,7 @@ try {
         },{start,count}).catch(error=>{console.error("Photo lifecycle page errors",errors);throw error;});
         assert.ok(result.viewed>=100);
         assert.ok(result.resources.maxUrls<=1,JSON.stringify(result));
-        assert.equal(result.resources.maxListeners,7);
+        assert.equal(result.resources.maxListeners,8,"one photo viewer owns its pointer, double-click, wheel and drag listeners");
         assert.equal(result.resources.maxObservers,1);
         assert.ok(result.resources.historyReplacements<=2,JSON.stringify(result));
         assert.ok(result.resources.renders<=result.viewed*5+5,JSON.stringify(result));

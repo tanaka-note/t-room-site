@@ -7,13 +7,17 @@ import { runState, reportRun } from '../src/monitor.js';
 import { getBackupSnapshot } from '../src/browser.js';
 import { database, d1, Bucket, recorder } from './fixtures.mjs';
 
-test('every allowlist executes against current migrations and round-trips into an isolated schema', async () => {
+test('every allowlist executes against its reviewed migration baseline and round-trips into an isolated schema', async () => {
   for (const service of Object.keys(SERVICES)) {
     const source = database(service), destination = database(service);
     try {
       if (service === 'health') source.exec("INSERT INTO health_records VALUES ('opaque-id','nobumi','synthetic-iv','synthetic-ciphertext',2,'2026-10-25 00:00:00')");
       if (service === 'cloud') source.exec("INSERT INTO cloud_folders(id,name,created_by) VALUES (101,'synthetic','admin'); INSERT INTO cloud_files(folder_id,object_key,original_name,mime_type,media_kind,size_bytes,status,created_by) VALUES (101,'encrypted-object','fixture','application/octet-stream','document',100,'ready','admin')");
       if (service === 'billing') source.exec("INSERT INTO billing_entries(account_id,document_type,entry_date,category,amount_yen,description,created_by) VALUES ('owner','invoice','2026-10-25','purchase',123,'synthetic','owner')");
+      if (service === 'calendar') {
+        source.prepare("INSERT INTO calendar_entities(account_id,owner_identity,kind,id,payload,version) VALUES('main','','event','fixture',?,1)").run('{"id":"fixture","title":"synthetic"}');
+        source.prepare("UPDATE calendar_entities SET payload=?,version=version+1 WHERE id='fixture'").run('{"id":"fixture","title":"edited synthetic"}');
+      }
       const snapshot = await decode(await compress(await capture(d1(source), service)));
       assert.equal(snapshot.service, service);
       assert.ok(snapshot.schema.length);
@@ -102,7 +106,7 @@ test('status detects missed schedules, stale running jobs and recovery without e
 test('backup Worker has no public route, file bodies, restored sessions or production deploy script', () => {
   const config = JSON.parse(readFileSync(new URL('../wrangler.jsonc', import.meta.url)));
   assert.equal(config.workers_dev, false); assert.equal(config.preview_urls, false); assert.equal(config.routes, undefined);
-  assert.deepEqual(config.r2_buckets.map(b => b.bucket_name), ['t-room-service-backups']);
+  assert.deepEqual(config.r2_buckets.map(b => b.bucket_name), ['t-room-service-backups','t-room-diary-backups']);
   assert.equal(SERVICES.downloader.tables.length, 1);
   assert.equal(SERVICES.downloader.tables[0].name, 'downloader_usage_daily');
 });
@@ -115,6 +119,15 @@ test('schema drift fails closed instead of silently omitting new durable data', 
   } finally { db.close(); }
 });
 
+test('a checked-in Worker-first migration remains unreviewed until the backup baseline advances', async () => {
+  const db = database('cloud');
+  try {
+    assert.equal((await capture(d1(db), 'cloud')).expectedMigration, '0012_favorites.sql');
+    db.exec(readFileSync(new URL('../../cloud-worker/migrations/0013_safe_trash_retention.sql', import.meta.url), 'utf8'));
+    await assert.rejects(capture(d1(db), 'cloud'), /SchemaReviewRequired/);
+  } finally { db.close(); }
+});
+
 test('storage listings are cached while failures and recoveries remain fresh', async () => {
   const db = database('security'), bucket = new Bucket(), env = { SECURITY_DB: d1(db), BACKUP: bucket };
   let stored, lists = 0;
@@ -122,7 +135,7 @@ test('storage listings are cached while failures and recoveries remain fresh', a
   const cache = { async match() { return stored?.clone(); }, async put(_key, value) { stored = value; } };
   try {
     const first = await getBackupSnapshot(env, {}, cache);
-    assert.equal(first.services.length, 9); const count = lists;
+    assert.equal(first.services.length, Object.keys(SERVICES).length + 1); const count = lists;
     db.prepare("INSERT INTO security_audit_events(event_id,occurred_at,service,event_type,outcome,target_type,target_id,details_json) VALUES (?,?,?,?,?,?,?,?)")
       .run('failed-run', new Date().toISOString(), 'health', 'backup_failed', 'failure', 'backup', 'health', '{"reason":"operation_failed"}');
     const second = await getBackupSnapshot(env, {}, cache);

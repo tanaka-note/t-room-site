@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-4479210a4805";
+const APP_BUILD_ID = "cloud-883da984e370";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -3082,6 +3082,14 @@ function canMoveFolder(folder) {
     && state.crypto.folderKeys.has(Number(folder.id)));
 }
 
+function trashRetentionLabel(item) {
+  if (item.purgeStarted) return "完全削除が確定しています（復元不可）";
+  if (!item.autoDeleteEligibleAt) return "旧データ：自動削除の対象外";
+  const date = new Date(item.autoDeleteEligibleAt).toLocaleString("ja-JP");
+  const mode = item.retentionMode === "enabled" ? "次回定期処理から削除対象" : item.retentionMode === "dry-run" ? "試行中・自動削除なし" : "自動削除は無効";
+  return `30日経過：${date}（${mode}）`;
+}
+
 function trashFolderCard(folder) {
   const card = document.createElement("article");
   card.className = "folder-card trash-folder-card";
@@ -3090,7 +3098,7 @@ function trashFolderCard(folder) {
   button.type = "button";
   button.title = folder.name;
   button.setAttribute("aria-label", `フォルダ「${folder.name}」の操作を開く`);
-  button.innerHTML = `<span class="folder-icon">${TCloudUI.icon("folder")}</span><span><strong>${escapeHtml(folder.name)}</strong><small class="folder-count">${formatFolderCount(folder)}・${formatBytes(folder.sizeBytes)}</small><small class="folder-lock">フォルダごとゴミ箱へ移動済み</small></span>`;
+  button.innerHTML = `<span class="folder-icon">${TCloudUI.icon("folder")}</span><span><strong>${escapeHtml(folder.name)}</strong><small class="folder-count">${formatFolderCount(folder)}・${formatBytes(folder.sizeBytes)}</small><small class="folder-lock">${escapeHtml(trashRetentionLabel(folder))}</small></span>`;
   button.addEventListener("click", () => showTrashFolderActions(folder));
   card.append(button);
   return card;
@@ -3612,7 +3620,7 @@ function fileThumbnailFallback(file) {
 
 function fileCard(file) {
   const card = document.createElement("article");
-  card.className = "file-card";
+  card.className = file.trashed ? "file-card trash-file-card" : "file-card";
   card.classList.add(usesSquareFileCard(file) ? "media-file-card" : "non-media-file-card");
   card.dataset.fileId = String(file.id);
   const button = document.createElement("button");
@@ -3624,7 +3632,7 @@ function fileCard(file) {
   const thumbnail = fallbackThumbnail;
   button.innerHTML = `
     <div class="thumb">${thumbnail}</div>
-    <div class="file-copy"><strong>${escapeHtml(file.name)}</strong>${state.query && file.searchPath ? `<small class="search-result-path">${escapeHtml(file.searchPath)}</small>` : ""}<span class="file-meta"><span class="file-size">${formatMediaDetails(file)}</span><span>${formatDate(file.createdAt || file.deletedAt)}</span></span></div>`;
+    <div class="file-copy"><strong>${escapeHtml(file.name)}</strong>${state.query && file.searchPath ? `<small class="search-result-path">${escapeHtml(file.searchPath)}</small>` : ""}<span class="file-meta"><span class="file-size">${formatMediaDetails(file)}</span><span>${file.trashed ? escapeHtml(trashRetentionLabel(file)) : formatDate(file.createdAt || file.deletedAt)}</span></span></div>`;
   const cachedImage = cachedThumbnail ? new Image() : null;
   if (cachedImage) {
     const generation = state.thumbnailLoadGeneration, scope = displayCacheScope();
@@ -5699,7 +5707,7 @@ function renderBreadcrumbs(items) {
     renderFloatingLocation(state.breadcrumbs); return;
   }
   const nav = $("#breadcrumbs");
-  if (state.view === "trash") { state.breadcrumbs = []; nav.textContent = "完全削除または復元するまで、ファイルはゴミ箱に保持されます。"; renderFloatingLocation([]); return; }
+  if (state.view === "trash") { state.breadcrumbs = []; nav.textContent = "ゴミ箱への移動から30日後に自動削除の対象となります。現在の状態と対象日は各項目に表示されます。"; renderFloatingLocation([]); return; }
   if (state.view === "conflicts") { state.breadcrumbs = []; nav.textContent = state.session?.role === "subadmin" ? "PWを解除したトップフォルダごとに、配下の競合候補を確認します。" : "トップフォルダの境界を越えず、各フォルダ配下の競合候補を確認します。"; renderFloatingLocation([]); return; }
   if (state.view === "history") { state.breadcrumbs = []; nav.textContent = state.session?.role === "admin" ? "管理者・副管理者のアップロード／ダウンロード履歴です。" : "副管理者本人のアップロード／ダウンロード履歴です。"; renderFloatingLocation([]); return; }
   if (state.view === "requests") { state.breadcrumbs = []; nav.textContent = "承認するまでファイルは削除されず、通常どおり利用できます。"; renderFloatingLocation([]); return; }
@@ -8806,7 +8814,8 @@ async function approveDeletionRequest(item) {
 async function showTrashActions(file) {
   state.selected = { ...file, trashTargetType: "file" };
   $("#trash-file-name").textContent = file.name;
-  $("#trash-action-note").textContent = "元に戻すか、完全に削除する操作を選んでください。";
+  $("#restore-file-button").disabled = Boolean(file.purgeStarted);
+  $("#trash-action-note").textContent = file.purgeStarted ? "完全削除が確定しているため復元できません。処理に失敗した場合は管理者が再試行できます。" : "元に戻すか、完全に削除する操作を選んでください。";
   $("#permanent-delete-button").hidden = !state.session.canDelete;
   $("#trash-dialog").showModal();
 }
@@ -8814,7 +8823,8 @@ async function showTrashActions(file) {
 async function showTrashFolderActions(folder) {
   state.selected = { ...folder, trashTargetType: "folder" };
   $("#trash-file-name").textContent = folder.name;
-  $("#trash-action-note").textContent = "フォルダと、その中にあったデータをまとめて元に戻せます。";
+  $("#restore-file-button").disabled = Boolean(folder.purgeStarted);
+  $("#trash-action-note").textContent = folder.purgeStarted ? "配下の完全削除が確定しているため復元できません。残りの処理は次回の実行で続行します。" : "フォルダと、その中にあったデータをまとめて元に戻せます。";
   $("#permanent-delete-button").hidden = true;
   $("#trash-dialog").showModal();
 }
@@ -9571,13 +9581,9 @@ function backupJapanTime(value) {
   return value ? new Date(value).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "未確認";
 }
 
-function backupMediaLabel(value) {
-  return value === true ? "完了" : value === false ? "未完了" : "記録なし";
-}
-
 function renderBackupHealth(output, data) {
   const labels = { ok: '正常', started: '実行開始', running: '実行中', failed: '失敗', partial: '一部未完了', overdue: '未実行・遅延', prune_failed: '保存済み・世代整理に失敗', unavailable: '状態取得不可', unknown: '状態不明' };
-  const services = [{ id: 'diary', label: '日記', ...data.status, available: data.diaryAvailable !== false }, ...(data.services || [])];
+  const services = [{ id: 'diary', label: '日記 D1', ...data.status, available: data.diaryAvailable !== false }, ...(data.services || [])];
   if (!data.serviceBackupsAvailable) services.push({ id: 'services', label: '他サービスのバックアップ', state: 'unavailable', available: false });
   for (const service of services) {
     const section = document.createElement('details');
@@ -9585,14 +9591,13 @@ function renderBackupHealth(output, data) {
     const state = service.available === false && !['failed', 'partial', 'prune_failed'].includes(service.state) ? 'unavailable' : service.state || 'unknown';
     section.open = !['ok', 'running'].includes(state);
     section.innerHTML = '<summary>' + escapeHtml(service.label) + '：' + escapeHtml(labels[state] || labels.unknown) + '</summary>';
-    const stages = { capture: 'データ取得', daily_save: '日次保存', monthly_save: '月次保存', retention: '世代整理', photos: '写真保存', save_or_retention: '保存・世代整理', archive: '監査の長期保管', catchup: '過去分の保管' };
-    const reasons = { snapshot_too_large: '安全な取得上限を超えました。取得方式の見直しが必要です', unsafe_integer: '数値を損失なく保存できないため停止しました', legacy_unverified: '旧形式のため検証できません', schema_review_required: 'データ構造の変更に対応が必要です', source_unavailable: '対象のデータに接続できません', verification_failed: '保存内容の照合に失敗しました', concurrent_write: '同時実行のため次回確認が必要です', operation_failed: '処理に失敗しました', retention_failed: '古い世代の整理に失敗しました', media_incomplete: '写真の保存が未完了です', archive_failed: '長期保管に失敗しました', backlog: '未保管の過去分が残っています' };
+    const stages = { capture: 'データ取得', daily_save: '日次保存', monthly_save: '月次保存', retention: '世代整理', photos: '写真保存', photo_verification: '写真の再検証', photo_catchup: '写真の追いつき処理', save_or_retention: '保存・世代整理', archive: '監査の長期保管', catchup: '過去分の保管' };
+    const reasons = { object_too_large: '単体写真のI/O上限を超えています（通常枠では約42.7MiB超）。個別の保管対応が必要です', snapshot_too_large: '安全な取得上限を超えました。取得方式の見直しが必要です', unsafe_integer: '数値を損失なく保存できないため停止しました', legacy_unverified: '旧形式のため検証できません', schema_review_required: 'データ構造の変更に対応が必要です', source_unavailable: '対象のデータに接続できません', verification_failed: '保存内容の照合に失敗しました', concurrent_write: '同時実行のため次回確認が必要です', operation_failed: '処理に失敗しました', retention_failed: '古い世代の整理に失敗しました', media_incomplete: '写真の保存が未完了です', archive_failed: '長期保管に失敗しました', backlog: '未保管の過去分が残っています' };
     const info = document.createElement('p');
     info.textContent = '最終成功 ' + backupJapanTime(service.lastSuccessAt) + ' ／ 最新実行 ' + backupJapanTime(service.lastAttemptAt)
       + (service.stage ? ' ／ ' + (stages[service.stage] || '処理確認') : '') + (service.reason ? ' ／ ' + (reasons[service.reason] || '詳細を確認してください') : '')
       + (service.pendingCount != null ? ' ／ 未保管 ' + service.pendingCount + (service.pendingCapped ? '件以上' : '件') : '')
       + (service.oldestPendingAt ? ' ／ 最古の未保管 ' + backupJapanTime(service.oldestPendingAt) : '')
-      + (service.pending ? ' ／ 写真の検証待ち ' + service.pending + '件' : '')
       + (service.attempt ? ' ／ 試行 ' + service.attempt + '回' : '')
       + (service.retention === 'indefinite' ? ' ／ 180日超の履歴を期限なしで保管' : '');
     section.append(info);
@@ -9652,26 +9657,30 @@ function renderDiaryBackupMount() {
     try {
       const data = await api(`/diary-backups${refresh ? "?refresh=1" : ""}`);
       if (!isCurrent()) return;
-      output.innerHTML = `<dl class="backup-summary"><div><dt>日記の最終保存（日本時間）</dt><dd>${escapeHtml(backupJapanTime(data.lastBackupAt))}</dd></div><div><dt>保管容量（取得済み分）</dt><dd>${formatBytes(data.backupBytes)}</dd></div><div><dt>日記の日次 / 月次</dt><dd>${data.daily.objectCount}世代 / ${data.monthly.objectCount}世代</dd></div><div><dt>日記の旧形式（未検証・保持中）</dt><dd>${(data.legacyDaily?.objectCount || 0) + (data.legacyMonthly?.objectCount || 0)}世代</dd></div><div><dt>最新世代のメディアバックアップ</dt><dd>${backupMediaLabel(data.mediaComplete)}</dd></div></dl><p class="backup-observed">集計：${escapeHtml(backupJapanTime(data.observedAt))}（日本時間）・通常は6時間キャッシュ／手動更新は最短1分間隔</p>`;
+      output.innerHTML = `<dl class="backup-summary"><div><dt>日記 D1の最終保存（日本時間）</dt><dd>${escapeHtml(backupJapanTime(data.lastBackupAt))}</dd></div><div><dt>保管容量（取得済み分）</dt><dd>${formatBytes(data.backupBytes)}</dd></div><div><dt>日記 D1の日次 / 月次</dt><dd>${data.daily.available === false ? "取得不可" : data.daily.objectCount + "世代"} / ${data.monthly.available === false ? "取得不可" : data.monthly.objectCount + "世代"}</dd></div><div><dt>日記の旧世代（保持中）</dt><dd>${(data.legacyDaily?.objectCount || 0) + (data.legacyMonthly?.objectCount || 0) + (data.legacyV7Daily?.objectCount || 0) + (data.legacyV7Monthly?.objectCount || 0)}世代</dd></div><div><dt>日記 D1の保存容量</dt><dd>${data.d1Available === false ? "取得不可" : formatBytes(data.d1Bytes || 0)}</dd></div><div><dt>復元範囲</dt><dd>日記DBのみ。写真本体は日記の保存領域にあり、バックアップ対象外です。</dd></div></dl><p class="backup-observed">集計：${escapeHtml(backupJapanTime(data.observedAt))}（日本時間）・通常は6時間キャッシュ／手動更新は最短1分間隔</p>`;
+      if (data.storagePartial) {
+        const notice = document.createElement('p');
+        notice.textContent = '一部の容量・件数を取得できません。取得できた状態だけを表示しています。';
+        output.append(notice);
+      }
       renderBackupHealth(output, data);
-      for (const [kind, label] of [["daily", "日記の日次バックアップ"], ["monthly", "日記の月次バックアップ"], ["photo", "日記の写真バックアップ"]]) {
+      for (const [kind, label] of [["daily", "日記の日次バックアップ"], ["monthly", "日記の月次バックアップ"]]) {
         if (data.diaryAvailable === false) break;
         const group = data[kind];
         const section = document.createElement("details");
         section.dataset.backupGroup = kind;
         section.open = expanded.has(kind);
-        section.innerHTML = `<summary>${label} <small>${formatBytes(group.bytes)}・${group.objectCount.toLocaleString("ja-JP")}件</small></summary>`;
+        section.innerHTML = `<summary>${label} <small>${group.available === false ? "容量・件数取得不可" : formatBytes(group.bytes) + "・" + group.objectCount.toLocaleString("ja-JP") + "件"}</small></summary>`;
         const content = document.createElement("div");
-        if (kind === "photo") {
-          content.className = "backup-photo-summary";
-          content.textContent = `写真バックアップ ${formatBytes(group.bytes)} / ${group.objectCount.toLocaleString("ja-JP")}オブジェクト・最終更新 ${backupJapanTime(group.lastUpdatedAt)}（日本時間）`;
+        if (group.available === false) {
+          content.textContent = 'この区分の容量・件数を取得できません。ほかの区分は引き続き確認できます。';
         } else {
           content.className = "backup-object-list";
           if (!group.objects.length) content.textContent = "バックアップがありません。";
           for (const object of group.objects) {
             const row = document.createElement("article");
             row.className = "backup-object";
-            row.innerHTML = `<strong>${escapeHtml(object.name)}</strong><span>${formatBytes(object.sizeBytes)}</span><small>更新 ${escapeHtml(backupJapanTime(object.updatedAt))}（日本時間）・${escapeHtml(object.format || "形式の記録なし")}・メディア ${backupMediaLabel(object.mediaComplete)}</small>`;
+            row.innerHTML = `<strong>${escapeHtml(object.name)}</strong><span>${formatBytes(object.sizeBytes)}</span><small>更新 ${escapeHtml(backupJapanTime(object.updatedAt))}（日本時間）・${escapeHtml(object.format || "形式の記録なし")}・DBのみ・写真は対象外</small>`;
             content.append(row);
           }
         }

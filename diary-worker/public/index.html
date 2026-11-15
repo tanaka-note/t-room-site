@@ -61,8 +61,8 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#50647d">
-  <meta name="troom-app-build" content="diary-668a548a5f66">
-  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-668a548a5f66">
+  <meta name="troom-app-build" content="diary-278bc2bd69a0">
+  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-278bc2bd69a0">
   <meta name="troom-auto-update" content="enabled">
   <meta name="application-name" content="日記">
   <meta name="mobile-web-app-capable" content="yes">
@@ -70,26 +70,28 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="日記">
   <title>日記</title>
-  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-668a548a5f66">
+  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-278bc2bd69a0">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64-v4.png?v=5">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon-v3.png?v=4">
-  <link rel="stylesheet" href="/diary/diary.css?v=diary-668a548a5f66">
-  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-668a548a5f66">
+  <link rel="stylesheet" href="/diary/diary.css?v=diary-278bc2bd69a0">
+  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-278bc2bd69a0">
+  <link rel="stylesheet" href="/diary/tlain-login.css?v=diary-278bc2bd69a0">
+  <script src="/diary/tlain-login.js?v=diary-278bc2bd69a0" defer></script>
 </head>
 <body>
-  <main id="boot-view" class="login-shell" aria-label="日記を準備中" aria-busy="true">
-    <section class="login-card">
+  <main id="boot-view" class="login-shell tlain-login-view" aria-label="日記を準備中" aria-busy="true">
+    <section class="login-card tlain-login-card">
       <p class="eyebrow">Private diary</p>
       <h1>日記</h1>
       <p class="login-description">安全なログイン状態を確認しています…</p>
     </section>
   </main>
 
-  <main id="login-view" class="login-shell" aria-labelledby="login-title" hidden>
-    <section class="login-card">
+  <main id="login-view" class="login-shell tlain-login-view" aria-labelledby="login-title" hidden>
+    <section class="login-card tlain-login-card">
       <p class="eyebrow">Private diary</p>
-      <h1 id="login-title">日記を開く</h1>
-      <p class="login-description">登録済みのパスキーでログインしてください。</p>
+      <h1 id="login-title">日記</h1>
+      <p class="login-description tlain-login-guidance">パスキーを使ってログインしてください。</p>
       <div class="login-actions">
         <button id="passkey-login" class="primary-button full-button login-button passkey-login-button" type="button"><svg class="passkey-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg><span id="passkey-login-label" class="passkey-login-label">パスキーでログイン</span></button>
         <p id="login-message" class="form-message" role="status" aria-live="polite"></p>
@@ -449,23 +451,23 @@
           <p class="section-kicker">Album</p>
           <h2>アルバム</h2>
         </div>
-        <button class="icon-button" type="button" data-close-dialog="camera-roll-dialog" aria-label="閉じる">×</button>
+        <div class="camera-roll-actions">
+          <button id="photo-sort-button" class="header-icon-button" type="button" aria-label="新しい順で表示中。古い順に並べ替え" title="新しい順で表示中。古い順に並べ替え" aria-pressed="false" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16m-4-4 4 4 4-4M13 5h8M13 10h6M13 15h4"></path></svg>
+          </button>
+          <button class="icon-button" type="button" data-close-dialog="camera-roll-dialog" aria-label="閉じる">×</button>
+        </div>
       </header>
       <div class="camera-roll-filters">
         <label>
           <span>タグ・内容検索</span>
-          <span class="auxiliary-search-field"><input id="photo-entry-search" type="search" maxlength="100" placeholder="タグ・日記名・本文"><button class="diary-search-clear" type="button" data-clear-search="photo-entry-search" aria-label="アルバムの検索キーワードをクリア">×</button></span>
+          <span class="auxiliary-search-field"><input id="photo-entry-search" type="search" maxlength="100" placeholder="タグ・日記名・本文・画像ファイル名"><button class="diary-search-clear" type="button" data-clear-search="photo-entry-search" aria-label="アルバムの検索キーワードをクリア">×</button></span>
         </label>
         <label>
           <span>年月</span>
-          <select id="photo-month-filter">
-            <option value="">すべて</option>
-          </select>
+          <button id="photo-month-filter" type="button" value="" aria-haspopup="dialog" aria-controls="date-wheel-dialog">すべて</button>
         </label>
-        <label>
-          <span>ファイル名検索</span>
-          <span class="auxiliary-search-field"><input id="photo-file-name-search" type="search" maxlength="100" placeholder="画像ファイル名"><button class="diary-search-clear" type="button" data-clear-search="photo-file-name-search" aria-label="ファイル名の検索キーワードをクリア">×</button></span>
-        </label>
+        <button id="photo-save-button" class="primary-button" type="button" aria-haspopup="dialog" aria-controls="photo-save-dialog">まとめて保存</button>
       </div>
       <p id="camera-roll-status" class="diary-search-status" aria-live="polite"></p>
       <div id="camera-roll-grid" class="camera-roll-grid"></div>
@@ -473,14 +475,55 @@
     </section>
   </dialog>
 
-  <dialog id="photo-viewer-dialog" class="photo-viewer-dialog">
+  <dialog id="photo-save-dialog" class="entry-dialog photo-save-dialog" aria-labelledby="photo-save-title">
+    <section class="entry-detail">
+      <header class="dialog-head">
+        <h2 id="photo-save-title">まとめて保存</h2>
+        <button class="icon-button" type="button" data-close-dialog="photo-save-dialog" aria-label="閉じる">×</button>
+      </header>
+      <div class="photo-save-fields">
+        <label for="photo-save-from">開始日
+          <span class="date-input-shell">
+            <input id="photo-save-from" type="text" inputmode="none" readonly aria-haspopup="dialog" aria-controls="date-wheel-dialog">
+            <button class="date-picker-button" type="button" data-date-picker-target="photo-save-from" data-date-picker-mode="date" aria-label="保存する開始日をカレンダーから選ぶ">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v3M17 3v3M4.5 9h15M6 5h12a2 2 0 0 1 2 2v12H4V7a2 2 0 0 1 2-2Z"/></svg>
+            </button>
+          </span>
+        </label>
+        <label for="photo-save-to">終了日
+          <span class="date-input-shell">
+            <input id="photo-save-to" type="text" inputmode="none" readonly aria-haspopup="dialog" aria-controls="date-wheel-dialog">
+            <button class="date-picker-button" type="button" data-date-picker-target="photo-save-to" data-date-picker-mode="date" aria-label="保存する終了日をカレンダーから選ぶ">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v3M17 3v3M4.5 9h15M6 5h12a2 2 0 0 1 2 2v12H4V7a2 2 0 0 1 2-2Z"/></svg>
+            </button>
+          </span>
+        </label>
+      </div>
+      <p id="photo-save-help" class="field-help"></p>
+      <p class="field-help">この画面を閉じても処理は続きます。アプリやブラウザの終了・画面ロックで停止した場合は、再度「まとめて保存」を開いて未完了分を再開できます。再開記録は7日間保持します。</p>
+      <p id="photo-save-status" class="diary-search-status" role="status" aria-live="polite"></p>
+      <div class="dialog-actions">
+        <button id="photo-save-fallback" class="secondary-button" type="button" hidden>1枚ずつダウンロードする</button>
+        <button id="photo-save-reset" class="quiet-button" type="button" hidden>期間を選び直す</button>
+        <button id="photo-save-pause" class="secondary-button" type="button" hidden>一時停止</button>
+        <button id="photo-save-retry" class="secondary-button" type="button" hidden>この分を再試行</button>
+        <button id="photo-save-start" class="primary-button" type="button" disabled>保存を開始</button>
+      </div>
+    </section>
+  </dialog>
+
+  <dialog id="photo-viewer-dialog" class="photo-viewer-dialog" aria-labelledby="photo-viewer-title" aria-describedby="photo-viewer-help">
     <section class="photo-viewer-shell">
       <header class="photo-viewer-head">
         <div>
           <p id="photo-viewer-date" class="entry-date"></p>
           <h2 id="photo-viewer-title"></h2>
         </div>
-        <button class="icon-button photo-viewer-close" type="button" data-close-dialog="photo-viewer-dialog" aria-label="閉じる">×</button>
+        <div class="photo-viewer-tools">
+          <button id="photo-zoom-reset" class="icon-button photo-viewer-close" type="button" aria-label="元の大きさに戻す">100%</button>
+          <button id="photo-fullscreen" class="icon-button photo-viewer-close" type="button" aria-label="全画面で表示" aria-pressed="false" hidden>全画面</button>
+          <button class="icon-button photo-viewer-close" type="button" data-close-dialog="photo-viewer-dialog" aria-label="閉じる">×</button>
+        </div>
       </header>
       <div class="photo-stage">
         <img id="photo-viewer-image" alt="" draggable="false">
@@ -490,10 +533,11 @@
         <p id="photo-viewer-file"></p>
         <div class="photo-viewer-actions">
           <button id="photo-open-entry" class="quiet-button" type="button">この日記を開く</button>
-          <a id="photo-download-low" class="secondary-button" href="#" download>低画質で保存</a>
+          <button id="photo-delete" class="danger-button" type="button" hidden>削除</button>
           <a id="photo-download-original" class="primary-button" href="#" download>元画質で保存</a>
         </div>
       </div>
+      <p id="photo-viewer-help" class="visually-hidden">ピンチまたはマウスホイールで拡大・縮小、拡大中はドラッグで移動できます。等倍では左右スワイプまたは左右キーで写真を切り替えます。キーボードの＋・－で拡大・縮小、0で元の大きさに戻します。</p>
     </section>
   </dialog>
 
@@ -507,6 +551,7 @@
         </div>
         <button id="date-wheel-done" class="text-button" type="button">完了</button>
       </header>
+      <button id="date-wheel-all" class="date-wheel-all" type="button" hidden>すべて</button>
       <div class="date-wheel-window">
         <div class="date-wheel-highlight" aria-hidden="true"></div>
         <div class="date-wheel-group">
@@ -526,8 +571,8 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/assets/pwa-auto-update.js?v=diary-668a548a5f66" defer></script>
-  <script src="/security/passkey-client.js?v=diary-668a548a5f66" defer></script>
-  <script src="/diary/diary-bootstrap.js?v=diary-668a548a5f66" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=diary-278bc2bd69a0" defer></script>
+  <script src="/security/passkey-client.js?v=diary-278bc2bd69a0" defer></script>
+  <script src="/diary/diary-bootstrap.js?v=diary-278bc2bd69a0" defer></script>
 </body>
 </html>

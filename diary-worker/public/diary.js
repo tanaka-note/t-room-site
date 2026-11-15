@@ -1,4 +1,12 @@
 export async function startDiary(initialSession, deferredInstallPrompt = null, onReady = () => deferredInstallPrompt, initialScrollIntent = {}) {
+  const migrationYear = new URL(location.href).searchParams.get("takeout-migration");
+  if (["2023", "2024", "2025"].includes(migrationYear)) {
+    if (!initialSession?.authenticated || !initialSession.canManageEntries) throw new Error("日記を作成できるアカウントでログインしてください。");
+    const migrationUrl = new URL(`photo-migration.js${new URL(import.meta.url).search}`, import.meta.url);
+    await (await import(migrationUrl.href)).mountMigration(initialSession, Number(migrationYear));
+    onReady();
+    return;
+  }
   // Keep the shared module on the same build URL as this app shell, including offline fallback.
   const scriptUrl = new URL(import.meta.url);
   let splitSearchTerms, createSearchExcerpt, highlightSearchTerms;
@@ -7,6 +15,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     replaceTextInRichDocument, sameTextMarks, tokenizeEditorDocument, tokenizeEntryTextWithLinks, withoutPhotoMarkers;
   let WEATHER_LABELS, createWeatherIcon, createUnsetWeatherIcon;
   let photoViewer, photoViewerPromise;
+  let photoSaver, photoSaverPromise;
   let viewerOpenRequest = 0;
   const readingToolsReady = Promise.all([
     import(new URL(`diary-search.js${scriptUrl.search}`, scriptUrl).href),
@@ -31,6 +40,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   const RETURN_VIEW_MAX_AGE_MS = 6 * 60 * 60 * 1000;
   const MONTH_HEADING_SCROLL_GAP_PX = 12;
   const TAG_SUGGESTION_MAX_HEIGHT = 246;
+  const CAMERA_ROLL_MAX_PHOTOS = 4800;
+  const CAMERA_ROLL_PAGE_SIZE = 96;
+  const CAMERA_ROLL_LOAD_BUDGET_MS = 8000;
   const RICH_TEXT_COLORS = Object.freeze({
     default: "#27313b",
     red: "#b42318",
@@ -65,6 +77,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     query: "",
     month: japanDateString().slice(0, 7),
     monthExpanded: false,
+    archiveMonths: [],
+    archiveYear: "",
+    archiveMonth: "",
     dateFrom: "",
     dateTo: "",
     tag: "",
@@ -86,14 +101,21 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     editorToolbarOpen: false,
     dateDraft: null,
     dateWheelTarget: null,
+    dateWheelMode: "date",
     dateWheelTimers: {},
+    dateWheelScrollVersion: 0,
     searchTimer: null,
     searchComposing: false,
     entriesAbortController: null,
     requestId: 0,
     deleteMode: null,
+    photoDeleteTarget: null,
+    photoDeleteBusy: false,
+    deletedPhotoIds: new Set(),
+    photoDeletionUpdates: new Map(),
     editorPhotos: [],
     editorDeletedPhotoIds: new Set(),
+    editorPendingPhotoDeletionIds: new Set(),
     photoPreparing: false,
     photoPreparationPromise: null,
     photoUploading: false,
@@ -109,7 +131,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     photoHasMore: false,
     photoEntryQuery: "",
     photoMonth: "",
-    photoFileNameQuery: "",
+    photoMonthCounts: null,
+    albumVisit: 0,
+    photoOrder: "newest",
     photoRequestId: 0,
     photoLoading: false,
     photoSearchTimer: null,
@@ -231,13 +255,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     dateWheelCancel: document.querySelector("#date-wheel-cancel"),
     dateWheelDone: document.querySelector("#date-wheel-done"),
     dateWheelValue: document.querySelector("#date-wheel-value"),
+    dateWheelTitle: document.querySelector("#date-wheel-title"),
+    dateWheelAll: document.querySelector("#date-wheel-all"),
     dateWheelYear: document.querySelector("#date-wheel-year"),
     dateWheelMonth: document.querySelector("#date-wheel-month"),
     dateWheelDay: document.querySelector("#date-wheel-day"),
     cameraRollDialog: document.querySelector("#camera-roll-dialog"),
     photoEntrySearch: document.querySelector("#photo-entry-search"),
     photoMonthFilter: document.querySelector("#photo-month-filter"),
-    photoFileNameSearch: document.querySelector("#photo-file-name-search"),
+    photoSortButton: document.querySelector("#photo-sort-button"),
     cameraRollStatus: document.querySelector("#camera-roll-status"),
     cameraRollGrid: document.querySelector("#camera-roll-grid"),
     cameraRollMore: document.querySelector("#camera-roll-more"),
@@ -249,7 +275,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     photoViewerStatus: document.querySelector("#photo-viewer-status"),
     photoViewerFile: document.querySelector("#photo-viewer-file"),
     photoOpenEntry: document.querySelector("#photo-open-entry"),
-    photoDownloadLow: document.querySelector("#photo-download-low"),
+    photoDelete: document.querySelector("#photo-delete"),
     photoDownloadOriginal: document.querySelector("#photo-download-original"),
     toast: document.querySelector("#toast")
   };
@@ -262,14 +288,13 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         import(new URL(`diary-photo-processing.js${scriptUrl.search}`, scriptUrl).href),
         import(new URL(`diary-photo-upload.js${scriptUrl.search}`, scriptUrl).href)
       ]).then(([processing, upload]) => {
-        photoUploadManager = upload.createPhotoUploadManager({ state, api, basePath: BASE_PATH,
+        photoUploadManager = upload.createPhotoUploadManager({ state, api, basePath: BASE_PATH, onSessionExpired:()=>{resetState();showLogin("ログインの有効期限が切れました。");},
           getTargetEntryId: () => Number(elements.entryId.value || 0) || null });
         return processing;
       }).catch(error => { photoToolsPromise = null; throw error; });
     }
     return photoToolsPromise;
   }
-  async function preparePhoto(file) { return (await loadPhotoTools()).preparePhoto(file); }
   function cancelEditorPhotoUploadSession() { return photoUploadManager?.cancelEditorPhotoUploadSession(); }
   function commitStagedPhotos(...args) { return photoUploadManager.commitStagedPhotos(...args); }
   function deleteStagedPhotoUpload(...args) { return photoUploadManager?.deleteStagedPhotoUpload(...args); }
@@ -332,18 +357,22 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         photoViewer = viewer.createPhotoViewer({
           nodes: {
             dialog: elements.photoViewerDialog, stage: elements.photoStage,
+            shell: elements.photoViewerDialog.querySelector('.photo-viewer-shell'),
+            zoomReset: document.querySelector('#photo-zoom-reset'),
+            fullscreen: document.querySelector('#photo-fullscreen'),
             date: elements.photoViewerDate, title: elements.photoViewerTitle,
             get image() { return elements.photoViewerImage; },
             set image(value) { elements.photoViewerImage = value; },
             status: elements.photoViewerStatus, file: elements.photoViewerFile,
-            downloadLow: elements.photoDownloadLow, downloadOriginal: elements.photoDownloadOriginal
+            deleteButton: elements.photoDelete, downloadOriginal: elements.photoDownloadOriginal
           },
           selection: {
             get photos() { return state.viewerPhotos; },
             get index() { return state.viewerIndex; },
             set index(value) { state.viewerIndex = value; }
           },
-          formatDate, formatBytes
+          formatDate, formatBytes, canDelete: canDeleteViewerPhoto,
+          canNavigate: () => !state.photoDeleteBusy
         });
         photoViewer.bind();
         return photoViewer;
@@ -353,8 +382,19 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function bindEvents() {
+    const compactArchive = window.matchMedia("(max-width: 860px)");
+    const placeArchive = () => {
+      const parent = compactArchive.matches ? elements.diaryMain : elements.tagPanel.parentElement;
+      const next = compactArchive.matches ? elements.entryList.closest("section") : elements.tagPanel;
+      if (elements.archivePanel.parentElement === parent) return;
+      const position = !elements.appView.hidden ? captureEntryListPosition() : null;
+      parent.insertBefore(elements.archivePanel, next);
+      if (position) restoreEntryListPosition(position);
+    };
+    placeArchive();
+    compactArchive.addEventListener("change", placeArchive);
     document.addEventListener("troom:before-auto-update", (event) => {
-      if (hasEditorChanges() || state.editorComposing || state.photoPreparing || state.photoUploading || state.photoPickerActive || document.querySelector("dialog[open]")) {
+      if (hasEditorChanges() || state.editorComposing || state.photoPreparing || state.photoUploading || state.photoPickerActive || photoSaver?.busy || document.querySelector("dialog[open]")) {
         event.preventDefault();
       }
     });
@@ -427,6 +467,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     });
     elements.entryList.addEventListener("click", handleEntryListClick);
     elements.archiveList.addEventListener("click", handleArchiveClick);
+    elements.archiveList.addEventListener("change", (event) => {
+      if (event.target.id !== "archive-year-select") return;
+      state.archiveYear = event.target.value;
+      renderArchive(state.archiveMonths);
+      if (!state.entriesAbortController) storeDiaryReturnView("", { historyOnly: true });
+    });
     elements.editEntryButton.addEventListener("click", () => {
       if (state.activeEntry) {
         const entry = state.activeEntry;
@@ -481,6 +527,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     bindDateInput(elements.entryDate);
     elements.dateWheelCancel.addEventListener("click", closeDateWheel);
     elements.dateWheelDone.addEventListener("click", applyDateWheel);
+    elements.dateWheelAll.addEventListener("click", () => {
+      if (state.dateWheelMode !== "month") return;
+      setPhotoMonth("");
+      closeDateWheel();
+    });
+    elements.photoMonthFilter.addEventListener("click", () => openDateWheel(elements.photoMonthFilter));
 
     bindDateWheel(elements.dateWheelYear, "year");
     bindDateWheel(elements.dateWheelMonth, "month");
@@ -500,7 +552,18 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.cameraRollMore.addEventListener("click", () => loadPhotos(false));
     elements.cameraRollGrid.addEventListener("click", handleCameraRollClick);
     elements.photoMonthFilter.addEventListener("change", () => {
+      const previousMonth = state.photoMonth;
       state.photoMonth = elements.photoMonthFilter.value;
+      renderPhotoMonthFilter();
+      if (!state.photoMonth) state.photoOrder = "newest";
+      else if (!previousMonth) state.photoOrder = "oldest";
+      updatePhotoSortButton();
+      loadPhotos(true);
+    });
+    elements.photoSortButton.addEventListener("click", () => {
+      if (!state.photoMonth) return;
+      state.photoOrder = state.photoOrder === "newest" ? "oldest" : "newest";
+      updatePhotoSortButton();
       loadPhotos(true);
     });
     elements.photoEntrySearch.addEventListener("input", () => {
@@ -509,13 +572,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       state.photoEntryQuery = elements.photoEntrySearch.value.trim();
       state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
     });
-    elements.photoFileNameSearch.addEventListener("input", () => {
-      cancelCameraRollLoad();
-      elements.cameraRollMore.disabled = true;
-      state.photoFileNameQuery = elements.photoFileNameSearch.value.trim();
-      state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
-    });
+    document.querySelector("#photo-save-button").addEventListener("click", openPhotoSave);
     elements.photoOpenEntry.addEventListener("click", openViewerEntry);
+    elements.photoDelete.addEventListener("click", requestPhotoDeletion);
 
     document.querySelectorAll("[data-close-dialog]").forEach((button) => {
       button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
@@ -650,6 +709,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function enterDiary(session) {
+    photoSaver?.suspend();
     cancelPositionRestoration();
     const restoreVersion = initialScrollIntent.interrupted ? -1 : positionVersion;
     const generation = ++sessionGeneration;
@@ -664,6 +724,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.canViewTrash = Boolean(session.canViewTrash);
     state.canPermanentlyDelete = Boolean(session.canPermanentlyDelete);
     state.canViewInvestment = Boolean(session.canViewInvestment);
+    clearArchive();
     const returnView = takeDiaryReturnView(state.activeHouseholdId);
     if (!returnView && "scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
     if (returnView) {
@@ -683,7 +744,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.householdSwitcherWrap.hidden = true;
     elements.householdSwitcher.replaceChildren();
     elements.entryList.replaceChildren(createEmpty("読み込んでいます..."));
-    elements.archiveList.replaceChildren();
     elements.tagList.replaceChildren();
     elements.bootView.hidden = true;
     elements.loginView.hidden = true;
@@ -715,6 +775,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function changeActiveHousehold() {
+    photoSaver?.suspend();
     const householdId = elements.householdSwitcher.value;
     elements.householdSwitcher.disabled = true;
     try {
@@ -724,7 +785,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       state.activeHouseholdId = householdId;
       updateDiaryReturnNavigation();
       state.availableTags = [];
-      elements.archiveList.replaceChildren();
+      clearArchive();
       elements.tagList.replaceChildren();
       state.trash = false;
       state.drafts = false;
@@ -945,6 +1006,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       query: state.query,
       month: state.month,
       monthExpanded: state.monthExpanded,
+      archiveYear: state.archiveYear,
       dateFrom: state.dateFrom,
       dateTo: state.dateTo,
       tagQuery: state.tagQuery,
@@ -1041,6 +1103,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.query = splitSearchTerms(returnView.query).join(" ");
     state.month = /^\d{4}-\d{2}$/.test(returnView.month) ? returnView.month : currentJapanMonth();
     state.monthExpanded = Boolean(returnView.monthExpanded);
+    state.archiveYear = /^\d{4}$/.test(returnView.archiveYear) ? returnView.archiveYear : "";
     state.dateFrom = /^\d{4}-\d{2}-\d{2}$/.test(returnView.dateFrom) ? returnView.dateFrom : "";
     state.dateTo = /^\d{4}-\d{2}-\d{2}$/.test(returnView.dateTo) ? returnView.dateTo : "";
     state.tagQuery = String(returnView.tagQuery || "").normalize("NFKC").trim().toLocaleLowerCase("ja-JP").slice(0, 100);
@@ -1121,9 +1184,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     } catch {
       return false;
     }
-    return returnView?.version === 2
+    const href = diaryListHref(destinationPath);
+    return Boolean(href) && returnView?.version === 2
       && returnView.destinationPath === window.location.pathname
-      && returnView.routePath === destinationPath
+      && diaryListHref(returnView.routePath) === href
       && isOwnedDiaryReturnView(returnView)
       && window.history.state?.[RETURN_NAVIGATION_KEY] === returnView.savedAt
       && Date.now() - returnView.savedAt <= RETURN_VIEW_MAX_AGE_MS;
@@ -1253,24 +1317,65 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.entryList.replaceChildren(...cards);
   }
 
+  function clearArchive() {
+    state.archiveMonths = [];
+    state.archiveYear = "";
+    state.archiveMonth = "";
+    elements.archiveList.replaceChildren();
+  }
+
   function renderArchive(months) {
+    const monthChanged = state.archiveMonth && state.archiveMonth !== state.month;
+    state.archiveMonths = months;
+    state.archiveMonth = state.month;
     if (!months.length) {
+      state.archiveYear = "";
       elements.archiveList.replaceChildren(createEmpty("年月別の記録はまだありません。"));
       return;
     }
-    elements.archiveList.replaceChildren(...months.map((item) => {
+    const years = [...new Set(months.map(item => item.value.slice(0, 4)))].sort().reverse();
+    const selectedYear = state.month.slice(0, 4);
+    if (monthChanged || !years.includes(state.archiveYear)) {
+      state.archiveYear = years.includes(selectedYear) ? selectedYear : years[0];
+    }
+    const heading = document.createElement(years.length > 1 ? "label" : "p");
+    heading.className = "archive-year";
+    if (years.length > 1) {
+      const label = document.createElement("span");
+      label.textContent = "年を選ぶ";
+      const select = document.createElement("select");
+      select.id = "archive-year-select";
+      select.replaceChildren(...years.map(year => {
+        const option = document.createElement("option");
+        option.value = year;
+        option.textContent = `${year}年`;
+        option.selected = year === state.archiveYear;
+        return option;
+      }));
+      heading.append(label, select);
+    } else heading.textContent = `${state.archiveYear}年`;
+    const grid = document.createElement("div");
+    grid.className = "archive-month-grid";
+    grid.setAttribute("role", "group");
+    grid.setAttribute("aria-label", `${state.archiveYear}年の記録がある月`);
+    grid.replaceChildren(...months.filter(item => item.value.startsWith(`${state.archiveYear}-`))
+      .sort((a, b) => a.value.localeCompare(b.value)).map((item) => {
       const button = document.createElement("button");
       button.className = "archive-button";
       button.type = "button";
       button.dataset.month = item.value;
-      button.setAttribute("aria-pressed", String(state.month === item.value));
+      button.setAttribute("aria-pressed", String(isMonthlyView() && state.month === item.value));
+      button.setAttribute("aria-label", `${formatMonth(item.value)}、${item.count}件`);
       const label = document.createElement("span");
-      label.textContent = formatMonth(item.value);
+      label.textContent = `${Number(item.value.slice(5))}月`;
       const count = document.createElement("small");
       count.textContent = `${item.count}件`;
       button.append(label, count);
       return button;
     }));
+    const focusedYear = document.activeElement?.id === "archive-year-select";
+    elements.archiveList.replaceChildren(heading, grid);
+    if (focusedYear) elements.archiveList.querySelector("select")?.focus({ preventScroll: true });
   }
 
   function renderTags(tags) {
@@ -1517,19 +1622,40 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       capture: () => state.activeEntry,
       restore: entry => {
         if (!canView() || !entry || !state.entryMap.has(entry.id)) return false;
+        applyPhotoDeletionToEntry(entry);
         state.activeEntry = entry;
         renderEntryDetail(entry);
       },
       onClose: finishEntryClose
     });
-    dialogs.register("camera-roll-dialog", { scrollRoots: () => [], restore: canView, onClose: finishCameraRollClose });
+    dialogs.register("camera-roll-dialog", {
+      scrollRoots: () => [],
+      restore: () => {
+        if (!canView()) return false;
+        void loadCameraRoll();
+        window.requestAnimationFrame(() => { elements.cameraRollDialog.scrollTop = 0; });
+        return true;
+      },
+      onClose: finishCameraRollClose
+    });
+    dialogs.register("photo-save-dialog", {
+      guard: () => photoSaver?.canClose() ?? true,
+      restore: () => canView() && Boolean(photoSaver?.restore()),
+      onClose: () => photoSaver?.onClose()
+    });
     dialogs.register("photo-viewer-dialog", {
       scrollRoots: () => [],
-      capture: () => ({ photos: state.viewerPhotos, index: state.viewerIndex }),
+      guard: () => !state.photoDeleteBusy,
+      capture: () => ({ photos: state.viewerPhotos, index: state.viewerIndex, photoId: state.viewerPhotos[state.viewerIndex]?.id,
+        albumVisit: elements.cameraRollDialog.open ? state.albumVisit : null }),
       restore: saved => {
-        if (!canView() || !photoViewer || !saved.photos[saved.index]) return false;
+        if (!canView() || !photoViewer) return false;
+        if (saved.albumVisit != null && saved.albumVisit !== state.albumVisit) return false;
+        removeDeletedPhotos(saved.photos);
+        if (!saved.photos.length) return false;
         state.viewerPhotos = saved.photos;
-        state.viewerIndex = saved.index;
+        const index = saved.photos.findIndex(photo => photo.id === saved.photoId);
+        state.viewerIndex = index < 0 ? Math.min(saved.index, saved.photos.length - 1) : index;
         photoViewer.render();
       },
       onClose: finishPhotoViewerClose
@@ -1548,8 +1674,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       onClose: finishEditorClose
     });
     dialogs.register("editor-leave-dialog", { guard: () => !state.editorSaving });
-    dialogs.register("delete-confirm-dialog", { onClose: () => { state.deleteMode = null; } });
-    dialogs.register("date-wheel-dialog", { backdrop: applyDateWheel, onClose: () => { state.dateWheelTarget = null; } });
+    dialogs.register("delete-confirm-dialog", {
+      guard: () => !state.photoDeleteBusy,
+      onClose: () => { state.deleteMode = null; state.photoDeleteTarget = null; }
+    });
+    dialogs.register("date-wheel-dialog", { backdrop: applyDateWheel, onClose: () => {
+      for (const timer of Object.values(state.dateWheelTimers)) window.clearTimeout(timer);
+      state.dateWheelTarget = null;
+      state.dateDraft = null;
+    } });
   }
 
   function requestEditorClose() {
@@ -1744,7 +1877,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   async function handlePhotoSelection() {
     finishPhotoPickerInteraction();
     const files = [...(elements.photoInput.files || [])];
-    elements.photoInput.value = "";
     const insertionOffset = state.photoInsertionOffset ?? getEditorSelectionOffset("end");
     state.photoInsertionOffset = null;
     await prepareSelectedPhotos(files, insertionOffset);
@@ -1829,19 +1961,18 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     const preparedPhotos = [];
     let preparedCount = 0;
     try {
-      for (let index = 0; index < files.length; index += 1) {
-        const file = files[index];
-        elements.photoPreparationStatus.textContent = `写真を準備中 ${index + 1}/${files.length}`;
-        try {
-          const preparationStarted = Date.now();
-          const photo = await preparePhoto(file);
-          photo.preparationMs = Date.now() - preparationStarted;
+      const processing = await loadPhotoTools();
+      const progress = index => { elements.photoPreparationStatus.textContent = `写真を準備中 ${index + 1}/${files.length}`; };
+      for await (const result of processing.preparePhotoBatch(files, progress)) {
+        if (result.error) {
+          failures.push(`${files[result.index].name}：${result.error.message}`);
+        } else {
+          const photo = result.photo;
+          photo.preparationMs = result.preparationMs;
           state.editorPhotos.push(photo);
           preparedPhotos.push(photo);
           preparedCount += 1;
           queueBackgroundPhotoUpload(photo);
-        } catch (error) {
-          failures.push(`${file.name}：${error.message}`);
         }
       }
       await waitForEditorCompositionEnd();
@@ -1850,9 +1981,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       }
       renderEditorPhotos();
       elements.photoPreparationStatus.textContent = failures.length
-        ? `${preparedCount}件を追加しました。追加できなかったファイル：${failures.join(" / ")}`
+        ? `${preparedCount}件を追加しました。追加できなかったファイル（${failures.length}件）：${failures.slice(0, 3).join(" / ")}${failures.length > 3 ? ` / ほか${failures.length - 3}件` : ""}`
         : `${preparedCount}件の写真を本文へ追加しました。`;
+    } catch {
+      elements.photoPreparationStatus.textContent = "写真の準備を完了できませんでした。もう一度お試しください。";
     } finally {
+      elements.photoInput.value = "";
       state.photoPreparing = false;
       elements.photoInput.disabled = false;
       elements.photoDropZone.classList.remove("is-busy", "is-dragging");
@@ -2442,7 +2576,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       if (photo.existing && !window.confirm("この画像を日記から削除しますか？保存するまで削除は確定しません。")) return;
       removePhotoMarkerFromEditor(photoMarker(photo.id));
       if (photo.previewUrl) URL.revokeObjectURL(photo.previewUrl);
-      if (photo.existing) state.editorDeletedPhotoIds.add(photo.id);
+      if (photo.existing) {
+        state.editorDeletedPhotoIds.add(photo.id);
+        state.editorPendingPhotoDeletionIds.add(photo.id);
+      }
       else void deleteStagedPhotoUpload(photo).catch(() => {
         elements.photoPreparationStatus.textContent = "一時保存した画像は後ほど自動的に削除されます。";
       });
@@ -2455,9 +2592,11 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function clearEditorPhotos() {
     for (const photo of state.editorPhotos) {
       if (photo.previewUrl) URL.revokeObjectURL(photo.previewUrl);
+      photo.removed=true;photo.originalFile=photo.displayBlob=photo.thumbnailBlob=null;photo.fileName="";
     }
     state.editorPhotos = [];
     state.editorDeletedPhotoIds.clear();
+    state.editorPendingPhotoDeletionIds.clear();
     state.photoUploadSessionId = null;
     state.photoUploadSessionTiming = null;
     state.photoUploadSessionPromise = null;
@@ -2652,7 +2791,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         ? api(`/entries/${id}`, { method: "PUT", body: provisionalBody })
         : createEntryIdempotently(provisionalBody));
       const failures = [];
-      const deletedPhotoIds = [...state.editorDeletedPhotoIds];
+      // Persisted exclusions also contain historical/already-deleted photos and
+      // draft intent. Only this editor's explicit removals request a DELETE.
+      const deletedPhotoIds = [...state.editorPendingPhotoDeletionIds];
       const promotedEditDraft = targetStatus === "published"
         && elements.entryStatus.value === "draft"
         && Boolean(sourceEntry?.draftOfEntryId);
@@ -2664,11 +2805,20 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       const deletionsToApply = promotedEditDraft
         ? []
         : deletedPhotoIds.filter((photoId) => targetStatus === "published" || photoOwners.get(photoId) === saved.entry.id);
+      if (promotedEditDraft) {
+        // The publish transaction already applied draft exclusions. Do not
+        // replay them if a later photo commit fails and the editor is retried.
+        for (const photoId of deletedPhotoIds) {
+          state.editorPendingPhotoDeletionIds.delete(photoId);
+          state.editorDeletedPhotoIds.delete(photoId);
+        }
+      }
       for (let index = 0; index < deletionsToApply.length; index += 1) {
         const photoId = deletionsToApply[index];
         setEditorSaveBusy(true, `画像を削除中 ${index + 1}/${deletionsToApply.length}`);
         try {
           await deletePhoto(photoId);
+          state.editorPendingPhotoDeletionIds.delete(photoId);
           state.editorDeletedPhotoIds.delete(photoId);
         } catch (error) {
           failures.push(`画像の削除：${error.message}`);
@@ -2819,25 +2969,99 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.saveDraftButton.textContent = "下書き保存";
   }
 
+  async function openPhotoSave() {
+    const generation = sessionGeneration;
+    try {
+      if (!photoSaverPromise) {
+        photoSaverPromise = import(new URL(`diary-photo-save.js${scriptUrl.search}`, scriptUrl).href).then(module => {
+          photoSaver = module.createPhotoSaveManager({ api, dialogs, formatBytes, bindDateInput, onNotice: showToast,
+            getOwner: () => activeSessionContext && JSON.stringify([activeSessionContext, state.activeHouseholdId]),
+            getDefaultRange: () => {
+              const month = state.photoMonth || currentJapanMonth();
+              const [year, number] = month.split("-").map(Number);
+              return { from: `${month}-01`, to: `${month}-${new Date(Date.UTC(year, number, 0)).getUTCDate()}` };
+            },
+            onSessionExpired: () => { resetState(); showLogin("ログインして未完了分を再開してください。"); }
+          });
+          return photoSaver;
+        }).catch(error => { photoSaverPromise = null; throw error; });
+      }
+      const saver = await photoSaverPromise;
+      if (generation === sessionGeneration && !elements.appView.hidden) await saver.open();
+    } catch (error) { if (generation === sessionGeneration) showToast(error.message); }
+  }
+
   async function openCameraRoll() {
     dialogs.open("camera-roll-dialog");
+    elements.cameraRollDialog.scrollTop = 0;
+    await loadCameraRoll();
+  }
+
+  async function loadCameraRoll() {
+    const visit = state.albumVisit;
+    updatePhotoSortButton();
     elements.cameraRollStatus.textContent = "写真を読み込んでいます...";
     try {
       await Promise.all([loadPhotoMeta(), loadPhotos(true)]);
     } catch (error) {
-      elements.cameraRollStatus.textContent = error.message;
+      if (visit === state.albumVisit && elements.cameraRollDialog.open) elements.cameraRollStatus.textContent = error.message;
     }
   }
 
   async function loadPhotoMeta() {
+    const generation = sessionGeneration;
+    const visit = state.albumVisit;
     const result = await api("/photos/meta");
-    const monthValue = state.photoMonth;
-    const months = result.months || [];
-    const totalCount = months.reduce((total, item) => total + Number(item.count || 0), 0);
-    elements.photoMonthFilter.replaceChildren(createOption("", `すべて（${totalCount}）`), ...months.map((item) => (
-      createOption(item.value, `${formatMonth(item.value)}（${item.count}）`)
-    )));
-    elements.photoMonthFilter.value = monthValue;
+    if (generation !== sessionGeneration || visit !== state.albumVisit) return;
+    state.photoMonthCounts = new Map((result.months || []).map(item => [item.value, Number(item.count || 0)]));
+    renderPhotoMonthFilter();
+    if (elements.dateWheelDialog.open && state.dateWheelMode === "month") renderPhotoMonthCounts();
+    updatePhotoSortButton();
+  }
+
+  function photoCountLabel(month = "") {
+    if (!state.photoMonthCounts) return "";
+    const count = month ? state.photoMonthCounts.get(month) || 0
+      : [...state.photoMonthCounts.values()].reduce((total, value) => total + value, 0);
+    return `${count.toLocaleString("ja-JP")}枚`;
+  }
+
+  function renderPhotoMonthFilter() {
+    const label = state.photoMonth ? formatMonth(state.photoMonth) : "すべて";
+    const count = photoCountLabel(state.photoMonth);
+    elements.photoMonthFilter.value = state.photoMonth;
+    elements.photoMonthFilter.textContent = label + (count ? `（${count}）` : "");
+  }
+
+  function setPhotoMonth(value) {
+    if (elements.photoMonthFilter.value === value) return;
+    elements.photoMonthFilter.value = value;
+    elements.photoMonthFilter.dispatchEvent(new Event("input", { bubbles: true }));
+    elements.photoMonthFilter.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function renderPhotoMonthCounts() {
+    const year = state.dateDraft.year;
+    elements.dateWheelMonth.dataset.countYear = String(year);
+    for (const option of elements.dateWheelMonth.querySelectorAll(".date-wheel-option")) {
+      const month = Number(option.dataset.value);
+      const value = `${year}-${String(month).padStart(2, "0")}`;
+      const count = photoCountLabel(value);
+      option.querySelector(".date-wheel-count").textContent = count;
+      option.dataset.empty = String(!state.photoMonthCounts?.get(value));
+      option.setAttribute("aria-label", `${year}年${month}月` + (count ? `、${count}` : ""));
+    }
+    const total = photoCountLabel();
+    elements.dateWheelAll.textContent = "すべて" + (total ? `（${total}）` : "");
+  }
+
+  function updatePhotoSortButton() {
+    const oldest = state.photoOrder === "oldest";
+    elements.photoSortButton.hidden = !state.photoMonth;
+    elements.photoSortButton.setAttribute("aria-pressed", String(oldest));
+    const label = oldest ? "古い順で表示中。新しい順に並べ替え" : "新しい順で表示中。古い順に並べ替え";
+    elements.photoSortButton.setAttribute("aria-label", label);
+    elements.photoSortButton.title = label;
   }
 
   function shouldShowEntryAuthor() {
@@ -2859,7 +3083,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function loadPhotos(reset) {
-    if (!reset && state.photoLoading) return;
+    if (!reset && (state.photoLoading || state.photos.length >= CAMERA_ROLL_MAX_PHOTOS)) return;
     const requestId = ++state.photoRequestId;
     state.photoLoading = true;
     elements.cameraRollMore.disabled = true;
@@ -2871,26 +3095,33 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       elements.cameraRollGrid.replaceChildren();
       elements.cameraRollStatus.textContent = "写真を読み込んでいます...";
     }
-    // Keep the initial request and each page small; one click expands a month
-    // completely, or adds at most three pages when all months are selected.
-    const maxAdditional = reset ? 48 : (state.photoMonth ? Infinity : 144);
-    const parameters = new URLSearchParams({ limit: "48" });
+    // Keep opening light. Expand progressively, with the same total bound for
+    // all months and filtered results, including retries and repeated clicks.
+    const maxAdditional = reset ? 48 : CAMERA_ROLL_MAX_PHOTOS - state.photos.length;
+    const parameters = new URLSearchParams();
     if (state.photoEntryQuery) parameters.set("entryQuery", state.photoEntryQuery);
-    if (state.photoMonth) parameters.set("month", state.photoMonth);
-    if (state.photoFileNameQuery) parameters.set("fileName", state.photoFileNameQuery);
+    if (state.photoMonth) {
+      parameters.set("month", state.photoMonth);
+      parameters.set("order", state.photoOrder);
+    }
     let added = 0;
+    const started = performance.now();
     try {
       do {
+        const limit = Math.min(reset ? 48 : CAMERA_ROLL_PAGE_SIZE, maxAdditional - added);
+        parameters.set("limit", String(limit));
         parameters.set("offset", String(state.photoOffset));
         const result = await api(`/photos?${parameters}`);
         if (requestId !== state.photoRequestId) return;
         const appendFrom = state.photos.length;
-        state.photos.push(...result.photos);
-        state.photoOffset += result.photos.length;
-        added += result.photos.length;
-        state.photoHasMore = Boolean(result.hasMore) && result.photos.length > 0;
+        const photos = result.photos.slice(0, limit);
+        state.photos.push(...photos);
+        state.photoOffset += photos.length;
+        added += photos.length;
+        state.photoHasMore = (Boolean(result.hasMore) || result.photos.length > limit) && photos.length > 0;
         renderCameraRoll(appendFrom);
-      } while (state.photoHasMore && added < maxAdditional);
+      } while (state.photoHasMore && added < maxAdditional
+        && performance.now() - started < CAMERA_ROLL_LOAD_BUDGET_MS);
     } catch (error) {
       if (requestId === state.photoRequestId) elements.cameraRollStatus.textContent = error.message;
     } finally {
@@ -2912,6 +3143,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         button.className = "camera-roll-item";
         button.type = "button";
         button.dataset.photoIndex = String(index);
+        button.dataset.photoId = photo.id;
         button.setAttribute("aria-label", `${formatDate(photo.entryDate)}「${photo.entryTitle || "無題"}」の写真を開く`);
         const image = document.createElement("img");
         image.src = photo.thumbnailUrl;
@@ -2932,8 +3164,14 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       });
       elements.cameraRollGrid.append(...cards);
     }
-    elements.cameraRollStatus.textContent = `${state.photos.length}件の写真を表示しています。`;
-    elements.cameraRollMore.hidden = !state.photoHasMore;
+    renderCameraRollStatus();
+  }
+
+  function renderCameraRollStatus() {
+    const atLimit = state.photos.length >= CAMERA_ROLL_MAX_PHOTOS;
+    elements.cameraRollStatus.textContent = `${state.photos.length.toLocaleString("ja-JP")}件の写真を表示しています。`
+      + (atLimit && state.photoHasMore ? "表示上限に達しました。年月や検索条件で絞り込んでください。" : "");
+    elements.cameraRollMore.hidden = !state.photoHasMore || atLimit;
   }
 
   function handleCameraRollClick(event) {
@@ -2956,6 +3194,119 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     dialogs.open("photo-viewer-dialog");
   }
 
+  function canDeleteViewerPhoto(photo) {
+    if (!state.canManageEntries || elements.editorDialog.open || state.deletedPhotoIds.has(photo.id)) return false;
+    return state.viewerPhotos === state.photos || (state.viewerPhotos === state.activeEntry?.photos
+      && state.activeEntry.status === "published" && !state.activeEntry.deletedAt);
+  }
+
+  async function requestPhotoDeletion() {
+    const photo = state.viewerPhotos[state.viewerIndex];
+    if (!photo || state.photoDeleteBusy || !canDeleteViewerPhoto(photo)) return;
+    const generation = sessionGeneration;
+    const request = viewerOpenRequest;
+    state.photoDeleteBusy = true;
+    elements.photoDelete.disabled = true;
+    try {
+      const { entry } = await api(`/entries/${photo.entryId}`);
+      if (generation !== sessionGeneration || request !== viewerOpenRequest || !elements.photoViewerDialog.open) return;
+      if (entry.deletedAt || entry.status !== "published" || !entry.photos.some(item => item.id === photo.id)) {
+        throw new Error("写真の状態が変わっています。写真を開き直してください。");
+      }
+      state.photoDeleteTarget = { id: photo.id, entryId: entry.id, revision: entry.revision };
+      state.deleteMode = "photo";
+      elements.deleteConfirmTitle.textContent = "この写真を削除しますか？";
+      elements.deleteConfirmMessage.textContent = `「${photo.fileName}」を日記本文からも削除します。この操作は取り消せません。`;
+      elements.deleteConfirmYes.textContent = "削除";
+      dialogs.open("delete-confirm-dialog");
+    } catch (error) {
+      if (generation === sessionGeneration) showToast(error.message);
+    } finally {
+      if (generation === sessionGeneration) {
+        state.photoDeleteBusy = false;
+        elements.photoDelete.disabled = false;
+      }
+    }
+  }
+
+  function removeDeletedPhotos(photos) {
+    if (!photos) return;
+    for (let index = photos.length - 1; index >= 0; index--) {
+      if (state.deletedPhotoIds.has(photos[index].id)) photos.splice(index, 1);
+    }
+  }
+
+  function applyPhotoDeletionToEntry(entry) {
+    if (!entry) return;
+    const update = state.photoDeletionUpdates.get(entry.id);
+    if (update && entry.revision <= update.revision) {
+      Object.assign(entry, { content: update.content, contentFormat: update.contentFormat, revision: update.revision });
+    }
+    removeDeletedPhotos(entry.photos);
+  }
+
+  function removePhotoFromCameraRoll(id) {
+    const index = state.photos.findIndex(photo => photo.id === id);
+    if (index < 0) return;
+    const dialog = elements.cameraRollDialog;
+    const buttons = [...elements.cameraRollGrid.querySelectorAll("[data-photo-id]")];
+    const top = dialog.getBoundingClientRect().top;
+    const visible = buttons.find(button => button.getBoundingClientRect().bottom > top);
+    const anchor = visible?.dataset.photoId === id
+      ? buttons[index + 1] || buttons[index - 1] : visible;
+    const anchorTop = anchor?.getBoundingClientRect().top;
+    const scrollTop = dialog.scrollTop;
+    state.photos.splice(index, 1);
+    state.photoOffset = Math.max(0, state.photoOffset - 1);
+    buttons[index]?.remove();
+    [...elements.cameraRollGrid.querySelectorAll("[data-photo-index]")].forEach((button, offset) => {
+      button.dataset.photoIndex = String(offset);
+    });
+    if (!state.photos.length) elements.cameraRollGrid.replaceChildren(createEmpty("該当する写真はありません。"));
+    dialog.scrollTop = scrollTop + (anchor?.isConnected ? anchor.getBoundingClientRect().top - anchorTop : 0);
+    renderCameraRollStatus();
+  }
+
+  async function confirmPhotoDeletion() {
+    const target = state.photoDeleteTarget;
+    if (!target || state.photoDeleteBusy) return;
+    const generation = sessionGeneration;
+    state.photoDeleteBusy = true;
+    elements.deleteConfirmYes.disabled = true;
+    elements.deleteConfirmNo.disabled = true;
+    cancelCameraRollLoad();
+    let deleted = false;
+    try {
+      const result = await api(`/photos/${target.id}`, { method: "DELETE", body: { revision: target.revision } });
+      if (generation !== sessionGeneration) return;
+      state.deletedPhotoIds.add(target.id);
+      state.photoDeletionUpdates.set(result.entryId, result);
+      removePhotoFromCameraRoll(target.id);
+      removeDeletedPhotos(state.viewerPhotos);
+      state.viewerIndex = Math.min(state.viewerIndex, state.viewerPhotos.length - 1);
+      applyPhotoDeletionToEntry(state.activeEntry);
+      applyPhotoDeletionToEntry(state.entryMap.get(result.entryId));
+      if (state.activeEntry?.id === result.entryId && elements.entryDialog.open) renderEntryDetail(state.activeEntry);
+      deleted = true;
+    } catch (error) {
+      if (generation === sessionGeneration) showToast(error.message);
+    } finally {
+      if (generation === sessionGeneration) {
+        state.photoDeleteBusy = false;
+        elements.deleteConfirmYes.disabled = false;
+        elements.deleteConfirmNo.disabled = false;
+      }
+    }
+    if (generation !== sessionGeneration) return;
+    await closeDeleteConfirmation();
+    if (generation !== sessionGeneration) return;
+    if (!deleted) return;
+    if (state.viewerPhotos.length) photoViewer.render();
+    else await closePhotoViewerDialog();
+    showToast("写真を削除しました。");
+    try { await loadPhotoMeta(); } catch { showToast("写真は削除済みですが、件数を取得できませんでした。アルバムを開き直してください。"); }
+  }
+
   function closeCameraRollDialog(afterClose = null) {
     return dialogs.close("camera-roll-dialog", { after: typeof afterClose === "function" ? afterClose : undefined });
   }
@@ -2963,8 +3314,21 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function finishCameraRollClose() {
     viewerOpenRequest += 1;
     cancelCameraRollLoad();
+    state.albumVisit++;
+    state.photoMonth = "";
+    state.photoEntryQuery = "";
+    state.photoOrder = "newest";
+    state.photos = [];
+    state.photoOffset = 0;
+    state.photoHasMore = false;
+    elements.photoEntrySearch.value = "";
+    renderPhotoMonthFilter();
+    updatePhotoSortButton();
+    elements.cameraRollGrid.replaceChildren();
+    elements.cameraRollStatus.textContent = "";
+    elements.cameraRollMore.hidden = true;
+    elements.cameraRollDialog.scrollTop = 0;
     if (elements.cameraRollDialog.open) elements.cameraRollDialog.close();
-
   }
 
   function closePhotoViewerDialog(afterClose = null) {
@@ -2994,7 +3358,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function formatShortDate(value) {
     const [year, month, day] = String(value || "").split("-").map(Number);
-    return year && month && day ? `${year}.${month}.${day}` : "";
+    if (!year || !month || !day) return "";
+    const weekday = ["日", "月", "火", "水", "木", "金", "土"][new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+    return `${year}.${month}.${day}（${weekday}）`;
   }
 
   function formatBytes(value) {
@@ -3047,6 +3413,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function openDateWheel(target = elements.entryDate) {
     if (elements.dateWheelDialog.open) return;
     state.dateWheelTarget = target;
+    state.dateWheelMode = target === elements.photoMonthFilter ? "month" : "date";
     setDateDraft(target.value || japanDateString());
     renderDateWheel();
     dialogs.open("date-wheel-dialog");
@@ -3058,7 +3425,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function applyDateWheel() {
     if (!state.dateDraft) return closeDateWheel();
-    const nextValue = datePartsToString(state.dateDraft);
+    if (state.dateWheelMode === "month") {
+      // Commit the visible month even if a touch scroll's debounce is still pending.
+      for (const [column, key] of [[elements.dateWheelYear, "year"], [elements.dateWheelMonth, "month"]]) {
+        window.clearTimeout(state.dateWheelTimers[key]);
+        if (column.dataset.settingScroll !== "true") updateDateWheelFromScroll(column, key);
+      }
+    }
+    const nextValue = state.dateWheelMode === "month"
+      ? TRoomDatePicker.formatValue(state.dateDraft, "month") : datePartsToString(state.dateDraft);
     const target = state.dateWheelTarget || elements.entryDate;
     if (target.value !== nextValue) {
       target.value = nextValue;
@@ -3080,9 +3455,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function renderDateWheel() {
     if (!state.dateDraft) return;
+    const monthOnly = state.dateWheelMode === "month";
+    elements.dateWheelTitle.textContent = monthOnly ? "年月を選択" : "日付を選択";
+    elements.dateWheelDialog.querySelector(".date-wheel-window").dataset.mode = state.dateWheelMode;
+    elements.dateWheelDay.parentElement.hidden = monthOnly;
+    elements.dateWheelAll.hidden = !monthOnly;
     fillDateWheel(elements.dateWheelYear, range(1900, 2100), state.dateDraft.year, "年");
     fillDateWheel(elements.dateWheelMonth, range(1, 12), state.dateDraft.month, "月");
-    renderDayWheel();
+    if (monthOnly) renderPhotoMonthCounts();
+    else renderDayWheel();
     updateDateWheelValue();
   }
 
@@ -3093,7 +3474,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function fillDateWheel(column, values, selected, suffix) {
-    const scrollToken = String((Number(column.dataset.settingScrollToken) || 0) + 1);
+    const scrollToken = String(++state.dateWheelScrollVersion);
     column.dataset.settingScroll = "true";
     column.dataset.settingScrollToken = scrollToken;
     column.replaceChildren(...values.map((value, index) => {
@@ -3104,13 +3485,19 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       button.dataset.index = String(index);
       button.setAttribute("role", "option");
       button.setAttribute("aria-selected", String(value === selected));
-      button.textContent = `${value}${suffix}`;
+      if (state.dateWheelMode === "month" && column === elements.dateWheelMonth) {
+        const label = document.createElement("span");
+        label.textContent = `${value}${suffix}`;
+        const count = document.createElement("small");
+        count.className = "date-wheel-count";
+        button.append(label, count);
+      } else button.textContent = `${value}${suffix}`;
       return button;
     }));
     const selectedIndex = Math.max(0, values.indexOf(selected));
     window.requestAnimationFrame(() => {
       if (column.dataset.settingScrollToken !== scrollToken) return;
-      column.scrollTop = selectedIndex * 44;
+      column.scrollTo({ top: selectedIndex * 44, behavior: "instant" });
       window.setTimeout(() => {
         if (column.dataset.settingScrollToken !== scrollToken) return;
         delete column.dataset.settingScroll;
@@ -3123,16 +3510,23 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     column.addEventListener("click", (event) => {
       const option = event.target.closest(".date-wheel-option");
       if (!option) return;
+      window.clearTimeout(state.dateWheelTimers[key]);
+      // A delayed initial position or smooth-scroll intermediate value must not
+      // replace a tapped day before the user presses Done.
+      delete column.dataset.settingScrollToken;
+      delete column.dataset.settingScroll;
       const value = Number(option.dataset.value);
       if (state.dateDraft) {
         state.dateDraft[key] = value;
-        if (key === "year" || key === "month") renderDayWheel();
+        if (state.dateWheelMode === "month") {
+          if (key === "year") renderPhotoMonthCounts();
+        } else if (key === "year" || key === "month") renderDayWheel();
         updateDateWheelValue();
       }
       column.querySelectorAll(".date-wheel-option").forEach((item) => {
         item.setAttribute("aria-selected", String(item === option));
       });
-      column.scrollTo({ top: Number(option.dataset.index) * 44, behavior: "smooth" });
+      column.scrollTo({ top: Number(option.dataset.index) * 44, behavior: "instant" });
     });
     column.addEventListener("wheel", (event) => {
       if (!event.deltaY) return;
@@ -3159,13 +3553,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     if (state.dateDraft[key] === value) return;
     state.dateDraft[key] = value;
     options.forEach((item, itemIndex) => item.setAttribute("aria-selected", String(itemIndex === index)));
-    if (key === "year" || key === "month") renderDayWheel();
+    if (state.dateWheelMode === "month") {
+      if (key === "year") renderPhotoMonthCounts();
+    } else if (key === "year" || key === "month") renderDayWheel();
     updateDateWheelValue();
   }
 
   function updateDateWheelValue() {
     const { year, month, day } = state.dateDraft;
-    elements.dateWheelValue.textContent = `${year}年${month}月${day}日`;
+    elements.dateWheelValue.textContent = `${year}年${month}月` + (state.dateWheelMode === "month" ? "" : `${day}日`);
   }
 
   function datePartsToString({ year, month, day }) {
@@ -3220,6 +3616,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   async function confirmEntryDeletion() {
     const mode = state.deleteMode;
+    if (mode === "photo") return confirmPhotoDeletion();
     if (!await closeDeleteConfirmation()) return;
     if (mode === "draft") await deleteActiveDraft();
     else if (mode === "permanent") await permanentlyDeleteActiveEntry();
@@ -3368,6 +3765,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function updateFilterControls() {
+    if (state.archiveMonth && state.archiveMonth !== state.month) renderArchive(state.archiveMonths);
     const active = Boolean(state.query || state.dateFrom || state.dateTo || state.tag || state.trash || state.drafts || state.favoritePage);
     elements.searchClear.hidden = !state.query;
     elements.dateReset.hidden = !state.dateFrom && !state.dateTo;
@@ -3382,7 +3780,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.monthNavigation.hidden = !isMonthlyView();
     elements.currentMonth.disabled = state.month === currentJapanMonth();
     document.querySelectorAll("[data-month]").forEach((button) => {
-      button.setAttribute("aria-pressed", String(button.dataset.month === state.month));
+      button.setAttribute("aria-pressed", String(isMonthlyView() && button.dataset.month === state.month));
     });
     document.querySelectorAll("[data-tag]").forEach((button) => {
       if (button.dataset.tag === state.tag) button.setAttribute("aria-current", "page");
@@ -3514,6 +3912,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       closeCameraRollDialog();
       return;
     }
+    if (id === "photo-save-dialog") return dialogs.close(id);
     if (id === "photo-viewer-dialog") {
       closePhotoViewerDialog();
       return;
@@ -3564,16 +3963,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       }
       if (!response.ok) {
         if (response.status === 401 && generation === sessionGeneration && path !== "/login" && path !== "/passkey/handoff"
-            && !options.preserveEditor && !elements.editorDialog.open) {
+            ) {
           resetState();
           showLogin("ログインの有効期限が切れました。");
         }
-        const error = new Error(response.status === 401 && elements.editorDialog.open
-          ? "ログインの有効期限が切れました。編集内容を保持しています。別のタブで再ログインしてから再試行してください。"
-          : result.error || "処理を完了できませんでした。");
+        const error = new Error(result.error || "処理を完了できませんでした。");
         error.status = response.status;
         throw error;
       }
+      if (generation !== sessionGeneration) throw new Error("ログイン状態が変わりました。");
       return result;
     } finally {
       if (timing || options.onTiming) {
@@ -3712,9 +4110,27 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     // Display a source only when this history entry owns the accepted navigation.
     if (!Number.isFinite(returnView.savedAt)
       || window.history.state?.[RETURN_NAVIGATION_KEY] !== returnView.savedAt) return;
-    if (!isDiaryListPath(returnView.routePath) || Date.now() - returnView.savedAt > RETURN_VIEW_MAX_AGE_MS) return;
-    elements.tagPageBack.href = returnView.routePath;
+    const href = diaryListHref(returnView.routePath);
+    if (!href || Date.now() - returnView.savedAt > RETURN_VIEW_MAX_AGE_MS) return;
+    elements.tagPageBack.href = href;
     elements.tagPageBack.textContent = "← 前の画面へ戻る";
+  }
+
+  function diaryListHref(pathname) {
+    // Rebuild links from fixed routes and an encoded tag, never a stored URL.
+    switch (pathname) {
+      case "/diary": case "/diary/": return `${BASE_PATH}/`;
+      case "/diary/tags": case "/diary/tags/": return `${BASE_PATH}/tags/`;
+      case "/diary/favorites": case "/diary/favorites/": return `${BASE_PATH}/favorites/`;
+    }
+    if (typeof pathname !== "string") return "";
+    const match = /^\/diary\/tag\/([^/]+)\/?$/.exec(pathname);
+    if (!match) return "";
+    try {
+      return `${BASE_PATH}/tag/${encodeURIComponent(decodeURIComponent(match[1]))}/`;
+    } catch {
+      return "";
+    }
   }
 
   function isDiaryListPath(pathname) {
@@ -3837,6 +4253,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function resetState() {
+    photoSaver?.suspend();
     cancelPositionRestoration();
     elements.tagPageBack.href = `${BASE_PATH}/`;
     elements.tagPageBack.textContent = "← 日記へ戻る";
@@ -3860,8 +4277,11 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     setBusy(document.querySelector("#passkey-login"), false, "パスキーでログイン");
     sessionGeneration += 1;
     activeSessionContext = "";
+    elements.entryForm.reset();elements.entryContent.replaceChildren();
+    for(const input of document.querySelectorAll('dialog input,dialog textarea'))input.value='';
+    for(const key of ['detailDate','detailPublishedAt','detailTitle','detailAuthor','detailDeletion','detailTags','detailContent','deleteConfirmMessage','editorMessage','entryTagSuggestions'])elements[key]?.replaceChildren();
     elements.entryList.replaceChildren();
-    elements.archiveList.replaceChildren();
+    clearArchive();
     elements.tagList.replaceChildren();
     elements.householdSwitcher.replaceChildren();
     elements.householdSwitcherWrap.hidden = true;
@@ -3898,6 +4318,13 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.draftCount = 0;
     state.activeEntry = null;
     state.deleteMode = null;
+    state.photoDeleteTarget = null;
+    state.photoDeleteBusy = false;
+    state.deletedPhotoIds.clear();
+    state.photoDeletionUpdates.clear();
+    elements.photoDelete.disabled = false;
+    elements.deleteConfirmYes.disabled = false;
+    elements.deleteConfirmNo.disabled = false;
     clearEditorPhotos();
     state.photoOffset = 0;
     state.photos = [];
@@ -3905,7 +4332,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     cancelCameraRollLoad();
     state.photoEntryQuery = "";
     state.photoMonth = "";
-    state.photoFileNameQuery = "";
+    state.photoMonthCounts = null;
+    renderPhotoMonthFilter();
+    elements.dateWheelMonth.replaceChildren();
+    elements.dateWheelAll.textContent = "すべて";
+    state.photoOrder = "newest";
+    updatePhotoSortButton();
     state.viewerPhotos = [];
     state.viewerIndex = -1;
     finishPhotoPickerInteraction();

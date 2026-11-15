@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fixture, seedLedger, baseline, sourceAtBaseline } from './performance-fixture.mjs';
+import { verifyBillingHomeInput, verifyBillingInstallModes } from './home-input-browser-check.mjs';
 const require = createRequire(new URL('../../diary-worker/package.json', import.meta.url));
 const { chromium } = require('playwright');
 const combinedInitialData = !baseline || sourceAtBaseline('billing-worker/public/billing.js').includes('includeSummary=1');
@@ -42,6 +43,7 @@ const server = createServer(async (req, res) => {
     const sources = {
       '/billing/':'billing-worker/public/index.html', '/billing/billing.js':'billing-worker/public/billing.js',
       '/billing/billing.css':'billing-worker/public/billing.css', '/billing/troom-date-picker.js':'billing-worker/public/troom-date-picker.js',
+      '/billing/pwa-install.js':'billing-worker/public/pwa-install.js',
       '/billing/troom-date-picker.css':'billing-worker/public/troom-date-picker.css', '/diary/dialog-navigation.js':'diary-worker/public/dialog-navigation.js',
       '/security/passkey-client.js':'security-worker/public/passkey-client.js', '/assets/pwa-auto-update.js':'assets/pwa-auto-update.js'
     };
@@ -170,9 +172,18 @@ try {
       assert.equal(await page.locator('#document-title').textContent(),'支払通知書');
       assert.ok((await page.locator('#report-account').textContent()).includes(names.masami));
       assert.equal((await page.pdf({format:'A4'})).subarray(0,4).toString(),'%PDF');
+      assert.equal(await page.locator('#install-app-button').isVisible(),false);
       await page.emulateMedia({media:'screen'});
+      await page.selectOption('#document-filter','invoice');
+      await page.emulateMedia({media:'print'});
+      assert.equal(await page.locator('#document-title').textContent(),'請求書');
+      assert.equal((await page.pdf({format:'A4'})).subarray(0,4).toString(),'%PDF');
+      await page.emulateMedia({media:'screen'});
+      await page.selectOption('#document-filter','payment_notice');
       await page.evaluate(()=>{window.fixturePrints=0;window.print=()=>window.fixturePrints++;});
-      await page.click('#print-button');assert.equal(await page.evaluate(()=>window.fixturePrints),1);
+      assert.equal(await page.locator('#print-button').isVisible(),false);
+      // Keep the dormant button's handler available for a future restoration.
+      await page.locator('#print-button').evaluate(button=>button.click());assert.equal(await page.evaluate(()=>window.fixturePrints),1);
       // Actual committed save followed by touch revocation; hold its 401 to
       // check duplicate-submit protection and the absence of auto retries.
       const write=hold('write');expireMutation='after';
@@ -225,9 +236,12 @@ try {
     const resources=await page.evaluate(()=>performance.getEntriesByType('resource').filter(e=>e.name.includes('/billing/api/')).map(e=>({endpoint:new URL(e.name).pathname.split('/').pop(),durationMs:e.duration})));
     const median=values=>[...values].sort((a,b)=>a-b)[Math.floor(values.length/2)];
     console.log(JSON.stringify({fixture:'local browser + SQLite; WebAuthn stubbed; two animation frames',mobile,baseline:baseline||false,loginAfterStubMedianMs:median(logins),loginSamples:logins.length,accountSwitchMedianMs:median(switches),accountSwitchSamples:switches.length,resources}));
+    // Run the write/form flows after the existing clean-start measurements.
+    if (!baseline && !process.argv.includes('--measure-only')) await verifyBillingHomeInput(page, { db: f.db, mobile });
     assert.deepEqual(errors,[]);
     await context.close();
   }
+  if (!baseline && !process.argv.includes('--measure-only')) await verifyBillingInstallModes(browser, origin);
   console.log('billing performance browser: passed');
 } finally {
   for(const gate of held.values())gate.release();

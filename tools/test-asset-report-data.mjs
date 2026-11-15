@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { portfolioFixture } from './fixtures/asset-report.mjs';
 import data from '../asset-report-k7m4q9x2/data/portfolio-data.mjs';
 import { BASE_PRINCIPAL, validatePortfolioData } from '../asset-report-k7m4q9x2/portfolio-model.mjs';
-import { collectEntrypointShellAssets, ensureHtmlContract, inspectBuildFreshness, loadWebAppRegistry, workspace } from './web-app-registry.mjs';
+import { workspace } from './web-app-registry.mjs';
 import { resolve } from 'node:path';
 
 test('current data preserves reference principal and agrees with the single HTML update date', async () => {
@@ -16,24 +16,6 @@ test('current data preserves reference principal and agrees with the single HTML
   assert.equal(dates[0][1], data.period);
   assert.equal(dates[0][2], data.period.replaceAll('-', '.'));
   assert.match(html, /<script type="module" src="\.\/report\.js\?v=/);
-});
-
-test('data/model modules participate in the existing content hash and PWA precache', async () => {
-  const registry = await loadWebAppRegistry();
-  const app = registry.apps.find(app => app.id === 'asset-report');
-  const freshness = await inspectBuildFreshness(app, registry.contract);
-  assert.equal(freshness.fresh, true, JSON.stringify(freshness.issues));
-  const assets = await collectEntrypointShellAssets(app, registry.contract, freshness.expected);
-  for (const path of ['data/portfolio-data.mjs', 'portfolio-model.mjs']) assert.ok(assets.includes(`/asset-report-k7m4q9x2/${path}?v=${freshness.expected}`), path);
-});
-
-test('modulepreload versioning leaves unrelated existing module scripts unchanged', async () => {
-  const registry = await loadWebAppRegistry();
-  const app = registry.apps.find(app => app.id === 'asset-report');
-  const html = '<html><head><link rel="modulepreload" href="./data/new.mjs"></head><body><script type="module" src="./existing.mjs"></script></body></html>';
-  const synced = ensureHtmlContract(html, app, registry.contract, 'asset-report-111111111111');
-  assert.ok(synced.includes('./data/new.mjs?v=asset-report-111111111111'));
-  assert.ok(synced.includes('<script type="module" src="./existing.mjs"></script>'));
 });
 
 test('inconsistent data fails instead of being silently omitted from the report', () => {

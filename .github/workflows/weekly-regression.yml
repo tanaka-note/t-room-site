@@ -1,0 +1,52 @@
+name: Weekly cross-service regression
+on:
+  schedule:
+    - cron: '20 21 * * 0' # Monday 06:20 JST
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: weekly-cross-service
+  cancel-in-progress: false
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        target: [auth, backup, household, calendar, security, diary, cloud]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: '11.19.0'
+      - name: Install selected dependencies
+        env:
+          TARGET: ${{ matrix.target }}
+        run: node tools/install-verify-dependencies.mjs "$TARGET"
+      - name: Install fixture browser
+        if: contains(fromJSON('["household","security","diary","cloud"]'), matrix.target)
+        run: pnpm --dir diary-worker exec playwright install --with-deps chromium
+      - name: Verify local fixtures
+        env:
+          TARGET: ${{ matrix.target }}
+          CI: 'true'
+          TROOM_BROWSER: chromium
+          WRANGLER_SEND_METRICS: 'false'
+        run: node tools/weekly-regression.mjs "$TARGET"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: weekly-${{ matrix.target }}
+          path: |
+            tmp/verify-artifacts/
+            tmp/household-performance/
+          if-no-files-found: ignore
+          retention-days: 14

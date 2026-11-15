@@ -1,0 +1,17 @@
+{
+  "id": "/household/",
+  "name": "家計簿",
+  "short_name": "家計簿",
+  "description": "日々の収支と月末の資産を記録する家計簿。オンライン専用です。",
+  "lang": "ja",
+  "start_url": "/household/",
+  "scope": "/household/",
+  "display": "standalone",
+  "background_color": "#f4f6f3",
+  "theme_color": "#577263",
+  "prefer_related_applications": false,
+  "icons": [
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

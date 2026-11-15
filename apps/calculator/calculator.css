@@ -405,6 +405,15 @@ a {
   font-size: 0.98rem;
 }
 
+.mode-install {
+  width: 100%;
+}
+
+.mode-install:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .mode-section p {
   margin: 4px 0 0;
   color: var(--muted);

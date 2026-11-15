@@ -16,6 +16,7 @@ for (const [path, expected] of [
   [`diary.js?v=${build}`, "public, max-age=31536000, immutable"],
   [`diary-bootstrap.js?v=${build}`, "public, max-age=31536000, immutable"],
   [`diary-photo-viewer.js?v=${build}`, "public, max-age=31536000, immutable"],
+  [`diary-photo-save.js?v=${build}`, "public, max-age=31536000, immutable"],
   [`diary.css?v=${build}`, "public, max-age=31536000, immutable"],
   ["diary.js", "public, max-age=3600"], ["diary.js?v=unversioned", "public, max-age=3600"],
   ["", "no-store"], ["favorites/", "no-store"], [`service-worker.js?v=${build}`, "no-cache"],
@@ -28,6 +29,16 @@ for (const [path, expected] of [
 for (const path of ["investment.js", "investment.css"]) {
   assert.equal((await worker.fetch(new Request(`${origin}/diary/${path}?v=${build}`), env, {})).status, 404, "protected assets still require authorization");
 }
+const saveModule = await worker.fetch(new Request(`${origin}/diary/diary-photo-save.js?v=${build}`), {
+  ASSETS: { fetch: async request => {
+    assert.equal(new URL(request.url).pathname, "/diary-photo-save.js", "save module must route to its own asset");
+    return new Response(await readFile(new URL("../public/diary-photo-save.js", import.meta.url), "utf8"), {
+      headers: { "Content-Type": "text/javascript" }
+    });
+  } }
+}, {});
+assert.equal(saveModule.status, 200);
+assert.match(await saveModule.text(), /export function createPhotoSaveManager/);
 const missing = await worker.fetch(new Request(`${origin}/diary/diary.js?v=${build}`), {
   ASSETS: { fetch: async () => new Response("missing", { status: 404 }) }
 }, {});

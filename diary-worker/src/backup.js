@@ -1,10 +1,11 @@
 import { compress, decode, publishGeneration, withBackupLock } from '../../backup-worker/src/integrity.js';
 import { snapshotStatement, snapshotTables } from '../../backup-worker/src/snapshot.js';
-import { backupPhotos, restorePhotos, validatePhotoManifest } from './photo-backup.js';
+import { restorePhotos } from './photo-backup.js';
 import { prune as pruneVerified } from '../../backup-worker/src/backup.js';
 import { reportRun } from '../../backup-worker/src/monitor.js';
 import { assertSchema } from '../../backup-worker/src/schema-guard.js';
-const BACKUP_FORMAT_VERSION = 7;
+import { dispatchBackup } from '../../backup-worker/src/dispatch.js';
+const BACKUP_FORMAT_VERSION = 8;
 const LEGACY_BACKUP_FORMAT_VERSION = 2;
 const DAILY_RETENTION = 30;
 const MONTHLY_RETENTION = 12;
@@ -12,13 +13,8 @@ const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAILY_PREFIX = "daily/";
 const MONTHLY_PREFIX = "monthly/";
 const PHOTO_BACKUP_PREFIX = "media/formal-photos/";
-// Legacy photo namespace, retained for compatibility only. New writes use
-// SHA-addressed objects in photo-backup.js and never prune historical photos.
-const PHOTO_VARIANTS = Object.freeze([
-  ["original", "original_key"],
-  ["display", "display_key"],
-  ["thumbnail", "thumbnail_key"]
-]);
+// Historical photo namespace retained for readers and isolated compatibility
+// fixtures. Production photo backup scheduling and writes have been retired.
 
 const BACKUP_TABLES = [
   {
@@ -40,7 +36,7 @@ const BACKUP_TABLES = [
     name: "diary_photos",
     columns: [
       "id", "entry_id", "file_name", "content_type", "original_size", "original_key", "display_key",
-      "thumbnail_key", "width", "height", "created_by_id", "created_by_name", "created_at"
+      "thumbnail_key", "width", "height", "created_by_id", "created_by_name", "created_at", "backup_identity"
     ],
     orderBy: "entry_id ASC, created_at ASC, id ASC"
   },
@@ -95,8 +91,8 @@ function backupKeys(nowMs = Date.now()) {
   const calendar = japanCalendar(nowMs);
   return {
     ...calendar,
-    daily: `v7/${DAILY_PREFIX}${calendar.date}.json.gz`,
-    monthly: `v7/${MONTHLY_PREFIX}${calendar.month}.json.gz`
+    daily: `v8/${DAILY_PREFIX}${calendar.date}.json.gz`,
+    monthly: `v8/${MONTHLY_PREFIX}${calendar.month}.json.gz`
   };
 }
 
@@ -116,7 +112,7 @@ async function createDiaryBackupPayload(db, nowMs = Date.now()) {
   const tables = snapshotTables(result[0]);
   const calendar = japanCalendar(nowMs);
   return {
-    formatVersion: BACKUP_FORMAT_VERSION,
+    formatVersion: BACKUP_FORMAT_VERSION, backupScope: 'd1-only',
     createdAt: startedAt, completedAt: new Date().toISOString(), scheduledFor: new Date(nowMs).toISOString(), consistency: 'single-database-transaction',
     japanDate: calendar.date,
     source: {
@@ -138,22 +134,8 @@ async function runDiaryBackupUnlocked(env, nowMs) {
   if (!env?.BACKUP) throw new Error("Backup bucket binding is unavailable");
   const keys = backupKeys(nowMs);
   const payload = await createDiaryBackupPayload(env.DB, nowMs);
-  const mediaBackup = await backupPhotos(env, payload.tables.diary_photos.rows, { now: nowMs });
-  payload.mediaBackup = {
-    formatVersion: 2,
-    objects: mediaBackup.objects,
-    oldestVerifiedAt: mediaBackup.oldestVerifiedAt,
-    prefix: 'media/verified-photos/',
-    formalPhotoCount: payload.tables.diary_photos.rowCount,
-    expectedObjectCount: payload.tables.diary_photos.rowCount * PHOTO_VARIANTS.length,
-    copiedObjectCount: mediaBackup.copied,
-    existingObjectCount: mediaBackup.existing,
-    missingSourceObjectCount: mediaBackup.missing,
-    failedObjectCount: mediaBackup.failed,
-    pendingObjectCount: mediaBackup.pending,
-    complete: mediaBackup.complete
-  };
-  if (!mediaBackup.complete) return { complete: false, mediaBackup, dailyKey: keys.daily, monthlyKey: keys.monthly };
+  // D1 success never reads MEDIA, photo receipts, manifests or photo status.
+  // References are the original diary_photos rows, captured in this transaction.
   const compressed = await gzipJson(payload);
   const putOptions = {
     httpMetadata: {
@@ -164,7 +146,7 @@ async function runDiaryBackupUnlocked(env, nowMs) {
       format: `troom-diary-d1-v${BACKUP_FORMAT_VERSION}`,
       japanDate: keys.date,
       source: "diary-db",
-      mediaComplete: mediaBackup.complete ? "true" : "false"
+      backupScope: "d1-only"
     }
   };
 
@@ -175,12 +157,12 @@ async function runDiaryBackupUnlocked(env, nowMs) {
   let dailyRetention = { deleted: 0 }, monthlyRetention = { deleted: 0 }, retentionFailed = false;
   try {
     [dailyRetention, monthlyRetention] = await Promise.all([
-      pruneVerified(env.BACKUP, 'v7/daily/', DAILY_RETENTION, validate).then(deleted => ({ deleted })),
-      pruneVerified(env.BACKUP, 'v7/monthly/', MONTHLY_RETENTION, validate).then(deleted => ({ deleted }))
+      pruneVerified(env.BACKUP, 'v8/daily/', DAILY_RETENTION, validate).then(deleted => ({ deleted })),
+      pruneVerified(env.BACKUP, 'v8/monthly/', MONTHLY_RETENTION, validate).then(deleted => ({ deleted }))
     ]);
   } catch { retentionFailed = true; }
   return {
-    complete: mediaBackup.complete,
+    complete: true,
     retentionFailed,
     dailyKey: keys.daily,
     monthlyKey: keys.monthly,
@@ -188,13 +170,18 @@ async function runDiaryBackupUnlocked(env, nowMs) {
     monthlyUpgraded,
     compressedBytes: compressed.byteLength,
     rowCounts: Object.fromEntries(Object.entries(payload.tables).map(([name, table]) => [name, table.rowCount])),
-    mediaBackup,
     deletedDaily: dailyRetention.deleted,
     deletedMonthly: monthlyRetention.deleted
   };
 }
 
 async function runScheduledDiaryBackup(env, nowMs = Date.now(), { sleep = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
+  if (env.D1_BACKUPS) {
+    await dispatchBackup(env, 'diary', nowMs);
+    // Only dispatch completed here. The Workflow owns the actual success/failure
+    // audit; photo jobs remain entirely independent and unchanged.
+    return { complete: true, scheduled: true };
+  }
   const runId = crypto.randomUUID();
   await reportRun(env, 'diary', runId, 'started', {}, nowMs);
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -202,10 +189,9 @@ async function runScheduledDiaryBackup(env, nowMs = Date.now(), { sleep = ms => 
       const result = await runDiaryBackup(env, { nowMs });
       if ((!result.complete || result.retentionFailed) && attempt < 3) { await sleep(attempt * 1000); continue; }
       await reportRun(env, 'diary', runId, result.complete ? 'succeeded' : 'partial', {
-        attempt, ...(result.complete ? { bytes: result.compressedBytes } : { stage: 'photos', reason: 'media_incomplete', pending: result.mediaBackup.pending })
+        attempt, bytes: result.compressedBytes
       });
       if (result.retentionFailed) await reportRun(env, 'diary', runId, 'prune_failed', { attempt, stage: 'retention', reason: 'retention_failed' });
-      if (!result.complete) console.error(JSON.stringify({ event: 'diary_photo_backup_incomplete', missingObjectCount: result.mediaBackup.missing, failedObjectCount: result.mediaBackup.failed }));
       return result;
     } catch (error) {
       const reasons={SchemaReviewRequired:'schema_review_required',SnapshotTooLarge:'snapshot_too_large',UnsafeInteger:'unsafe_integer',LegacyGenerationUnverified:'legacy_unverified',VerificationFailed:'verification_failed',SnapshotInvalid:'verification_failed',MediaManifestInvalid:'verification_failed',ConcurrentWrite:'concurrent_write'};
@@ -221,7 +207,6 @@ function formalPhotoBackupKey(photoId, variant) {
   return `${PHOTO_BACKUP_PREFIX}${encodeURIComponent(String(photoId))}/${variant}`;
 }
 
-async function backupFormalPhotoObjects(env, rows) { return backupPhotos(env, rows); }
 async function restoreFormalPhotoObjects(env, payload) { validateBackupPayload(payload); return restorePhotos(env, payload); }
 
 async function gunzipJson(source) {
@@ -230,21 +215,22 @@ async function gunzipJson(source) {
 
 function validateGeneration(p) {
   validateBackupPayload(p);
-  if (p.formatVersion !== 7 || p.source?.database !== 'diary-db' || p.mediaBackup?.complete !== true || !Array.isArray(p.mediaBackup?.objects)
+  if (p.formatVersion !== 8 || p.source?.database !== 'diary-db' || p.backupScope !== 'd1-only' || p.mediaBackup !== undefined
     || Object.keys(p.tables).sort().join(',') !== BACKUP_TABLES.map(t=>t.name).sort().join(',')) throw new Error('SnapshotInvalid');
   for (const t of BACKUP_TABLES) {
     const table=p.tables[t.name];
-    if (JSON.stringify(table.columns)!==JSON.stringify(t.columns) || !Array.isArray(table.rows) || table.rowCount!==table.rows.length
-      || table.rows.some(r=>!r || Object.keys(r).sort().join(',')!==[...t.columns].sort().join(','))) throw new Error('SnapshotInvalid');
+    const legacyPhotoColumns = t.name === 'diary_photos' ? t.columns.filter(c=>c!=='backup_identity') : null;
+    const columns = legacyPhotoColumns && JSON.stringify(table.columns) === JSON.stringify(legacyPhotoColumns) ? legacyPhotoColumns : t.columns;
+    if (JSON.stringify(table.columns)!==JSON.stringify(columns) || !Array.isArray(table.rows) || table.rowCount!==table.rows.length
+      || table.rows.some(r=>!r || Object.keys(r).sort().join(',')!==[...columns].sort().join(','))) throw new Error('SnapshotInvalid');
   }
-  if(p.mediaBackup.objects.length!==p.tables.diary_photos.rows.length*3) throw new Error('MediaManifestInvalid');
-  validatePhotoManifest(p);
 }
 
 async function restoreDiaryBackup(db, payload, { batchSize = 100 } = {}) {
   if (!db) throw new Error("D1 binding is unavailable");
   validateBackupPayload(payload);
   if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 500) throw new Error("Invalid restore batch size");
+  if (Number(payload.formatVersion) === 8) validateGeneration(payload);
   const configuredTables = new Map(BACKUP_TABLES.map((table) => [table.name, table]));
   const countResults = await db.batch(RESTORE_TABLE_ORDER.map((name) => db.prepare(`SELECT COUNT(*) AS count FROM ${name}`)));
   if (countResults.some((result) => Number(result?.results?.[0]?.count || 0) !== 0)) {
@@ -276,12 +262,12 @@ async function restoreDiaryBackup(db, payload, { batchSize = 100 } = {}) {
     }
     restored[name] = statements.length;
   }
-  return { complete: true, restored };
+  return { complete: true, scope: "d1-only", photosRestored: false, restored };
 }
 
 function validateBackupPayload(payload) {
   const formatVersion = Number(payload?.formatVersion);
-  if (!payload || ![LEGACY_BACKUP_FORMAT_VERSION, 3, 4, 5, 6, BACKUP_FORMAT_VERSION].includes(formatVersion) || !payload.tables) {
+  if (!payload || ![LEGACY_BACKUP_FORMAT_VERSION, 3, 4, 5, 6, 7, BACKUP_FORMAT_VERSION].includes(formatVersion) || !payload.tables) {
     throw new Error("Unsupported diary backup format");
   }
 }
@@ -290,6 +276,10 @@ function restoreTable(payload, name, expected) {
   const table = payload.tables[name];
   if (!table || !Array.isArray(table.columns) || !Array.isArray(table.rows)) {
     throw new Error(`Backup table is missing: ${name}`);
+  }
+  if (name === 'diary_photos' && !table.columns.includes('backup_identity')
+    && JSON.stringify(table.columns) === JSON.stringify(expected.columns.filter(c=>c!=='backup_identity'))) {
+    return { ...table, columns: expected.columns, rows: table.rows.map(row=>({ ...row, backup_identity: null })) };
   }
   if (name === "diary_entries") {
     const optionalColumns = new Set(["last_published_at", "entry_time", "weather"]);
@@ -362,7 +352,6 @@ export {
   DAILY_RETENTION,
   MONTHLY_RETENTION,
   PHOTO_BACKUP_PREFIX,
-  backupFormalPhotoObjects,
   backupKeys,
   createDiaryBackupPayload,
   formalPhotoBackupKey,

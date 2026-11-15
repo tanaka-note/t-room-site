@@ -21,6 +21,6 @@ export default class extends WorkerEntrypoint {
     return { valid: validFixtureSession(session) };
   }
   async passkeyRollingSession(input) { return rollingSession(input); }
-  async recordAuditEvent() {}
+  async recordAuditEvent() { return { stored: true }; }
   async fetch() { return new Response("Local test fixture", { status: 404 }); }
 }

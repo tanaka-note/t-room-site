@@ -39,12 +39,12 @@ test('Health production guard stops incomplete configuration before deploy witho
 
 test('asset report data, rendering, update tools and tests always select the standard site regression', () => {
   for (const path of ['asset-report-k7m4q9x2/report.js', 'asset-report-k7m4q9x2/data/portfolio-data.mjs',
-    'asset-report-k7m4q9x2/portfolio-model.mjs', 'tools/update-asset-report.mjs', 'tools/test-asset-report-data.mjs',
-    'tools/test-asset-report-history.mjs', 'tools/test-asset-report-update.mjs', 'tools/test-asset-report.browser.mjs', 'tools/fixtures/asset-report.mjs']) {
+    'asset-report-k7m4q9x2/portfolio-model.mjs', 'tools/test-asset-report-data.mjs',
+    'tools/test-asset-report-history.mjs', 'tools/test-asset-report-retirement.browser.mjs', 'tools/fixtures/asset-report.mjs']) {
     assert.deepEqual(affected([path]), ['site'], path);
   }
   assert.ok(commands('site').some(command => command.script === 'asset-report:test'));
-  assert.ok(browserTests('site').includes('tools/test-asset-report.browser.mjs'));
+  assert.ok(browserTests('site').includes('tools/test-asset-report-retirement.browser.mjs'));
 });
 
 test('diary JavaScript changes select read-only build freshness verification before regressions', () => {
@@ -61,7 +61,7 @@ test('Cloud edits do not select Android, Downloader or unrelated services', () =
   assert.deepEqual(affected(['cloud-worker/tests/manual-thumbnail-api.mjs']), ['cloud']);
 });
 test('shared authentication, PRF and SW changes include consumers', () => {
-  assert.deepEqual(affected(['assets/session-secret.mjs']), ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments', 'auth']);
+  assert.deepEqual(affected(['assets/session-secret.mjs']), ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments', 'household', 'calendar', 'portfolio', 'auth']);
   const auth = affected(['assets/session-policy.mjs']);
   for (const t of ['cloud', 'diary', 'billing', 'auth']) assert.ok(auth.includes(t), t);
   assert.ok(affected(['security-worker/src/index.js']).includes('auth'));
@@ -70,6 +70,8 @@ test('shared authentication, PRF and SW changes include consumers', () => {
   assert.deepEqual(affected(['diary-worker/public/manifest.webmanifest']), ['diary']);
   assert.ok(commands('diary').some(command => command.args?.includes('tools/verify-web-contracts.mjs')));
   assert.deepEqual(affected(['android-ai-chat/app/build.gradle.kts']), ['android-ai-chat']);
+  assert.deepEqual(affected(['android-calendar/app/build.gradle.kts']), ['android-calendar']);
+  assert.deepEqual(affected(['calendar-worker/src/api.js']), ['calendar']);
   assert.deepEqual(affected(['AGENTS.md', 'docs/development.md']), []);
 });
 test('Downloader 2 components select only Downloader 2 while unknown files remain site-safe', () => {

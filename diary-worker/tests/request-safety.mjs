@@ -3,6 +3,11 @@ import { readFile } from "node:fs/promises";
 import "./photo-upload.mjs";
 import "./photo-save-timing.mjs";
 
+await import("./photo-deletion.mjs");
+// Both suites replace browser globals; run the preparation fixture only after
+// the existing top-level-await imports have restored their own mocks.
+await import("./photo-preparation.mjs");
+
 const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
 
 assert.doesNotMatch(source, /request\.json\(\)|request\.formData\(\)/,
@@ -19,3 +24,8 @@ assert.match(source, /const PHOTO_REQUEST_MAX_BYTES = 80 \* 1024 \* 1024/);
 assert.match(source, /original\.size > 60 \* 1024 \* 1024/);
 
 process.stdout.write("Diary bounded request-body contract tests passed.\n");
+
+// Migration recovery is part of diary write safety.
+await import("./photo-migration.test.mjs");
+// Exercise the same IDs and migration engine against real local Worker APIs.
+await import("./photo-migration-api.e2e.mjs");

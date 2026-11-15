@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
-import { readFile, mkdtemp, writeFile, unlink, rmdir } from "node:fs/promises";
+import { readFile, mkdtemp, writeFile, unlink, rmdir, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createDiaryFixtureServer as createServer } from "./bootstrap-fixture.mjs";
 import { createRequire } from "node:module";
@@ -269,6 +269,8 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 function browserExecutable(name) {
   const configured = process.env[`TROOM_${name.toUpperCase()}_EXECUTABLE`];
   if (configured) return configured;
+  const bundled=(name==='firefox'?firefox:chromium).executablePath();
+  if(existsSync(bundled))return bundled;
   const playwrightRoot = process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "ms-playwright") : "";
   const playwrightFirefox = name === "firefox" && playwrightRoot && existsSync(playwrightRoot)
     ? readdirSync(playwrightRoot, { withFileTypes: true })
@@ -624,6 +626,10 @@ async function verifyNewDraft(browser, name, contextOptions) {
 async function runBrowser(browserType, name, executablePath, contextOptions = {}) {
   const browser = await browserType.launch({ headless: true, executablePath });
   try {
+    if(process.env.TROOM_DIARY_SESSION_CLEARING_ONLY==='1'){for(const mode of ['photo-401','session-401','entry-401'])await verifyEditorRetention(browser,name,mode,contextOptions);return;}
+    await verifyReadAheadSnapshot(browser, name, contextOptions);
+    await verifyProviderReadFailure(browser, name, false, contextOptions);
+    await verifyProviderReadFailure(browser, name, true, contextOptions);
     await verifyChangedSourceFile(browser, name, contextOptions);
     await verifyJpegMultiple(browser, name, contextOptions, 1);
     await verifyJpegMultiple(browser, name, contextOptions, 3);
@@ -647,7 +653,7 @@ async function runBrowser(browserType, name, executablePath, contextOptions = {}
   }
 }
 
-async function chooseJpegs(page, count = 3) {
+async function chooseJpegs(page, count = 3, start = 0) {
   const jpeg = await page.evaluate(() => {
     const canvas = document.createElement("canvas"); canvas.width = 32; canvas.height = 24;
     canvas.getContext("2d").fillRect(0, 0, 32, 24);
@@ -655,7 +661,89 @@ async function chooseJpegs(page, count = 3) {
   });
   const chooserPromise = page.waitForEvent("filechooser");
   await page.click("#add-photo-button");
-  await (await chooserPromise).setFiles(Array.from({ length: count }, (_, n) => ({ name: `${n}.jpg`, mimeType: "image/jpeg", buffer: Buffer.from(jpeg, "base64") })));
+  await (await chooserPromise).setFiles(Array.from({ length: count }, (_, n) => ({ name: `${n + start}.jpg`, mimeType: "image/jpeg", buffer: Buffer.from(jpeg, "base64") })));
+}
+
+async function verifyReadAheadSnapshot(browser, name, contextOptions) {
+  resetScenario("success");
+  const page = await newDiaryPage(browser, contextOptions);
+  const dir = await mkdtemp(join(tmpdir(), "diary-photo-read-ahead-"));
+  const paths = [join(dir, "first.png"), join(dir, "second.png")];
+  try {
+    for (const path of paths) await writeFile(path, validPng);
+    await page.evaluate(() => {
+      const nativeRead = File.prototype.arrayBuffer;
+      window.__readPhotos = [];
+      File.prototype.arrayBuffer = async function() {
+        const bytes = await nativeRead.call(this);
+        window.__readPhotos.push(this.name);
+        return bytes;
+      };
+      window.__startPhotoPreparationHold();
+    });
+    const chooser = page.waitForEvent("filechooser");
+    await page.click("#add-photo-button");
+    await (await chooser).setFiles(paths);
+    await page.waitForFunction(() => window.__photoPreparationWaiting && window.__readPhotos.includes("second.png"));
+    assert.equal(await page.locator("#photo-input").evaluate(el => el.files.length), 2,
+      `${name}: keep picker selection until preparation completes`);
+    const later = new Date(Date.now() + 60000);
+    await utimes(paths[1], later, later);
+    await page.evaluate(() => window.__releasePhotoPreparation());
+    await page.waitForFunction(() => !document.querySelector("#photo-input").disabled);
+    assert.equal(await page.locator("#editor-photo-list .editor-photo-card").count(), 2,
+      `${name}: second photo must survive a provider timestamp change while first photo is decoding`);
+    await page.click("#save-entry-button");
+    await waitForEditorClosed(page);
+    assert.equal(scenario.photoRequests, 2);
+    assert.equal(scenario.storedPhotoIds.size, 2);
+  } finally {
+    await page.close();
+    for (const path of paths) await unlink(path).catch(() => {});
+    await rmdir(dir);
+  }
+}
+
+async function verifyProviderReadFailure(browser, name, permanent, contextOptions) {
+  resetScenario("success");
+  const page = await newDiaryPage(browser, contextOptions);
+  try {
+    await page.evaluate(permanent => {
+      const nativeRead = File.prototype.arrayBuffer;
+      window.__providerAttempts = {};
+      window.__providerReady = false;
+      File.prototype.arrayBuffer = async function() {
+        const count = window.__providerAttempts[this.name] = (window.__providerAttempts[this.name] || 0) + 1;
+        if (this.name !== "0.jpg" && !window.__providerReady && (permanent || count === 1)) {
+          throw new DOMException("provider cannot read selected photo", "NotReadableError");
+        }
+        return nativeRead.call(this);
+      };
+    }, permanent);
+    await chooseJpegs(page, permanent ? 5 : 3);
+    await page.waitForFunction(() => !document.querySelector("#photo-input").disabled);
+    assert.equal(await page.locator("#editor-photo-list .editor-photo-card").count(), permanent ? 1 : 3);
+    const attempts = await page.evaluate(() => window.__providerAttempts);
+    assert.equal(attempts["1.jpg"], permanent ? 3 : 2, `${name}: finite provider read retries`);
+    assert.equal(await page.inputValue("#entry-title"), "写真付き投稿テスト");
+    assert.match(await page.locator("#entry-content").innerText(), /本文/);
+    assert.equal(scenario.entryRequests.length, 0);
+    if (permanent) {
+      const message = await page.locator("#photo-preparation-status").innerText();
+      assert.match(message, /追加できなかったファイル（4件）/);
+      assert.match(message, /ほか1件/);
+      assert.doesNotMatch(message, /4\.jpg/);
+      await page.evaluate(() => { window.__providerReady = true; });
+      await chooseJpegs(page, 4, 1);
+      await page.waitForFunction(() => !document.querySelector("#photo-input").disabled);
+      assert.equal(await page.locator("#editor-photo-list .editor-photo-card").count(), 5,
+        `${name}: reselect only failures and retain the successful photo`);
+    }
+    await page.click("#save-entry-button");
+    await waitForEditorClosed(page);
+    assert.equal(scenario.photoRequests, permanent ? 5 : 3, `${name}: never reupload successful photos`);
+    assert.equal(scenario.commitRequests[0].photoIds.length, permanent ? 5 : 3);
+  } finally { await page.close(); }
 }
 
 async function verifyChangedSourceFile(browser, name, contextOptions) {
@@ -717,14 +805,17 @@ async function verifyEditorRetention(browser, name, mode, contextOptions) {
     await page.fill("#entry-tags", "保護, 再試行");
     const date = await page.inputValue("#entry-date");
     await chooseJpegs(page);
-    await page.waitForFunction(() => document.querySelectorAll("#editor-photo-list .editor-photo-card").length === 3);
+    if(!['photo-401','session-401'].includes(mode))await page.waitForFunction(() => document.querySelectorAll("#editor-photo-list .editor-photo-card").length === 3);
     // Exhaustion is bounded, but avoid waiting real backoff time in the fixture.
     if (mode === "network-down") await page.evaluate(() => {
       const timer = window.setTimeout.bind(window);
       window.setTimeout = (fn, ms, ...args) => timer(fn, ms < 30000 ? 0 : ms, ...args);
     });
-    await page.click("#save-draft-button");
-    await page.waitForFunction(() => !document.querySelector("#save-entry-button").disabled);
+    if(!['photo-401','session-401'].includes(mode)){await page.click("#save-draft-button");await page.waitForFunction(() => !document.querySelector("#save-entry-button").disabled);}
+    if(mode.endsWith('401')){
+      await page.waitForFunction(()=>!document.querySelector('#editor-dialog').open);assert.equal(await page.locator('#editor-dialog').evaluate(el=>el.open),false,`${name} ${mode}: ${await page.locator('#editor-message').textContent()}`);
+      assert.equal(await page.inputValue('#entry-title'),'');assert.equal(await page.inputValue('#entry-tags'),'');assert.equal(await page.locator('#entry-content').innerText(),'');assert.equal(await page.locator('#editor-photo-list .editor-photo-card').count(),0);assert.equal(scenario.createdEntryIds.size,0);return;
+    }
     assert.equal(await page.locator("#editor-dialog").evaluate(el => el.open), true, `${name} ${mode}`);
     assert.equal(await page.inputValue("#entry-title"), "写真付き投稿テスト");
     assert.equal(await page.inputValue("#entry-date"), date);
@@ -743,11 +834,11 @@ async function verifyEditorRetention(browser, name, mode, contextOptions) {
 try {
   const chromiumPath = browserExecutable("chromium");
   const firefoxPath = browserExecutable("firefox");
-  if (!chromiumPath || !firefoxPath) throw new Error("Chromium/Firefox executable is required.");
+  if (!chromiumPath || (!firefoxPath && process.env.TROOM_DIARY_SESSION_CLEARING_ONLY!=='1')) throw new Error("Chromium/Firefox executable is required.");
   await runBrowser(chromium, "Chromium", chromiumPath);
-  await runBrowser(firefox, "Firefox", firefoxPath);
+  if(process.env.TROOM_DIARY_SESSION_CLEARING_ONLY!=='1')await runBrowser(firefox, "Firefox", firefoxPath);
   await runBrowser(chromium, "Touch", chromiumPath, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
-  process.stdout.write("Photo post preparation, transient retry, lost-response recovery, and permanent failure recovery passed in Chromium, Firefox, and touch emulation.\n");
+  process.stdout.write(process.env.TROOM_DIARY_SESSION_CLEARING_ONLY==='1'?"Diary session clearing: upload-session, multipart upload and entry 401 clear editor, text and photos in Chromium desktop/touch.\n":"Photo post preparation, transient retry, lost-response recovery, and permanent failure recovery passed in Chromium, Firefox, and touch emulation.\n");
 } finally {
   await new Promise((resolve) => server.close(resolve));
 }

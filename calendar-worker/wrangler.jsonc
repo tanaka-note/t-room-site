@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "t-room-calendar",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-29",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "tanaka-note.com/calendar/api/*", "zone_name": "tanaka-note.com" }],
+  "d1_databases": [{ "binding": "DB", "database_name": "calendar-db", "database_id": "f9ad73f1-92df-40ef-a363-cf328123589d", "migrations_dir": "migrations" }],
+  "services": [{ "binding": "SECURITY", "service": "t-room-security" }],
+  "queues": { "producers": [{ "binding": "SECURITY_AUDIT", "queue": "t-room-security-audit" }] },
+  "triggers": { "crons": ["10 19 * * *"] },
+  "vars": { "SESSION_VERSION": "1", "BUILD_ID": "calendar-0.1.0" }
+}

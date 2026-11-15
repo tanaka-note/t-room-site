@@ -4,12 +4,14 @@ import { database,d1,Bucket,recorder } from './fixtures.mjs';
 import { backupService } from '../src/backup.js';
 import { SERVICES } from '../src/registry.js';
 import { restoreIsolated } from '../tools/restore-isolated.mjs';
+import { saveExport } from '../src/export-backup.js';
+import { exportEnv, exportFetcher } from './export-fixtures.mjs';
 
 const insert=(db,t,row)=>db.prepare(`INSERT INTO ${t} (${Object.keys(row).join(',')}) VALUES (${Object.keys(row).map(()=>'?').join(',')})`).run(...Object.values(row));
 const b64=b=>Buffer.from(b).toString('base64');
 const un64=s=>Buffer.from(s,'base64');
 
-test('stored R2 generations of all eight services restore nonempty business data, keys and totals in isolation',async()=>{
+for(const mode of ['legacy','export'])test(`stored R2 ${mode} generations restore nonempty business data, keys and totals in isolation`,async()=>{
   // Synthetic keys exist only in this process. This proves preservation of the
   // encryption relationships, not production PRF/physical-device recovery.
   const aes=await crypto.subtle.generateKey({name:'AES-GCM',length:256},true,['encrypt','decrypt']);
@@ -71,9 +73,20 @@ test('stored R2 generations of all eight services restore nonempty business data
           insert(source,'ai_request_claims',{client_request_id:'processing',identity_id:'primary-admin',conversation_id:'conversation',character_id:'zundamon',status:'processing',model:'synthetic',reserved_micros_jpy:500});
         }
         if(service==='downloader') insert(source,'downloader_usage_daily',{day_jst:'2026-10-01',identity_id:'primary-admin',metric:'download',dimension:'all',event_count:3,byte_count:1234,value_sum:0,value_max:0,updated_at:'2026-10-01'});
-        const state=await backupService({[SERVICES[service].binding]:d1(source),BACKUP:bucket,...recorder()},service,Date.parse('2026-10-25T00:00:00Z'),async()=>{});
-        assert.equal(state.state,'ok',service);
-        restored[service]=(await restoreIsolated(bucket,`d1/${service}/v2/daily/2026-10-25.json.gz`,service)).db;
+        if(service==='calendar') {
+          for(const [kind,id,payload] of [['track','track',{id:'track',name:'synthetic tracking'}],['tag','tag',{id:'tag',name:'synthetic tag'}],['event','event',{id:'event',title:'synthetic appointment',trackIds:['track'],tagIds:['tag']}],['settings','preferences',{reminders:[60],theme:'lavender'}]]) {
+            insert(source,'calendar_entities',{account_id:'main',owner_identity:kind==='settings'?'primary-admin':'',kind,id,payload:JSON.stringify(payload),version:3});
+          }
+        }
+        let key;
+        if(mode==='legacy') {
+          const state=await backupService({[SERVICES[service].binding]:d1(source),BACKUP:bucket,...recorder()},service,Date.parse('2026-10-25T00:00:00Z'),async()=>{});
+          assert.equal(state.state,'ok',service);key=`d1/${service}/v2/daily/2026-10-25.json.gz`;
+        }else{
+          const mock=exportFetcher(source,service);
+          key=(await saveExport(exportEnv(service,d1(source),bucket),service,Date.parse('2026-10-25T00:00:00Z'),{fetcher:mock.fetcher,sleep:async()=>{}})).daily;
+        }
+        restored[service]=(await restoreIsolated(bucket,key,service)).db;
       } finally {source.close();}
     }
     assert.equal(restored.inventory.prepare('SELECT stock FROM inventory_items').get().stock,7,'no trigger replay doubles stock');
@@ -85,7 +98,14 @@ test('stored R2 generations of all eight services restore nonempty business data
     assert.equal(restored.ai.prepare('SELECT status FROM ai_request_claims').get().status,'failed');
     assert.equal(restored.security.prepare("SELECT count(*) AS n FROM security_credentials WHERE status='active'").get().n,0);
     assert.equal(restored.security.prepare("SELECT count(*) AS n FROM security_service_links WHERE status='active'").get().n,0);
-    for(const s of ['billing','payments','inventory']) assert.equal(restored[s].prepare(`SELECT sum(is_active) AS n FROM ${s}_accounts`).get().n,0);
+    for(const s of ['billing','payments','inventory','calendar']) assert.equal(restored[s].prepare(`SELECT sum(is_active) AS n FROM ${s}_accounts`).get().n,0);
+    const calendarEvent=restored.calendar.prepare("SELECT payload,version FROM calendar_entities WHERE kind='event'").get();
+    assert.equal(calendarEvent.version,3);assert.equal(JSON.parse(calendarEvent.payload).title,'synthetic appointment');
+    assert.deepEqual(JSON.parse(calendarEvent.payload).trackIds,['track']);assert.deepEqual(JSON.parse(calendarEvent.payload).tagIds,['tag']);
+    assert.equal(JSON.parse(restored.calendar.prepare("SELECT payload FROM calendar_entities WHERE kind='track'").get().payload).name,'synthetic tracking');
+    assert.deepEqual(JSON.parse(restored.calendar.prepare("SELECT payload FROM calendar_entities WHERE kind='settings' AND owner_identity='primary-admin'").get().payload).reminders,[60]);
+    assert.equal(restored.calendar.prepare('SELECT value FROM calendar_clock').get().value,4,'restore preserves the cursor without replaying triggers');
+    assert.equal(restored.calendar.prepare("SELECT session_version FROM calendar_accounts WHERE id='main'").get().session_version,2,'isolated restore invalidates previous sessions');
     const cloud=restored.cloud.prepare('SELECT * FROM cloud_files').get(), health=restored.health.prepare('SELECT * FROM health_records').get();
     const vault=restored.security.prepare('SELECT * FROM security_tcloud_client_vaults').get();
     const privateJwk=JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:un64(vault.payload_iv)},vaultKek,un64(vault.encrypted_payload))));

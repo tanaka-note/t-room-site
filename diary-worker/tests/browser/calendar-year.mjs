@@ -12,9 +12,14 @@ try {
     const url = new URL(route.request().url());
     if (url.pathname.startsWith("/diary/api/")) {
       let result = {};
-      if (url.pathname.endsWith("/session")) result = {
+      const session = {
         authenticated: true, role: "admin", accountName: "カレンダーテスト", householdId: "test",
         activeHouseholdId: "test", isGlobalOwner: false, canManageEntries: true, canViewTrash: true
+      };
+      if (url.pathname.endsWith("/session")) result = session;
+      if (url.pathname.endsWith("/bootstrap")) result = {
+        session, households: { households: [], activeHouseholdId: "test" },
+        meta: { months: [], tags: [], draftCount: 0 }, entries: { entries: [], hasMore: false }
       };
       if (url.pathname.endsWith("/meta")) result = { months: [], tags: [], draftCount: 0 };
       if (url.pathname.endsWith("/entries")) {

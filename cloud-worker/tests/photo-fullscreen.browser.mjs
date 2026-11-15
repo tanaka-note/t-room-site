@@ -12,6 +12,53 @@ async function fullscreen(page,active) {
     && document.querySelector("#photo-fullscreen-toggle").getAttribute("aria-pressed")===String(active),active);
   assert.equal(await page.locator("#photo-fullscreen-toggle").getAttribute("aria-pressed"),String(active));
 }
+const transform = page => page.locator("#preview-stage img").evaluate(img => {
+  const matrix = new DOMMatrix(getComputedStyle(img).transform);
+  return { scale: matrix.a, x: matrix.e, y: matrix.f };
+});
+async function wheelZoom(page) {
+  const box = await page.locator("#preview-stage").boundingBox();
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+  const scroll = await page.evaluate(() => __test.appScrollPosition().y);
+  await page.mouse.move(cx,cy+40);
+  await page.mouse.wheel(0,-100);
+  await page.waitForFunction(() => new DOMMatrix(getComputedStyle(document.querySelector("#preview-stage img")).transform).a > 1);
+  const zoomed = await transform(page);
+  assert.ok(Math.abs(zoomed.y - 40 * (1 - zoomed.scale)) < .01,"wheel zoom keeps the point under the cursor fixed");
+  assert.equal(await page.locator("#photo-zoom-toggle").getAttribute("aria-pressed"),"true");
+  await page.mouse.wheel(0,120);
+  await page.waitForFunction(() => document.querySelector("#photo-zoom-toggle").getAttribute("aria-pressed") === "false");
+  assert.deepEqual(await transform(page),{scale:1,x:0,y:0});
+  assert.equal(await page.evaluate(() => __test.appScrollPosition().y),scroll,"wheel zoom must not scroll the underlying listing");
+
+  const dispatch = init => page.evaluate(init => {
+    const stage = document.querySelector("#preview-stage");
+    const box = stage.getBoundingClientRect();
+    const event = new WheelEvent("wheel",{bubbles:true,cancelable:true,clientX:box.x+box.width/2,clientY:box.y+box.height/2,...init});
+    stage.dispatchEvent(event);
+    return { prevented:event.defaultPrevented, scale:new DOMMatrix(getComputedStyle(stage.querySelector("img")).transform).a };
+  },init);
+  const scales = [];
+  for (const init of [{deltaY:-16},{deltaY:-1,deltaMode:1},{deltaY:-16/box.height,deltaMode:2}]) {
+    const result = await dispatch(init);
+    assert.equal(result.prevented,true);
+    scales.push(result.scale);
+    await page.locator("#photo-zoom-toggle").click();
+  }
+  assert.ok(scales.every(scale => scale > 1 && Math.abs(scale-scales[0]) < .00001),"pixel, line and page deltas have equivalent sensitivity");
+  for (const init of [{deltaY:0},{deltaX:120,deltaY:-1},{deltaY:-120,ctrlKey:true},{deltaY:-120,metaKey:true},{deltaY:-120,shiftKey:true},{deltaY:-120,cancelable:false}]) {
+    assert.deepEqual(await dispatch(init),{prevented:false,scale:1},"unhandled wheel input keeps its default behavior");
+  }
+  await page.mouse.move(cx,cy); await page.mouse.down();
+  assert.deepEqual(await dispatch({deltaY:-120}),{prevented:false,scale:1},"wheel input must not interrupt a pointer gesture");
+  await page.mouse.up();
+  for (let i=0;i<12;i++) await dispatch({deltaY:-100000});
+  assert.equal((await transform(page)).scale,6,"wheel enlargement is bounded");
+  assert.deepEqual(await dispatch({deltaY:-120}),{prevented:true,scale:6});
+  for (let i=0;i<12;i++) await dispatch({deltaY:100000});
+  assert.deepEqual(await transform(page),{scale:1,x:0,y:0});
+  assert.deepEqual(await dispatch({deltaY:120}),{prevented:true,scale:1});
+}
 try {
   for (const [name,engine,launch] of engines) {
     const browser=await engine.launch({headless:true,...launch});
@@ -32,6 +79,14 @@ try {
       });
       assert.ok(Math.abs(bounds.x)<1&&Math.abs(bounds.y)<1&&Math.abs(bounds.width-bounds.vw)<1&&Math.abs(bounds.height-bounds.vh)<1,JSON.stringify(bounds));
       assert.ok(bounds.imageFits);
+      await wheelZoom(page);
+      const recoveredFocus=await page.evaluate(()=>{
+        document.activeElement?.blur();
+        const event=new KeyboardEvent("keydown",{key:"Tab",bubbles:true,cancelable:true});
+        document.dispatchEvent(event);
+        return event.defaultPrevented&&document.querySelector("#preview-stage-wrap").contains(document.activeElement);
+      });
+      assert.equal(recoveredFocus,true,"Tab must recover fullscreen controls after focus is lost");
       for(let i=0;i<5;i++) {
         await page.keyboard.press("Tab");
         assert.equal(await page.evaluate(()=>document.querySelector("#preview-stage-wrap").contains(document.activeElement)),true,"fullscreen focus must stay in visible controls");
@@ -50,6 +105,9 @@ try {
       await page.locator("#photo-fullscreen-toggle").click();await fullscreen(page,false);
       assert.equal(await page.locator("#preview-dialog").isVisible(),true);
       assert.equal(await page.locator("#photo-fullscreen-toggle").evaluate(b=>document.activeElement===b),true);
+      const afterExit=await transform(page);
+      await page.locator("#preview-stage").dispatchEvent("wheel",{deltaY:-120,cancelable:true});
+      assert.deepEqual(await transform(page),afterExit,"wheel zoom stops when fullscreen exits");
       await page.locator("#photo-fullscreen-toggle").focus();await page.keyboard.press("Enter");await fullscreen(page,true);
       await page.keyboard.press("Escape");await fullscreen(page,false);
       assert.equal(await page.locator("#preview-dialog").isVisible(),true,"first Escape exits fullscreen only");
@@ -111,7 +169,7 @@ try {
       await page.locator("#photo-zoom-toggle").click();
       assert.equal(await page.locator("#photo-zoom-toggle").getAttribute("aria-pressed"),"true");
       assert.deepEqual(errors,[]);
-      console.log("PASS native photo fullscreen, zoom/pan/navigation, focus, Escape, Back race, selection and fallback",name);
+      console.log("PASS native photo fullscreen, wheel zoom, zoom/pan/navigation, focus, Escape, Back race, selection and fallback",name);
     } finally {await browser.close();}
   }
 } finally {await fixture.close();}

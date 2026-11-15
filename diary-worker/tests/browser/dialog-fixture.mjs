@@ -1,3 +1,4 @@
+import { selectAlbumMonth } from "./album-month-fixture.mjs";
 import assert from 'node:assert/strict';
 import { createDiaryFixtureServer as createServer } from "./bootstrap-fixture.mjs";
 import { readFile } from 'node:fs/promises';
@@ -24,6 +25,8 @@ export async function runDialogs(service) {
   let writes = 0, releaseSave;
   let albumSize = 96, failAlbumOffset = -1, pauseAlbumOffset = -1, releaseAlbum;
   const albumRequests = [];
+  const auditRequests = [];
+  let holdAudit = false, releaseAudit;
   const delayedPhotos = new Set(), pendingPhotos = new Map(), photoWaiters = new Map(), photoRequests = new Map();
   const waitForPhoto = id => pendingPhotos.has(id) ? Promise.resolve() : new Promise(resolve => photoWaiters.set(id, resolve));
   const releasePhoto = id => { pendingPhotos.get(id)?.(); pendingPhotos.delete(id); };
@@ -38,6 +41,7 @@ export async function runDialogs(service) {
       if (path === '/photos/meta') return json(response, { months: [{ value: '2026-10', count: 317 }, { value: '2026-09', count: 7 }] });
       if (path === '/photos') {
         const offset = Number(url.searchParams.get('offset') || 0);
+        const limit = Number(url.searchParams.get('limit') || 48);
         const month = url.searchParams.get('month') || '';
         const size = month === '2026-09' ? 7 : albumSize;
         albumRequests.push({ offset, month, entryQuery: url.searchParams.get('entryQuery'), fileName: url.searchParams.get('fileName'), limit: url.searchParams.get('limit') });
@@ -47,8 +51,8 @@ export async function runDialogs(service) {
           response.writeHead(503, { 'content-type': 'application/json' });
           return response.end(JSON.stringify({ error: 'fixture album failure' }));
         }
-        return json(response, { photos: Array.from({ length: Math.max(0, Math.min(48, size - offset)) }, (_, i) => ({ ...photo, id: offset + i + 1,
-          displayUrl: `/display/${offset + i + 1}.svg`, fileName: `fixture-${offset + i + 1}.svg` })), hasMore: offset + 48 < size });
+        return json(response, { photos: Array.from({ length: Math.max(0, Math.min(limit, size - offset)) }, (_, i) => ({ ...photo, id: offset + i + 1,
+          displayUrl: `/display/${offset + i + 1}.svg`, fileName: `fixture-${offset + i + 1}.svg` })), hasMore: offset + limit < size });
       }
       if (request.method !== 'GET') writes++;
       return json(response, {});
@@ -58,7 +62,12 @@ export async function runDialogs(service) {
       if (path === '/session') return json(response, { authenticated: true, role: 'owner', accountId: account.id, accountName: 'fixture' });
       if (path === '/accounts') return json(response, { accounts: [account] });
       if (path === '/summary') return json(response, { account, month: url.searchParams.get('month'), entries: [], settlements: [settlement], settlementTotals: { incomingYen: 100, outgoingYen: 0 }, openingBalanceYen: 0, closingBalanceYen: 100 });
-      if (path === '/audit-logs') return json(response, { logs: [] });
+      if (path === '/audit-logs') {
+        const accountId = url.searchParams.get('accountId'); auditRequests.push(accountId);
+        if (accountId && holdAudit) { holdAudit = false; await new Promise(resolve => { releaseAudit = resolve; }); }
+        return json(response, { logs: Array.from({ length: 80 }, () => ({ occurredAt: '2026-11-01T00:00:00Z',
+          eventType: 'entry.create', actorName: 'fixture', targetName: accountId ? 'filtered-audit' : 'all-audit' })) });
+      }
       if (request.method !== 'GET') {
         writes++;
         await new Promise(resolveSave => { releaseSave = resolveSave; });
@@ -150,7 +159,8 @@ export async function runDialogs(service) {
         assert.equal(await page.locator('#camera-roll-dialog').evaluate(dialog => dialog.scrollTop), position);
         await page.evaluate(() => history.forward());
         await opened('photo-viewer-dialog');
-        await background('photo-viewer-dialog');
+        // The photo now fills the viewport, so there is no exposed backdrop.
+        await page.click('[data-close-dialog="photo-viewer-dialog"]');
         await closed('photo-viewer-dialog');
         assert.equal(await page.locator('#camera-roll-dialog').evaluate(dialog => dialog.open), true);
         // Neither internal blank space nor a drag out of the dialog closes it.
@@ -223,6 +233,14 @@ export async function runDialogs(service) {
         await waitForPhoto(2);
         assert.equal(await page.locator('#photo-viewer-image').getAttribute('src'), '/fixture.svg', 'show the selected thumbnail while full image is pending');
         assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-2.svg');
+        if (!touch) {
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => document.fullscreenElement !== null);
+          assert.equal(await page.locator('#photo-viewer-status').isVisible(), true, 'fullscreen success preserves the image loading status');
+          assert.equal(await page.locator('#photo-viewer-status').textContent(), '写真を読み込んでいます...');
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => !document.fullscreenElement);
+        }
         await navigate(1);
         await waitForPhoto(3);
         releasePhoto(3);
@@ -250,11 +268,19 @@ export async function runDialogs(service) {
         await clickPhoto(4);
         await page.waitForFunction(() => document.getElementById('photo-viewer-status').textContent === '写真を読み込めませんでした。');
         assert.equal(await page.locator('#photo-viewer-image').getAttribute('src'), '/fixture.svg', 'a failed full image retains the selected thumbnail');
+        if (!touch) {
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => document.fullscreenElement !== null);
+          assert.equal(await page.locator('#photo-viewer-status').isVisible(), true, 'fullscreen success preserves image loading errors');
+          assert.equal(await page.locator('#photo-viewer-status').textContent(), '写真を読み込めませんでした。');
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => !document.fullscreenElement);
+        }
         await back('photo-viewer-dialog');
         assert.equal(await page.evaluate(() => photoWildcardScans), 0, 'opening/closing photos must not scan the entire parent grid');
         await back('camera-roll-dialog');
         delayedPhotos.clear();
-        // Keep initial loading small, then add three pages or the entire month.
+        // Keep initial loading small, then expand progressively in bounded pages.
         albumSize = 317;
         albumRequests.length = 0;
         await page.click('#camera-roll-button');
@@ -265,25 +291,27 @@ export async function runDialogs(service) {
         await page.evaluate(() => { window.retainedPhotoCard = document.querySelector('[data-photo-index="0"]'); });
         await page.locator('#camera-roll-more').evaluate(button => { button.click(); button.click(); });
         await page.waitForFunction(() => !document.getElementById('camera-roll-more').disabled);
-        assert.equal(await page.locator('#camera-roll-grid button').count(), 192, 'all months adds exactly 144 photos');
-        assert.deepEqual(albumRequests.map(request => request.offset), [0, 48, 96, 144], 'double click must not duplicate requests');
+        assert.equal(await page.locator('#camera-roll-grid button').count(), 317, 'all months expands the remaining photos');
+        assert.deepEqual(albumRequests.map(request => request.offset), [0, 48, 144, 240], 'double click must not duplicate requests');
         assert.equal(await page.evaluate(() => retainedPhotoCard === document.querySelector('[data-photo-index="0"]')), true);
-        assert.equal(await page.locator('#camera-roll-more').isVisible(), true);
-        await page.selectOption('#photo-month-filter', '2026-10');
+        assert.equal(await page.locator('#camera-roll-more').isVisible(), false);
+        await selectAlbumMonth(page, '2026-10');
         await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 48 && !document.getElementById('camera-roll-more').disabled);
         albumRequests.length = 0;
         await page.click('#camera-roll-more');
         await page.waitForFunction(() => document.getElementById('camera-roll-more').hidden);
         assert.equal(await page.locator('#camera-roll-grid button').count(), 317, 'one click loads every photo in the month');
-        assert.deepEqual(albumRequests.map(request => request.offset), [48, 96, 144, 192, 240, 288]);
-        assert.ok(albumRequests.every(request => request.month === '2026-10' && request.limit === '48'));
+        assert.deepEqual(albumRequests.map(request => request.offset), [48, 144, 240]);
+        assert.ok(albumRequests.every(request => request.month === '2026-10' && request.limit === '96'));
         assert.equal(await page.locator('#camera-roll-grid img[loading="lazy"]').count(), 317);
         const expandedPosition = await page.locator('#camera-roll-dialog').evaluate(dialog => { dialog.scrollTop = 900; return dialog.scrollTop; });
         await clickPhoto(0);
         await opened('photo-viewer-dialog');
         await displayed(1);
         assert.equal(await page.locator('#photo-previous, #photo-next, .photo-nav').count(), 0, 'photo arrows are removed');
-        assert.equal(await page.locator('.photo-stage').evaluate(stage => getComputedStyle(stage).touchAction), 'pan-y pinch-zoom');
+        assert.equal(await page.locator('.photo-stage').evaluate(stage => getComputedStyle(stage).touchAction), 'none');
+        const stageBox = await page.locator('.photo-stage').boundingBox();
+        assert.deepEqual(stageBox, { x: 0, y: 0, width: touch ? 700 : 1280, height: 900 }, 'the image stage fills the viewport');
         assert.equal(await page.locator('#photo-viewer-image').evaluate(image => image.draggable), false);
         const viewerHistory = await page.evaluate(() => ({ state: JSON.stringify(history.state), length: history.length }));
         await navigate(-1);
@@ -303,7 +331,7 @@ export async function runDialogs(service) {
           await page.keyboard.press('Shift+ArrowRight');
           assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-1.svg', 'modified arrows retain their normal meaning');
           const scrollBefore = await page.locator('#photo-viewer-dialog').evaluate(dialog => dialog.scrollTop);
-          await page.locator('#photo-download-low').focus();
+          await page.locator('#photo-delete').focus();
           await page.keyboard.press('ArrowRight');
           await displayed(2);
           assert.equal(await page.locator('#photo-viewer-dialog').evaluate(dialog => dialog.scrollTop), scrollBefore, 'arrow navigation must not also scroll the viewer');
@@ -316,39 +344,136 @@ export async function runDialogs(service) {
         await page.mouse.move(boxBeforeDrag.x + boxBeforeDrag.width / 2 - 140, boxBeforeDrag.y + boxBeforeDrag.height / 2);
         await page.mouse.up();
         assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-1.svg', 'mouse dragging is not photo navigation');
+        const transform = () => page.locator('.photo-stage').evaluate(stage => ({
+          scale: Number(stage.style.getPropertyValue('--photo-scale')),
+          x: parseFloat(stage.style.getPropertyValue('--photo-x')),
+          y: parseFloat(stage.style.getPropertyValue('--photo-y'))
+        }));
+        if (touch) {
+          const center = { x: stageBox.width / 2, y: stageBox.height / 2 };
+          const points = distance => [
+            { id: 1, x: center.x - distance, y: center.y },
+            { id: 2, x: center.x + distance, y: center.y }
+          ];
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points(50) });
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: points(120) });
+          assert.ok((await transform()).scale > 2, 'real two-finger input zooms the image');
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: points(120).slice(0, 1) });
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 1, x: 100, y: center.y }] });
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+          const beforePan = await transform();
+          await swipe(120);
+          const afterPan = await transform();
+          assert.ok(afterPan.x > beforePan.x, `a new single-finger drag pans the zoomed image: ${JSON.stringify({ beforePan, afterPan })}`);
+          assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-1.svg', 'pinch and panning never switch photos');
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points(120) });
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: points(30) });
+          await touchSession.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+          assert.equal((await transform()).scale, 1, 'pinching inward returns to fitted size');
+        } else {
+          await page.mouse.move(stageBox.width * 0.65, stageBox.height / 2);
+          await page.mouse.wheel(0, -400);
+          await page.waitForFunction(() => Number(document.querySelector('.photo-stage').style.getPropertyValue('--photo-scale')) > 2);
+          const zoomed = await transform();
+          assert.ok(zoomed.x < 0, 'wheel zoom is anchored at the mouse position');
+          await page.mouse.down();
+          await page.mouse.move(stageBox.width * 0.65 + 100, stageBox.height / 2 + 60);
+          await page.mouse.up();
+          const panned = await transform();
+          assert.ok(panned.x > zoomed.x && panned.y > zoomed.y, 'mouse dragging pans in both directions');
+          await page.keyboard.press('ArrowRight');
+          assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-1.svg', 'arrows pan while zoomed');
+          await page.mouse.wheel(0, 10000);
+          await page.waitForFunction(() => document.querySelector('#photo-zoom-reset').textContent === '100%');
+          assert.deepEqual(await transform(), { scale: 1, x: 0, y: 0 }, 'wheel zoom-out resets offsets at fitted size');
+          await page.keyboard.press('+');
+          assert.ok((await transform()).scale > 1, 'keyboard plus zooms');
+          await page.keyboard.press('0');
+          assert.equal((await transform()).scale, 1);
+          for (const deltaMode of [1, 2]) {
+            await page.locator('.photo-stage').evaluate((stage, deltaMode) => {
+              const box = stage.getBoundingClientRect();
+              const event = new WheelEvent('wheel', { deltaY: -20, deltaMode, cancelable: true,
+                clientX: box.width / 2, clientY: box.height / 2 });
+              stage.dispatchEvent(event);
+              if (!event.defaultPrevented) throw new Error('wheel must prevent page scrolling');
+            }, deltaMode);
+            assert.ok((await transform()).scale > 1, 'line/page wheel units zoom');
+            await page.click('#photo-zoom-reset');
+          }
+          await page.locator('.photo-stage').dblclick();
+          assert.equal((await transform()).scale, 2, 'double-click zooms');
+          await page.keyboard.press('ArrowDown');
+          await page.click('#photo-zoom-reset');
+          assert.deepEqual(await transform(), { scale: 1, x: 0, y: 0 });
+        }
+        assert.equal(await page.evaluate(() => visualViewport.scale), 1, 'zoom is local to the image, not the whole page');
+        // Resizing/orientation changes must keep the photo fitted and controls visible.
+        await page.setViewportSize({ width: 900, height: 600 });
+        await page.waitForFunction(() => document.querySelector('.photo-stage').clientHeight === 600);
+        assert.equal((await transform()).scale, 1);
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.waitForFunction(() => document.querySelector('.photo-stage').clientWidth === 390);
+        for (const selector of ['#photo-zoom-reset', '[data-close-dialog="photo-viewer-dialog"]', '#photo-download-original']) {
+          const box = await page.locator(selector).boundingBox();
+          assert.ok(box.x >= 0 && box.x + box.width <= 390 && box.y >= 0 && box.y + box.height <= 844, `${selector} stays visible on a narrow screen`);
+        }
+        if (process.env.TROOM_PHOTO_SCREENSHOT_DIR) {
+          await page.screenshot({ path: resolve(process.env.TROOM_PHOTO_SCREENSHOT_DIR, `photo-${touch ? 'touch' : 'mouse'}.png`) });
+        }
+        await page.setViewportSize({ width: touch ? 700 : 1280, height: 900 });
+        await page.waitForFunction(() => document.querySelector('.photo-stage').clientHeight === 900);
         await navigate(1);
         await displayed(2);
-        assert.equal(await page.locator('#photo-download-low').getAttribute('href'), '/display/2.svg?download=1', 'download follows the selected photo');
+        assert.equal(await page.locator('#photo-download-low').count(), 0, 'low-quality download is retired');
+        assert.equal(await page.locator('#photo-delete').isVisible(), true);
         await navigate(-1);
         await displayed(1);
         assert.deepEqual(await page.evaluate(() => ({ state: JSON.stringify(history.state), length: history.length })), viewerHistory, 'photo navigation must not add or replace dialog history');
+        if (!touch) {
+          await page.locator('.photo-viewer-shell').evaluate(shell => {
+            shell.requestFullscreen = () => Promise.reject(new DOMException('Fixture fullscreen rejection', 'NotAllowedError'));
+          });
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => document.querySelector('#photo-viewer-status').textContent === 'この環境では全画面に切り替えられません。');
+          assert.equal(await page.locator('#photo-viewer-status').isVisible(), true, 'a rejected fullscreen request displays its error');
+          await page.locator('.photo-viewer-shell').evaluate(shell => { delete shell.requestFullscreen; });
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => document.fullscreenElement === document.querySelector('.photo-viewer-shell'));
+          assert.equal(await page.locator('#photo-viewer-status').isVisible(), false, 'a successful retry clears only the old fullscreen error');
+          await page.keyboard.press('Escape');
+          await page.waitForFunction(() => !document.fullscreenElement);
+          assert.equal(await page.locator('#photo-viewer-dialog').evaluate(dialog => dialog.open), true, 'Escape exits browser fullscreen before closing the viewer');
+          await page.click('#photo-fullscreen');
+          await page.waitForFunction(() => document.fullscreenElement !== null);
+        }
         await back('photo-viewer-dialog');
+        await page.waitForFunction(() => !document.fullscreenElement);
         assert.equal(await page.locator('#camera-roll-grid button').count(), 317);
         assert.equal(await page.locator('#camera-roll-dialog').evaluate(dialog => dialog.scrollTop), expandedPosition);
 
         // A failed page can resume without losing or duplicating earlier pages.
         await page.fill('#photo-entry-search', 'tag');
-        await page.fill('#photo-file-name-search', 'fixture');
         await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 48 && !document.getElementById('camera-roll-more').disabled);
-        failAlbumOffset = 96;
+        failAlbumOffset = 144;
         await page.click('#camera-roll-more');
         await page.waitForFunction(() => document.getElementById('camera-roll-status').textContent === 'fixture album failure');
-        assert.equal(await page.locator('#camera-roll-grid button').count(), 96);
+        assert.equal(await page.locator('#camera-roll-grid button').count(), 144);
         albumRequests.length = 0;
         await page.click('#camera-roll-more');
         await page.waitForFunction(() => document.getElementById('camera-roll-more').hidden);
         assert.equal(await page.locator('#camera-roll-grid button').count(), 317);
-        assert.equal(albumRequests[0].offset, 96);
-        assert.ok(albumRequests.every(request => request.entryQuery === 'tag' && request.fileName === 'fixture'));
+        assert.equal(albumRequests[0].offset, 144);
+        assert.ok(albumRequests.every(request => request.entryQuery === 'tag' && request.fileName === null));
 
         // Switching months invalidates a late page and stops its remaining loop.
-        await page.selectOption('#photo-month-filter', '');
+        await selectAlbumMonth(page, '');
         await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 48 && !document.getElementById('camera-roll-more').disabled);
         pauseAlbumOffset = 48;
         releaseAlbum = null;
         await page.click('#camera-roll-more');
         while (!releaseAlbum) await new Promise(resolve => setTimeout(resolve, 10));
-        await page.selectOption('#photo-month-filter', '2026-09');
+        await selectAlbumMonth(page, '2026-09');
         await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 7);
         const requestsBeforeRelease = albumRequests.length;
         const staleResponse = page.waitForResponse(response => {
@@ -368,9 +493,35 @@ export async function runDialogs(service) {
         assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-7.svg', 'last photo does not wrap');
         await back('photo-viewer-dialog');
         await back('camera-roll-dialog');
+        // Even repeated programmatic clicks cannot grow an album beyond 4,800.
+        albumSize = 5001;
+        albumRequests.length = 0;
+        await page.click('#camera-roll-button');
+        await selectAlbumMonth(page, '');
+        await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 48 && !document.getElementById('camera-roll-more').disabled);
+        await page.locator('#camera-roll-more').evaluate(button => { button.click(); button.click(); });
+        await page.waitForFunction(() => !document.getElementById('camera-roll-more').disabled);
+        // Slow test machines may hit the per-click time budget before the cap.
+        while (await page.locator('#camera-roll-more').isVisible()) {
+          await page.locator('#camera-roll-more').evaluate(button => button.click());
+          await page.waitForFunction(() => !document.getElementById('camera-roll-more').disabled);
+        }
+        assert.equal(await page.locator('#camera-roll-grid button').count(), 4800);
+        assert.match(await page.locator('#camera-roll-status').textContent(), /表示上限.*絞り込んで/);
+        assert.equal(await page.locator('#camera-roll-grid button').evaluateAll(cards => new Set(cards.map(card => card.dataset.photoIndex)).size), 4800);
+        const requestsAtCap = albumRequests.length;
+        await page.locator('#camera-roll-more').evaluate(button => { button.click(); button.click(); });
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        assert.equal(albumRequests.length, requestsAtCap, 'the total cap must also guard the loader');
+        assert.equal(albumRequests.at(-1).offset, 4752);
+        assert.equal(albumRequests.at(-1).limit, '48', 'the last request fits the remaining capacity');
+        await selectAlbumMonth(page, '2026-09');
+        await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 7 && !document.getElementById('camera-roll-more').disabled);
+        assert.doesNotMatch(await page.locator('#camera-roll-status').textContent(), /表示上限/);
+        await back('camera-roll-dialog');
         albumSize = 1;
         await page.click('#camera-roll-button');
-        await page.selectOption('#photo-month-filter', '');
+        await selectAlbumMonth(page, '');
         await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 1);
         await clickPhoto(0);
         await displayed(1);
@@ -418,10 +569,39 @@ export async function runDialogs(service) {
         await page.keyboard.press('Escape');
         await closed('entry-dialog');
         await back('settlements-dialog');
-        await page.click('#logs-button');
-        await opened('logs-dialog');
-        await page.locator('[data-close-dialog="logs-dialog"]').click();
-        await closed('logs-dialog');
+        for (const close of ['button', 'escape', 'back', 'backdrop']) {
+          await page.click('#logs-button'); await opened('logs-dialog');
+          await page.selectOption('#logs-account-filter', account.id);
+          await page.waitForFunction(() => document.getElementById('logs-body').textContent.includes('filtered-audit'));
+          await page.locator('#logs-dialog .logs-wrap').evaluate(node => { node.scrollTop = 200; });
+          if (close === 'button') await page.locator('[data-close-dialog="logs-dialog"]').click();
+          else if (close === 'escape') await page.keyboard.press('Escape');
+          else if (close === 'back') await back('logs-dialog');
+          else await background('logs-dialog');
+          await closed('logs-dialog');
+          assert.equal(await page.locator('#logs-account-filter').inputValue(), '');
+          assert.equal(await page.locator('#logs-body tr').count(), 0);
+          if (close === 'back') await page.evaluate(() => history.forward());
+          else await page.click('#logs-button');
+          await opened('logs-dialog');
+          await page.waitForFunction(() => document.getElementById('logs-body').textContent.includes('all-audit'));
+          assert.equal(auditRequests.at(-1), null);
+          assert.equal(await page.locator('#logs-dialog .logs-wrap').evaluate(node => node.scrollTop), 0);
+          await page.locator('[data-close-dialog="logs-dialog"]').click(); await closed('logs-dialog');
+        }
+        await page.click('#logs-button'); await opened('logs-dialog');
+        holdAudit = true; releaseAudit = null;
+        await page.selectOption('#logs-account-filter', account.id);
+        while (!releaseAudit) await new Promise(resolve => setTimeout(resolve, 10));
+        await page.keyboard.press('Escape'); await closed('logs-dialog');
+        await page.click('#logs-button'); await opened('logs-dialog');
+        await page.waitForFunction(() => document.getElementById('logs-body').textContent.includes('all-audit'));
+        const staleAudit = page.waitForResponse(response => response.url().includes('/audit-logs?') && response.url().includes('accountId='));
+        releaseAudit(); await staleAudit;
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        assert.equal(await page.locator('#logs-account-filter').inputValue(), '');
+        assert.doesNotMatch(await page.locator('#logs-body').textContent(), /filtered-audit/);
+        await page.locator('[data-close-dialog="logs-dialog"]').click(); await closed('logs-dialog');
         await page.click('#new-entry-button');
         await opened('entry-dialog');
         await page.fill('#entry-description', 'fixture');
