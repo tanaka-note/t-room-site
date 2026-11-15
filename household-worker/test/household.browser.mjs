@@ -12,6 +12,7 @@ import {verifyWebApp} from './web-app.browser.mjs';
 import {verifySessionClearing} from './session-clearing.browser.mjs';
 import {verifyIndependentHouseholds} from './independent-households.browser.mjs';
 import {verifyPasskeyLogin} from './passkey-login.browser.mjs';
+import {verifyAccountOrder} from './account-order.browser.mjs';
 const require=createRequire(import.meta.url),engines=require('../../diary-worker/node_modules/playwright'),engine=process.env.TROOM_BROWSER||'chromium';
 const owner=fixture(),viewer=fixture('viewer');await owner.login();const initial=(await owner.state()).data.accounts[0];await owner.mutate('account.save',{...initial,asOf:'2026-09-01'});viewer.env.DB=owner.env.DB;await viewer.login();
 const chiharu=fixture('chiharu-admin','sample-chiharu');chiharu.env.DB=owner.env.DB;await chiharu.login();
@@ -33,6 +34,7 @@ async function chooseDate(page,id,value){
 }
 
 try{
+ await verifyAccountOrder(browser,url,await owner.state(),chooseDate);
  await verifyPasskeyLogin(browser,url,await owner.state());
  await verifyIndependentHouseholds(browser,url,owner,chiharu);
  await verifySessionClearing(browser,url);
