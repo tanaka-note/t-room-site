@@ -110,7 +110,12 @@ try {
   const recovered = await page.evaluate(async () => (await import('/security/diary-setup.mjs')).configureDiary());
   assert.equal(recovered.minimumGeneration,2);
   assert.equal(wire.filter(r => r.path === '/security/api/diary/config').length,1,'response-loss retry reads back the exact saved configuration');
-  await page.evaluate(async () => (await import('/security/diary-setup.mjs')).configureDiary());
+  const downloadPending=page.waitForEvent('download');
+  await page.evaluate(async () => {const setup=await import('/security/diary-setup.mjs');const trust=await setup.configureDiary();setup.downloadDiaryTrust(trust);});
+  const download=await downloadPending;
+  assert.equal(download.suggestedFilename(),'diary-public-trust.json');
+  const downloaded=JSON.parse(await readFile(await download.path(),'utf8'));
+  assert.equal(downloaded.minimumGeneration,3);assert.equal(JSON.stringify(downloaded).includes('privateEnvelope'),false);await download.delete();
   assert.equal(f.central.sqlite.prepare('SELECT generation FROM security_diary_key_config').get().generation,3);
   assert.equal(await page.evaluate(async () => {
     const {importDiaryTrust} = await import('/diary/diary-encryption.js');
