@@ -133,3 +133,5 @@ try {
   await page.evaluate(() => window.fixtureBridge.lock());
   console.log('Recovery browser: real T-Cloud PRF envelope, Security setup response-loss retry, strict public trust and actual encrypted Diary/Investment HTTP runtime and encrypted financial import retry passed (synthetic authentication).');
 } finally {await browser.close(); await new Promise(r => server.close(r)); await f.close();}
+
+await import('./automatic-preparation.browser.mjs');

@@ -83,6 +83,31 @@ async function writerReadiness(env,current) {
   return {ready:missingAccountIds.length===0,missingAccountIds:missingAccountIds.sort()};
 }
 
+// Diary calls this only after checking its signed service cookie. Like
+// Household's automatic setup, revalidate the active link/epoch at Security.
+// This prepares the caller's immutable vault; it grants no data access.
+export async function diaryAutomaticVault(env,input,validate,audit=async()=>{}) {
+  if(!diaryKeysEnabled(env))fail(404,'DiaryEncryptionDisabled');
+  if(input?.service!=='diary'||input.authMethod!=='passkey'||!(await validate(env,{...input,sessionEpoch:input.passkeySessionEpoch})).valid)fail(403,'DiaryAutomaticSessionInvalid');
+  const link=(await liveLinks(env,input.identityId,input.credentialId)).find(link=>link.id===input.serviceLinkId&&link.accountId===input.serviceAccountId);
+  if(!link)fail(403,'DiaryAutomaticSessionInvalid');
+  await accountClaims(env,link.accountId);
+  const recipientId=await diaryRecipientId(input.credentialId,link.id);
+  if(input.preparation!==undefined) {
+    const age=Date.now()-Date.parse(input.startedAt);
+    if(!Number.isFinite(age)||age<0||age>300000)fail(428,'RecentAuthenticationRequired');
+    if(!exact(input.preparation,['recipientId','vault'])||input.preparation.recipientId!==recipientId)fail(403,'DiaryAutomaticRecipientMismatch');
+    if(encode(input.preparation).length>20000)fail(413,'InvalidDiaryVault');
+    const request=new Request('https://security.internal/security/api/diary/vault',{method:'POST',body:JSON.stringify({serviceLinkId:link.id,vault:input.preparation.vault})});
+    try {
+      await handleDiaryKeys('/api/diary/vault',request,env,{identityId:input.identityId,credentialId:input.credentialId,authenticatedAt:Date.parse(input.startedAt)/1000},
+        {readJson:request=>request.json(),json:(value,status=200)=>Response.json(value,{status}),audit});
+    }catch(error){if(error.status!==409||error.message!=='DiaryVaultImmutable')throw error;}
+  }
+  const row=await env.DB.prepare('SELECT vault_json FROM security_diary_key_vaults WHERE recipient_id=? AND identity_id=? AND credential_id=? AND service_link_id=? AND account_id=?').bind(recipientId,input.identityId,input.credentialId,link.id,link.accountId).first();
+  return {recipientId,accountId:link.accountId,webAuthnCredentialId:input.credentialId,vault:row?JSON.parse(row.vault_json):null};
+}
+
 // Caller supplies live Security sessions and its existing mutation/reauth gates.
 export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audit}) {
   if(!diaryKeysEnabled(env))fail(404,'DiaryEncryptionDisabled');

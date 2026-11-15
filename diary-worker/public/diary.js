@@ -1,4 +1,4 @@
-export async function startDiary(initialSession, deferredInstallPrompt = null, onReady = () => deferredInstallPrompt, initialScrollIntent = {}, encryptionRuntime = null) {
+export async function startDiary(initialSession, deferredInstallPrompt = null, onReady = () => deferredInstallPrompt, initialScrollIntent = {}, encryptionRuntime = null, initialNotice = '') {
   const diaryStorage={getItem:key=>encryptionRuntime?encryptionRuntime.storage.getItem(key):window.sessionStorage.getItem(key),setItem:(key,value)=>encryptionRuntime?encryptionRuntime.storage.setItem(key,value):window.sessionStorage.setItem(key,value),removeItem:key=>encryptionRuntime?encryptionRuntime.storage.removeItem(key):window.sessionStorage.removeItem(key)};
   const diaryHistory=encryptionRuntime?{get state(){return encryptionRuntime.history.state;},get scrollRestoration(){return encryptionRuntime.history.scrollRestoration;},set scrollRestoration(value){encryptionRuntime.history.scrollRestoration=value;},replaceState:(...args)=>encryptionRuntime.history.replaceState(...args),back:()=>encryptionRuntime.history.back()}:window.history;
   let encryptedNavigationType=null,encryptedReferrer='',lastEncryptedSession=initialSession;
@@ -353,6 +353,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     updateInstallButtonVisibility();
     elements.appView.inert = false;
     await startup;
+    if(initialNotice)showToast(initialNotice);
   }
 
   function loadPhotoViewer() {
@@ -692,19 +693,31 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     const button = document.querySelector("#passkey-login");
     setBusy(button, true, "確認中…");
     elements.loginMessage.textContent = "";
+    let authentication;
     try {
-      const authentication = await TRoomPasskeys.authenticate("diary", choosePasskeyLink);
+      authentication = await TRoomPasskeys.authenticate("diary", choosePasskeyLink);
       if (attempt !== loginAttempt) return;
       const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
       if (attempt !== loginAttempt) return;
-      if(session.encryption?.enabled){encryptionRuntime?.lock();const encryption=await import(new URL(`diary-encryption.js${scriptUrl.search}`,scriptUrl).href);encryptionRuntime=await encryption.startEncryptedDiary(session,authentication);}
+      encryptionRuntime?.lock();encryptionRuntime=null;
+      let preparationMessage;
+      if(session.encryption) {
+        try {
+          const preparation=await import(new URL(`diary-key-preparation.js${scriptUrl.search}`,scriptUrl).href);
+          await preparation.prepareDiaryKeys(api,session,authentication,()=>{if(attempt!==loginAttempt)throw new Error('ログイン状態が変わりました。');});
+        }catch(error){if(session.encryption.enabled||error.sessionChanged||[401,403].includes(error.status))throw error;preparationMessage='日記は利用できますが、暗号化の利用準備を完了できませんでした。対応するパスキーで次回ログイン時に再試行します。';}
+        if(session.encryption.enabled){const encryption=await import(new URL(`diary-encryption.js${scriptUrl.search}`,scriptUrl).href);encryptionRuntime=await encryption.startEncryptedDiary(session,authentication);}
+      }
+      if(attempt!==loginAttempt)return;
       await enterDiary(session);
+      if(preparationMessage)showToast(preparationMessage);
     } catch (error) {
       if (attempt !== loginAttempt) return;
       elements.loginMessage.textContent = /ID・パスワード/.test(error.message)
         ? "パスキーを利用できるブラウザで開いてください。復旧が必要な場合は管理者へご相談ください。"
         : error.message;
     } finally {
+      authentication?.prfOutput?.fill(0);
       if (attempt === loginAttempt) setBusy(button, false, "パスキーでログイン");
     }
   }
@@ -3996,7 +4009,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         error.status = response.status;
         throw error;
       }
-      if (generation !== sessionGeneration) throw new Error("ログイン状態が変わりました。");
+      if (generation !== sessionGeneration) throw Object.assign(new Error("ログイン状態が変わりました。"),{sessionChanged:true});
       return result;
     } finally {
       if (timing || options.onTiming) {

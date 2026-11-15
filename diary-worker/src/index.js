@@ -4,7 +4,7 @@ import {investmentScope,canRead as canReadEncryptedRecord} from '../e2ee/policy.
 import {createStore as createEncryptedStore} from '../e2ee/store.mjs';
 import { migrationInventory,importMigration } from '../e2ee/migration-store.mjs';
 import { rotationStatus,rotationInventory,beginRotation,stageRotation,commitRotation,maintenanceInventory } from '../e2ee/rotation-store.mjs';
-import { proxyDiaryAuthentication,diaryEncryptionOrigin } from "../e2ee/origin.mjs";
+import { proxyDiaryAuthentication,diaryEncryptionOrigin,assertDiaryEncryptionOrigin } from "../e2ee/origin.mjs";
 import { drainEncryptedMedia } from "../e2ee/media.mjs";
 import { parseRecord } from "../e2ee/store.mjs";
 import { encryptionEnabled,encryptionStatus,handleEncryptedApi } from "../e2ee/http.mjs";
@@ -395,6 +395,13 @@ async function handleApi(request, env, url, path, context, getSession, timing) {
 
   if(encryptionEnabled(env)) {
     try {
+      if(path==='/api/encryption/prepare'&&['GET','POST'].includes(request.method)) {
+        if(session.authMethod!=='passkey'||session.serviceAccountId!==session.accountId)throw new HttpError(403,'パスキーでログインしてください。');
+        const control=await readRollout(env.DB);if(control.everEncrypted)assertDiaryEncryptionOrigin(env,url);
+        const preparation=request.method==='POST'?await readJson(request,20000):undefined;
+        const result=await env.SECURITY.prepareDiaryVault({...session,service:'diary',preparation});
+        return json(result);
+      }
       const encrypted=await handleEncryptedApi(request,env,url,path,session,{json,readJson,readMultipartForm});if(encrypted)return encrypted;
       const policy=await encryptionStatus(env);
       const dataPath=/^\/api\/(bootstrap|meta|entries|drafts|photos|photo-upload-sessions|investment-history)(?:\/|$)/.test(path);
@@ -650,6 +657,7 @@ async function serveAsset(request, env, url, path) {
     ["/icons/favicon-64-v4.png", "/icons/favicon-64-v4.png"],
     ["/investment.css", "/investment.css"],
     ["/investment.js", "/investment.js"],
+    ["/diary-key-preparation.js","/diary-key-preparation.js"],
     ["/investment-encryption.js","/investment-encryption.js"]
   ]);
   const isDiaryRoute = path === "/" || path === "/tags" || path === "/tags/" || path.startsWith("/entry/") || path.startsWith("/tag/") || path === "/trash" || path === "/favorites" || path === "/favorites/";

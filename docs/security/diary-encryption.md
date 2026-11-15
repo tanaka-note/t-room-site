@@ -22,6 +22,14 @@
 - 日記用v10 exportは旧平文の日記tableを含めず、暗号文と同世代の署名済みdirectory・PRF封印vault・scope grants・追加record grants・中央復旧envelopeを同梱する。Securityはv4へ鍵tableも保存する。固定D1 exportを分割し、鍵世代が変われば公開を拒否して直前の正常世代を残す。移行／鍵更新の復元確認には同日の日次を上書きしない専用checkpointを作る。
 - 空の隔離DBへの復元はpausedのままとし、バックアップ内のアカウント／認証情報も従来どおり隔離する。元のパスキーと追加grantsによる再復号を試験する。既存の写真backup方式とスケジュールは維持する。
 
+### 通常の鍵準備と管理者操作
+
+家計簿と同様、本人のPRF対応パスキーによる日記ログインから、日記専用vaultを端末内で自動生成・解除する。初回の軽量bootstrapとログアウト後の再ログインの両方で実行し、PRFはログイン処理の終了時に消去する。Security基盤は裏側で連携・失効・epochを検証し、本人の封印済みvaultをimmutableに保存する。通常の利用者が鍵準備のためにSecurity Centerへ移動する手順は不要である。
+
+初回vaultの登録には5分以内の認証を要求し、受取人IDを現在の日記セッションへ結び付ける。応答喪失・同時ログインでも既存vaultを置き換えず、本人のPRFで解除できることを確認する。この自動準備はgrant発行やデータ閲覧権限を追加しない。中央復旧・鍵承認・初回の全件移行と復元照合は、承認済みのSecurity Centerの管理経路を引き続き使う。
+
+移行前のlegacyでは準備できない場合に状態を通知して従来利用を継続し、次のパスキーログインで再試行する。暗号化切替後は準備や解除に失敗すると投稿画面を開かず、平文へ戻さない。既存セッションからの再訪で公開trustが未設定の場合も、通常のログインとtrust取込へ案内する。
+
 ### 専用originの運用
 
 Custom DomainはCloudflareのWorkers Domains APIで別管理する。通常のActions公開は既存の`versions upload`／`versions deploy`であり、domain・DNS・既存routeを変更しない。インフラ用の手動公開時は`diary.tanaka-note.com`のCustom Domainと従来の`tanaka-note.com/diary*` routeの両方を維持し、未指定domainの削除を承認しない。不要になった準備用domainのrollbackは、専用originへの切替・暗号化データ移行を開始していないことを確認してから、今回追加したdomainだけを外す。
@@ -31,7 +39,7 @@ Custom DomainはCloudflareのWorkers Domains APIで別管理する。通常のAc
 ### 管理者端末と本番の残条件
 
 1. Backup Worker、Security、Diaryを検証した同一commitから準備公開する。候補SQLは通常migrationの外に置いたままとし、適用前にschema・対象DB・既存バックアップを照合する。`node --use-env-proxy tools/prepare-diary-encryption.mjs --infrastructure`は、既存のクラウド環境Network secretを使い、同じmain commitのCI成功と最新main・対象account/DB・既存DDLを確認してBackup Workerを先に公開し、追加schemaだけを適用する。通常のproduction tokenへD1/R2権限を追加しない。投稿停止・暗号化の有効化・平文削除は実行しない。専用HTTPS originと、そのoriginからの日記専用WebAuthn認証を準備する。
-2. 第一管理者と各利用者の実PRF、予備パスキー、既存の第一管理者PWからの中央復旧を実端末で確認する。合成PRFやテスト用復旧RSA鍵で代替したとは扱わない。
+2. 第一管理者と各利用者は日記の通常パスキーログインで鍵を自動準備する。管理者は準備済みの鍵を承認し、実PRF、予備パスキー、既存の第一管理者PWからの中央復旧を実端末で確認する。合成PRFやテスト用復旧RSA鍵で代替したとは扱わない。
 3. Security Centerの第一管理者から「日記の暗号化移行を準備・再開」を実行する。投稿が停止し、暗号化planが端末に保存され、全件importと復元用checkpointの作成へ進む。通信が切れた場合は同じ端末から再開する。
 4. checkpointを`backup-worker/tools/restore-isolated.mjs`の`restoreIsolated`で空のSQLiteへ復元し、別経路で保管した公開trustのanchorとminimumGenerationを渡す。`diaryRestoreReport`の結果だけをJSONへ保存する。鍵・PRF・本文の平文をこの処理へ渡さない。
 5. 同じ管理者端末で復元確認ファイルを読み込み、実再認証・再復号後に切り替える。通常編集者／一般roleの投稿、世帯境界、下書き、検索、お気に入り、写真表示・保存、再ログインを確認する。
