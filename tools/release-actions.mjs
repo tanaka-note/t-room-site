@@ -47,6 +47,19 @@ export function assertDeployedVersion(deployments, version) {
     throw new Error('Production is not serving the uploaded version at 100%.');
   }
 }
+// Deployment metadata and public assets can briefly lag a successful promotion.
+// Repeat only read-only verification; never repeat the upload or promotion here.
+export async function waitForProductionVerification(verify, {
+  attempts = 12, sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+} = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try { return await verify(); }
+    catch (error) {
+      if (attempt >= attempts) throw error;
+      await sleep(5000);
+    }
+  }
+}
 export function assertVersionSettings(before, after) {
   for (const key of ['routes', 'route', 'workers_dev', 'preview_urls', 'triggers', 'tail_consumers', 'migrations', 'containers']) {
     if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) throw new Error(`Non-versioned infrastructure change (${key}) requires the dedicated release procedure.`);
@@ -145,9 +158,12 @@ export async function releaseActions(target) {
     if (git(['ls-remote', 'origin', 'refs/heads/main']).split(/\s/)[0] !== head) throw new Error('main advanced during upload; version was not promoted.');
     run(directory, [cli, 'versions', 'deploy', `${version}@100%`, '--yes']);
   }
-  const deployments = await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${name}/deployments`);
-  assertDeployedVersion(deployments, version);
-  if (app) run(root, ['tools/verify-web-app-builds.mjs', '--target', app.deployTarget]);
+  await waitForProductionVerification(async () => {
+    const deployments = await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${name}/deployments`);
+    assertDeployedVersion(deployments, version);
+  });
+  if (app) await waitForProductionVerification(
+    () => run(root, ['tools/verify-web-app-builds.mjs', '--target', app.deployTarget]), { attempts: 6 });
   if(target==='calendar'){const response=await fetch('https://tanaka-note.com/calendar/api/version',{cache:'no-store',signal:AbortSignal.timeout(30000)});if(!response.ok||(await response.json()).build!==head)throw new Error('Calendar production build mismatch.');}
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Production verified\nWorker: ${name}\nCommit: ${head}\nVersion: ${version} (100%)\n`);
 }
