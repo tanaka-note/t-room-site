@@ -8,10 +8,11 @@ const {chromium}=createRequire(import.meta.url)('../../diary-worker/node_modules
 const browser=await chromium.launch({headless:true}),results=[];
 const median=a=>a.sort((x,y)=>x-y)[Math.floor(a.length/2)];
 try{for(const count of [100,1000,10000,20000]){
- const f=fixture();await f.login();const original=await f.state(),dataset=f.sqlite.prepare('SELECT active_dataset id FROM household_state').get().id,category=original.data.categories.find(c=>c.type==='expense').id;
+ const f=fixture();await f.login();const original=await f.state(),dataset=f.sqlite.prepare('SELECT s.active_dataset id FROM household_state s JOIN household_accounts a ON a.household_id=s.id WHERE a.id=?').get('owner').id,category=original.data.categories.find(c=>c.type==='expense').id;
  const insert=f.sqlite.prepare('INSERT INTO household_records VALUES(?,?,?,?)');f.sqlite.exec('BEGIN');
  const values=Array.from({length:count},(_,i)=>({id:crypto.randomUUID(),date:'2026-09-15',type:'expense',amount:i+1,categoryId:category,description:'Synthetic '+i,notes:'fixture only',accountId:null,included:true}));
  for(const value of values)insert.run(dataset,'transactions',value.id,JSON.stringify(value));f.sqlite.exec('COMMIT');
+ assert.equal((await f.state()).data.transactions.length,count,'measure the signed-in household, not another household dataset');
  const reads=[],saves=[];let writes;
  for(let i=0;i<3;i++){let t=performance.now();await f.state();reads.push(performance.now()-t);const before=f.sqlite.prepare('SELECT total_changes() n').get().n;t=performance.now();const response=await f.mutate('transaction.save',{...values[0],amount:100+i});saves.push(performance.now()-t);assert.equal(response.status,200);writes=f.sqlite.prepare('SELECT total_changes() n').get().n-before;assert.equal(writes,3,'one changed record, revision and receipt');}
  const server=createServer(async(req,res)=>{try{const u=new URL(req.url,'http://localhost');if(u.pathname.startsWith('/household/api/')){const chunks=[];for await(const c of req)chunks.push(c);const text=Buffer.concat(chunks).toString(),r=await f.request(u.pathname.slice('/household'.length),text?JSON.parse(text):undefined,{},req.method);res.writeHead(r.status,Object.fromEntries(r.headers));res.end(Buffer.from(await r.arrayBuffer()));return;}

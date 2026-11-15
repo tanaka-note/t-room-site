@@ -13,8 +13,17 @@ test('calendar keeps Diary design and behavior while preserving payment year bou
     .replace('navigation.register("troom-calendar-dialog", { dialog: ensureDialog() });', 'navigation.register("troom-calendar-dialog", { dialog: ensureDialog(), onClose: resetCalendar });');
   assert.equal(source.slice(source.indexOf('(() =>')), diary);
   assert.equal(read('../public/troom-date-picker.css'), read('../../diary-worker/public/troom-date-picker.css'));
-  const wheelLayout = read('../../diary-worker/public/diary.css').split('.date-wheel-dialog {')[1].split('\n.toast {')[0];
-  assert.ok(read('../public/date-wheel.css').includes('.date-wheel-dialog {' + wheelLayout));
+  // Diary also has album-only controls and defaults to instant positioning.
+  // Payments retains smooth scrolling; compare the shared base layout only.
+  const wheelRules = read('../public/date-wheel.css').match(/^\.date-wheel[^\n{]+\{\n[^}]*\}/gm);
+  assert.ok(wheelRules?.some(rule => rule.startsWith('.date-wheel-dialog {')));
+  assert.ok(wheelRules.some(rule => rule.startsWith('.date-wheel-column {')));
+  const diaryStyles = read('../../diary-worker/public/diary.css');
+  for (const rule of wheelRules) {
+    const sharedRule = rule.startsWith('.date-wheel-column {')
+      ? rule.replace('scroll-behavior: smooth;', 'scroll-behavior: auto;') : rule;
+    assert.ok(diaryStyles.includes(sharedRule), rule.split('\n')[0]);
+  }
   const context = { window: {}, document: { readyState: 'loading', addEventListener() {} } };
   vm.runInNewContext(source, context);
   const picker = context.window.TRoomDatePicker;
