@@ -12,7 +12,7 @@
 
 利用者はD1の既存データと今後の全利用者の投稿を暗号化へ移行する方針、および第一管理者の既存中央復旧による全件鍵更新を承認した。本文・お気に入り等の通常編集権限は変更しない。`canManageEntries`のある利用者はrole名にかかわらず暗号化投稿でき、未準備のパスキー／非対応PRFでは平文へフォールバックしない。写真本体・EXIF・R2 HTTP metadataの暗号化と再アップロードは後続工程である。投資履歴も利用者が今回の暗号化対象へ追加することを承認した。従来のcanViewInvestmentによる閲覧範囲を維持し、通常の更新署名は第一管理者のサービスaccountへ限定する。
 
-状態は実装・隔離検証中。本番schema適用、専用origin公開、実端末でのPRF／第一管理者PW復旧、本番データ移行はまだ実施していない。過去のバックアップ／Time Travelも平文化したまま残り得るため、この段階を完全移行済みと報告しない。
+実装は #227・#230 から本番公開済み。検証済みmain `ea90fa073c76a96629643a7c1fb903ddc0ccebc8` からBackup Workerを先に公開し、本番schemaを追加した。専用origin `https://diary.tanaka-note.com` は既存Diary WorkerのCustom Domainとして準備済み。この設定では鍵の利用準備APIを公開するが、D1のrolloutは`legacy`・generation 0のまま維持し、投稿停止・既存データ移行・平文削除は行わない。実端末でのPRF／第一管理者PW復旧、本番データ移行はまだ実施していない。過去のバックアップ／Time Travelも平文化したまま残り得るため、この段階を完全移行済みと報告しない。
 
 - #155・#128・#132・#229を含むmainを取り込んだ。写真コピー用Cronを再開せず、正式写真の既存R2 objectを再保存・削除しない。
 - 初回移行は旧DBの書込fenceを確認し、固定sourceを管理者端末で暗号化する。本文・著者・revision・下書き・保持範囲・写真順・個人のお気に入り・投資履歴を引き継ぐ。旧DBのタイトル等の原値も暗号文内へ保管し、入力の再正規化で失わない。
@@ -21,6 +21,12 @@
 - 復元確認ファイルは隔離SQLiteへ実際に復元した暗号文から作る。管理者端末が全記事・summary・写真metadataを再復号し、plan・現DB・復元DBの全件一致を確認して切替evidenceへ署名する。初回の最終切替では旧D1本文・タグ・写真metadata・お気に入り・投資履歴等の削除と暗号化投稿の有効化を同じtransactionに含める。失敗時は元の平文と投稿停止状態を維持する。
 - 日記用v10 exportは旧平文の日記tableを含めず、暗号文と同世代の署名済みdirectory・PRF封印vault・scope grants・追加record grants・中央復旧envelopeを同梱する。Securityはv4へ鍵tableも保存する。固定D1 exportを分割し、鍵世代が変われば公開を拒否して直前の正常世代を残す。移行／鍵更新の復元確認には同日の日次を上書きしない専用checkpointを作る。
 - 空の隔離DBへの復元はpausedのままとし、バックアップ内のアカウント／認証情報も従来どおり隔離する。元のパスキーと追加grantsによる再復号を試験する。既存の写真backup方式とスケジュールは維持する。
+
+### 専用originの運用
+
+Custom DomainはCloudflareのWorkers Domains APIで別管理する。通常のActions公開は既存の`versions upload`／`versions deploy`であり、domain・DNS・既存routeを変更しない。インフラ用の手動公開時は`diary.tanaka-note.com`のCustom Domainと従来の`tanaka-note.com/diary*` routeの両方を維持し、未指定domainの削除を承認しない。不要になった準備用domainのrollbackは、専用originへの切替・暗号化データ移行を開始していないことを確認してから、今回追加したdomainだけを外す。
+
+本番の内容を取得せずに件数・保存byteを確認した時点で、移行元は日記1,235件・写真metadata 21,845件・投資履歴1,523件を含む約20.4 MB。source上限50 MB以内であった。この数値は移行時の固定台帳ではなく、移行開始時には停止済みsourceを改めて照合する。
 
 ### 管理者端末と本番の残条件
 

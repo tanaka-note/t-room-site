@@ -139,7 +139,10 @@
       "publicUrls": [
         "https://tanaka-note.com/diary/",
         "https://tanaka-note.com/diary/investment/",
-        "https://tanaka-note.com/diary/favorites/"
+        "https://tanaka-note.com/diary/favorites/",
+        "https://diary.tanaka-note.com/diary/",
+        "https://diary.tanaka-note.com/diary/investment/",
+        "https://diary.tanaka-note.com/diary/favorites/"
       ],
       "entrypoints": [
         "diary-worker/public/index.html",
