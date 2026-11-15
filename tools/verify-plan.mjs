@@ -3,8 +3,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 export const root = fileURLToPath(new URL('../', import.meta.url));
-export const services = ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments'];
-export const android = ['android-tcloud', 'android-tcloud-twa', 'android-diary-twa', 'android-ai-chat'];
+export const services = ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments', 'household', 'calendar', 'portfolio'];
+export const android = ['android-tcloud', 'android-tcloud-twa', 'android-diary-twa', 'android-ai-chat', 'android-calendar'];
 export const targets = ['tooling', 'site', ...services, 'backup', 'auth', 'container-unit', ...android];
 const registry = JSON.parse(readFileSync(new URL('../web-apps.json', import.meta.url), 'utf8'));
 const node = (cwd, ...args) => ({ cwd, args });
@@ -19,7 +19,7 @@ export function commands(target) {
   const checks = (services.includes(target) || target === 'backup') ? [{ cwd: `${target}-worker`, script: 'check' }] : [];
   // Downloader's existing check also compiles Python; no Docker or definition refresh.
   const suites = {
-    tooling: [node('.', '--test', 'tools/test-development-flow.mjs', 'tools/test-release-actions.mjs', 'tools/test-cloud-infrastructure.mjs', 'tools/test-secret-ignore.mjs', 'tools/test-web-app-build-freshness.mjs')],
+    tooling: [node('.', '--test', 'tools/test-development-flow.mjs', 'tools/test-release-actions.mjs', 'tools/test-operations-regression.mjs', 'tools/test-cloud-infrastructure.mjs', 'tools/test-secret-ignore.mjs', 'tools/test-web-app-build-freshness.mjs')],
     site: [
       { cwd: '.', script: 'asset-report:test' },
       { cwd: '.', script: 'brand:test' },
@@ -29,16 +29,18 @@ export function commands(target) {
       { cwd: '.', script: 'browser-policy:test' }
     ],
     cloud: tests('cloud-worker', ...[
-      'retired-player', 'photo-navigation', 'photo-loading', 'photo-viewer-assets', 'search-input', 'folder-scroll-position', 'folder-listing-api', 'diary-backup-mount',
+      'trash-retention', 'trash-retention-runtime', 'folder-trash', 'subadmin-trash', 'retired-player', 'photo-navigation', 'photo-loading', 'photo-viewer-assets', 'search-input', 'folder-scroll-position', 'folder-listing-api', 'diary-backup-mount',
       'listing-model', 'listing-boundary', 'selection-state', 'selection-boundary', 'bulk-delete', 'bulk-delete-boundary', 'selection-move', 'selection-history', 'selection-toolbar-stability', 'search-delete-stability', 'transfer-progress', 'upload-view-boundary', 'folder-transfer', 'search-result-ranking', 'upload-live-progress', 'upload-differential', 'transfer-cancel', 'crypto-roundtrip', 'member-api-boundary', 'passkey-session-resume', 'passkey-rolling', 'vault-cache', 'session-refresh', 'permission-guards', 'password-session-lifetime',
       'manual-thumbnail-api', 'encrypted-thumbnail-policy', 'favorites-api', 'share-isolation',
       'media-format', 'media-remux-race', 'media-range', 'media-prefetch', 'media-long-range', 'offline-storage', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'player-stability', 'desktop-seek', 'sort-preferences-preview-cleanup', 'passkey-performance'
     ].map(n => `tests/${n}.mjs`)),
     backup: [{ cwd: 'backup-worker', script: 'test' }],
+    calendar: [{ cwd: 'calendar-worker', script: 'test' }],
     security: [node('security-worker', '--test', ...files('security-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
     diary: [node('.', 'tools/check-web-app-builds.mjs', '--target', 't-room-diary'),
       node('.', 'tools/verify-web-contracts.mjs'),
-      ...tests('diary-worker', ...['entry-domain', 'photo-viewer', 'startup-state', 'month-range', 'rich-text-ui', 'tags-ui', 'dialog-assets', 'request-safety', 'session-read-reuse', 'backup', 'last-published-migration', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view', 'bootstrap', 'static-cache', 'passkey-login-ui'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs')],
+      node('diary-worker', '--test', 'tests/photo-backup-retirement.mjs'),
+      ...tests('diary-worker', ...['entry-domain', 'photo-viewer', 'photo-deletion', 'album-photo-deletion', 'photo-order', 'photo-save', 'startup-state', 'month-range', 'rich-text-ui', 'tags-ui', 'dialog-assets', 'request-safety', 'session-read-reuse', 'backup', 'last-published-migration', 'search-text', 'favorites-ui', 'drafts-ui', 'entry-time-ui', 'entry-time.e2e', 'history-ui', 'navigation-return-ui', 'pwa-ui', 'startup-view', 'bootstrap', 'static-cache', 'passkey-login-ui'].map(n => `tests/${n}.mjs`), 'tests/permissions.e2e.mjs')],
     billing: [{ cwd: 'billing-worker', script: 'test' }],
     downloader: [node('downloader-worker', '--test', ...files('downloader-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
     downloader2: [
@@ -47,6 +49,8 @@ export function commands(target) {
       { cwd: 'downloader2-worker', script: 'test' }
     ],
     ai: [{ cwd: 'ai-worker', script: 'test' }],
+    household: [{ cwd: 'household-worker', script: 'test' }],
+    portfolio: [{ cwd: 'portfolio-worker', script: 'test' }],
     payments: [{ cwd: 'payments-worker', script: 'test' }],
     inventory: [{ cwd: 'inventory-worker', script: 'test' }],
     health: [{ cwd: 'health-worker', script: 'test' }],
@@ -60,14 +64,17 @@ export function commands(target) {
 }
 
 export function browserTests(target) {
+  if (target === 'portfolio') return ['portfolio-worker/test/portfolio.browser.mjs'];
+  if (target === 'household') return ['household-worker/test/household.browser.mjs', 'household-worker/test/encryption.browser.mjs', 'diary-worker/tests/browser/passkey-account-dialog.mjs'];
   if (target === 'payments') return ['payments-worker/test/payments.browser.mjs'];
   if (target === 'health') return ['health-worker/test/health.browser.mjs'];
-  const existing = ({ tooling: ['tools/test-browser-trace.mjs'], site: ['tools/test-public-site-visual.mjs', 'tools/test-asset-report.browser.mjs'], cloud: ['cloud-worker/tests/photo-fullscreen.browser.mjs', 'cloud-worker/tests/photo-viewer.browser.mjs', 'cloud-worker/tests/photo-download.browser.mjs', 'cloud-worker/tests/photo-lifecycle.browser.mjs', 'cloud-worker/tests/folder-scroll-position.browser.mjs', 'cloud-worker/tests/listing-boundary.browser.mjs', 'cloud-worker/tests/selection-boundary.browser.mjs', 'cloud-worker/tests/selection-scroll.browser.mjs', 'cloud-worker/tests/bulk-delete.browser.mjs', 'cloud-worker/tests/upload-message.browser.mjs', 'cloud-worker/tests/local-search.browser.mjs', 'cloud-worker/tests/search-controls.browser.mjs', 'cloud-worker/tests/preview-close.browser.mjs', 'cloud-worker/tests/passkey-folder-scopes.browser.mjs', 'cloud-worker/tests/passkey-tab-isolation.browser.mjs', 'cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs', 'cloud-worker/tests/media-format-fallback.browser.mjs', 'cloud-worker/tests/media-long-range.browser.mjs', 'cloud-worker/tests/media-seek.browser.mjs'],
-    security: ['security-worker/test/overview.browser.mjs', 'security-worker/test/audit-history.browser.mjs', 'security-worker/test/invite-completion.browser.mjs', 'security-worker/test/password-login-client.browser.mjs'],
-    diary: ['diary-worker/tests/browser/navigation-return.mjs', 'diary-worker/tests/browser/startup-performance.mjs', 'diary-worker/tests/browser/passkey-login.mjs', 'diary-worker/tests/browser/dialog-navigation.mjs', 'diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs', 'diary-worker/tests/browser/photo-marker-atomicity.mjs', 'diary-worker/tests/browser/search.mjs'],
+  const existing = ({ tooling: ['tools/test-browser-trace.mjs'], site: ['tools/test-public-site-visual.mjs', 'tools/test-asset-report-retirement.browser.mjs'], cloud: ['cloud-worker/tests/photo-fullscreen.browser.mjs', 'cloud-worker/tests/photo-viewer.browser.mjs', 'cloud-worker/tests/photo-download.browser.mjs', 'cloud-worker/tests/photo-lifecycle.browser.mjs', 'cloud-worker/tests/folder-scroll-position.browser.mjs', 'cloud-worker/tests/listing-boundary.browser.mjs', 'cloud-worker/tests/selection-boundary.browser.mjs', 'cloud-worker/tests/selection-scroll.browser.mjs', 'cloud-worker/tests/bulk-delete.browser.mjs', 'cloud-worker/tests/upload-message.browser.mjs', 'cloud-worker/tests/local-search.browser.mjs', 'cloud-worker/tests/search-controls.browser.mjs', 'cloud-worker/tests/preview-close.browser.mjs', 'cloud-worker/tests/passkey-folder-scopes.browser.mjs', 'cloud-worker/tests/passkey-tab-isolation.browser.mjs', 'cloud-worker/tests/favorites-navigation.browser.mjs', 'cloud-worker/tests/manual-video-thumbnail.browser.mjs', 'cloud-worker/tests/preview-player-parity.browser.mjs', 'cloud-worker/tests/media-format-fallback.browser.mjs', 'cloud-worker/tests/media-long-range.browser.mjs', 'cloud-worker/tests/media-seek.browser.mjs'],
+    security: ['security-worker/test/household-automatic.browser.mjs', 'security-worker/test/overview.browser.mjs', 'security-worker/test/audit-history.browser.mjs', 'security-worker/test/invite-completion.browser.mjs', 'security-worker/test/password-login-client.browser.mjs'],
+    diary: ['diary-worker/tests/browser/photo-save.mjs', 'diary-worker/tests/browser/photo-deletion.mjs', 'diary-worker/tests/browser/session-clearing.mjs', 'diary-worker/tests/browser/album-photo-order.mjs', 'diary-worker/tests/browser/navigation-return.mjs', 'diary-worker/tests/browser/startup-performance.mjs', 'diary-worker/tests/browser/passkey-login.mjs', 'diary-worker/tests/browser/dialog-navigation.mjs', 'diary-worker/tests/browser/favorites-flow.mjs', 'diary-worker/tests/browser/entry-time.mjs', 'diary-worker/tests/browser/photo-marker-atomicity.mjs', 'diary-worker/tests/browser/draft-deletion.mjs', 'diary-worker/tests/browser/search.mjs'],
     billing: ['billing-worker/test/dialog-navigation.browser.mjs'],
     inventory: ['inventory-worker/test/inventory.browser.mjs'] })[target] || [];
-  if (target === 'cloud') existing.unshift('cloud-worker/tests/move-partial.browser.mjs', 'cloud-worker/tests/scoped-moves.browser.mjs', 'cloud-worker/tests/folder-history-loading.browser.mjs', 'cloud-worker/tests/backup-status.browser.mjs', 'cloud-worker/tests/diary-backup-mount.browser.mjs', 'cloud-worker/tests/photo-preview-loading.browser.mjs');
+  if (target === 'cloud') existing.unshift('cloud-worker/tests/trash-retention.browser.mjs', 'cloud-worker/tests/move-partial.browser.mjs', 'cloud-worker/tests/scoped-moves.browser.mjs', 'cloud-worker/tests/folder-history-loading.browser.mjs', 'cloud-worker/tests/backup-status.browser.mjs', 'cloud-worker/tests/diary-backup-mount.browser.mjs', 'cloud-worker/tests/photo-preview-loading.browser.mjs');
+  if (target === 'diary') existing.push('diary-worker/tests/browser/archive-navigation.mjs');
   const searchClear = ['site', 'cloud', 'diary', 'inventory'].includes(target) ? ['tools/test-search-clear.browser.mjs'] : [];
   return ['cloud', 'security', 'diary', 'billing'].includes(target)
     ? [...existing, ...searchClear, 'diary-worker/tests/browser/passkey-account-dialog.mjs'] : [...existing, ...searchClear];
@@ -86,6 +93,7 @@ export function affected(paths) {
     if (path === 'assets/session-secret.mjs') add(...services, 'auth');
     if (/^(package\.json$|pnpm-)/.test(path)) { add('tooling', 'site'); continue; }
     const mobile = android.find(d => path.startsWith(`${d}/`));
+    if (path === 'tools/update-calendar-holidays.mjs') { add('android-calendar'); continue; }
     if (mobile) { add(mobile); continue; }
     const service = [...services, 'backup'].find(s => path.startsWith(`${s}-worker/`));
     if (service) add(service);
@@ -151,9 +159,9 @@ export function ciPlan({ event, ref, base, head, defaultBranch = 'origin/main' }
 export function installDirectories(selected) {
   const dirs = new Set(['.']);
   for (const target of selected) {
-    if (['site', 'diary'].includes(target)) dirs.add('security-worker');
+    if (['site', 'diary', 'calendar'].includes(target)) dirs.add('security-worker');
     if (services.includes(target) || target === 'backup') dirs.add(`${target}-worker`);
-    if (['tooling', 'site', 'cloud', 'security', 'diary', 'billing', 'health', 'payments', 'auth'].includes(target)) dirs.add('diary-worker');
+    if (['tooling', 'site', 'cloud', 'security', 'diary', 'billing', 'health', 'payments', 'household', 'portfolio', 'auth'].includes(target)) dirs.add('diary-worker');
     if (target === 'auth') for (const s of ['security', 'cloud', 'billing', 'ai']) dirs.add(`${s}-worker`);
   }
   return [...dirs];

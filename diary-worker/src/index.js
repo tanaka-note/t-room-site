@@ -1,5 +1,7 @@
 import { foregroundSessionActivity, serviceRollingSession, renewServiceSession, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
 import { createDiaryEntryDomain } from "./entry-domain.js";
+import { deleteAlbumPhoto } from "./photo-deletion.js";
+import { readPhotoSaveList } from "./photo-save.js";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { validatePasswordSession, passwordSessionClaims } from "../../assets/password-auth-policy.mjs";
@@ -14,9 +16,11 @@ import { getBackupSnapshot } from "./backup-browser.js";
 export class BackupBrowserIntegration extends WorkerEntrypoint {
   async getSnapshot(options) {
     const snapshot = await getBackupSnapshot(this.env, { refresh: options?.refresh === true });
-    let status;
-    try { status = await this.env.SECURITY.getBackupStatus('diary'); }
-    catch { status = { state: 'unavailable' }; }
+    const read = async id => {
+      try { return await this.env.SECURITY.getBackupStatus(id); }
+      catch { return { state: 'unavailable' }; }
+    };
+    const status = await read('diary');
     return { ...snapshot, status };
   }
 }
@@ -157,8 +161,12 @@ export default {
 
   async scheduled(controller, env, context) {
     const scheduledTime = Number(controller?.scheduledTime) || Date.now();
+    if (controller?.cron && controller.cron !== '25 18 * * *') throw new Error('UnknownDiaryCron');
     scheduleIndependentTasks(context, [
-      () => runScheduledDiaryBackup(env, scheduledTime),
+      async () => {
+        const result = await runScheduledDiaryBackup(env, scheduledTime);
+        if (!result.complete || result.retentionFailed) throw new Error('DiaryBackupRunIncomplete');
+      },
       () => runScheduledMediaDeletionCleanup(env),
       () => runScheduledStagedPhotoCleanup(env)
     ]);
@@ -325,6 +333,10 @@ async function handleApi(request, env, url, path, context, getSession, timing) {
     return listPhotoMeta(env, session);
   }
 
+  if (path === "/api/photos/save-list" && request.method === "GET") {
+    return json(await readPhotoSaveList(url, env, session, { normalizeFilterDate, HttpError }));
+  }
+
   if (path === "/api/photo-upload-sessions" && request.method === "POST") {
     requireEntryManagementAccess(session);
     return createPhotoUploadSession(request, env, session);
@@ -397,6 +409,14 @@ async function handleApi(request, env, url, path, context, getSession, timing) {
   const photoDeleteMatch = path.match(/^\/api\/photos\/([0-9a-f-]{36})$/i);
   if (photoDeleteMatch && request.method === "DELETE") {
     requireEntryManagementAccess(session);
+    // workerd can expose an empty HTTP DELETE body as a stream. Existing editor
+    // requests have no JSON Content-Type; album requests explicitly send JSON.
+    if (request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() === "application/json") {
+      const body = await readJson(request, 4096);
+      const result = await deleteAlbumPhoto(photoDeleteMatch[1], body.revision, env, session, HttpError);
+      await drainMediaDeletionQueue(env, result.entryId, { maxBatches: MEDIA_DELETION_REQUEST_MAX_BATCHES });
+      return json(result);
+    }
     return deleteEntryPhoto(photoDeleteMatch[1], env, session);
   }
 
@@ -482,16 +502,22 @@ async function serveAsset(request, env, url, path) {
   const assetPaths = new Map([
     ["/diary.css", "/diary.css"],
     ["/diary.js", "/diary.js"],
+    ["/photo-migration.js", "/photo-migration.js"],
+    ["/photo-migration-core.js", "/photo-migration-core.js"],
+    ["/photo-migration.css", "/photo-migration.css"],
     ["/diary-bootstrap.js", "/diary-bootstrap.js"],
     ["/password-login-audit.js", "/password-login-audit.js"],
     ["/dialog-navigation.js", "/dialog-navigation.js"],
     ["/diary-photo-processing.js", "/diary-photo-processing.js"],
     ["/diary-photo-upload.js", "/diary-photo-upload.js"],
     ["/diary-photo-viewer.js", "/diary-photo-viewer.js"],
+    ["/diary-photo-save.js", "/diary-photo-save.js"],
     ["/diary-rich-text.js", "/diary-rich-text.js"],
     ["/diary-search.js", "/diary-search.js"],
     ["/diary-weather.js", "/diary-weather.js"],
     ["/troom-date-picker.css", "/troom-date-picker.css"],
+    ["/tlain-login.css", "/tlain-login.css"],
+    ["/tlain-login.js", "/tlain-login.js"],
     ["/troom-date-picker.js", "/troom-date-picker.js"],
     ["/manifest.webmanifest", "/manifest.webmanifest"],
     ["/service-worker.js", "/service-worker.js"],
@@ -731,7 +757,7 @@ async function getEntry(id, env, session) {
     return json({ error: "日記が見つかりません。" }, 404);
   }
   const excludedPhotoIds = parsePhotoIdList(row.draft_excluded_photo_ids);
-  const photos = await listEntryPhotos(id, env, session, Number(row.draft_of_entry_id || 0), excludedPhotoIds);
+  const photos = await listEntryPhotos(id, env, session, Number(row.draft_of_entry_id || 0), excludedPhotoIds, row.content);
   return json({ entry: { ...serializeEntry(row), photos } });
 }
 
@@ -756,17 +782,19 @@ async function updateFavorite(id, shouldFavorite, env, session) {
   return json({ ok: true, isFavorite: shouldFavorite });
 }
 
-async function listEntryPhotos(entryId, env, session, sourceEntryId = 0, excludedPhotoIds = []) {
+async function listEntryPhotos(entryId, env, session, sourceEntryId = 0, excludedPhotoIds = [], content = null) {
   const relatedEntryId = sourceEntryId || entryId;
   const result = await env.DB.prepare(`
     SELECT p.id, p.entry_id, p.file_name, p.content_type, p.original_size, p.width, p.height,
            p.created_by_name, p.created_at, e.entry_date, e.title AS entry_title,
-           e.author_id, e.author_name
+           e.author_id, e.author_name,
+           instr(lower(COALESCE(?, e.content)), '[[写真:' || lower(p.id) || ']]') AS content_position
     FROM diary_photos p
     JOIN diary_entries e ON e.id = p.entry_id
     WHERE (p.entry_id = ? OR p.entry_id = ?) AND e.household_id = ?
-    ORDER BY CASE WHEN p.entry_id = ? THEN 0 ELSE 1 END, p.created_at ASC, p.id ASC
-  `).bind(entryId, relatedEntryId, session.activeHouseholdId, relatedEntryId).all();
+    ORDER BY CASE WHEN content_position = 0 THEN 1 ELSE 0 END ASC, content_position ASC,
+             CASE WHEN p.entry_id = ? THEN 0 ELSE 1 END, p.created_at ASC, p.id ASC
+  `).bind(content, entryId, relatedEntryId, session.activeHouseholdId, relatedEntryId).all();
   const excluded = new Set(excludedPhotoIds);
   return (result.results || []).filter((row) => !excluded.has(String(row.id).toLowerCase())).map(serializePhoto);
 }
@@ -779,18 +807,22 @@ async function listPhotos(url, env, session) {
   const month = /^\d{4}-\d{2}$/.test(url.searchParams.get("month") || "")
     ? url.searchParams.get("month")
     : "";
+  // Only monthly albums can reverse direction. Photo order comes from the body,
+  // never the finish times of parallel uploads; legacy photos follow body photos.
+  const direction = month && url.searchParams.get("order") === "oldest" ? "ASC" : "DESC";
   const conditions = ["e.household_id = ?", "e.deleted_at IS NULL", "e.status = 'published'"];
   const bindings = [session.activeHouseholdId];
   if (entryQuery) {
     conditions.push(`(
       instr(e.title, ?) > 0
       OR instr(e.content, ?) > 0
+      OR instr(p.file_name, ?) > 0
       OR EXISTS (
         SELECT 1 FROM diary_tags photo_tag
         WHERE photo_tag.entry_id = e.id AND instr(photo_tag.tag, ?) > 0
       )
     )`);
-    bindings.push(entryQuery, entryQuery, entryQuery);
+    bindings.push(entryQuery, entryQuery, entryQuery, entryQuery);
   }
   if (month) {
     // The ASCII month prefix interval preserves the old match (even legacy values),
@@ -806,11 +838,14 @@ async function listPhotos(url, env, session) {
   const result = await env.DB.prepare(`
     SELECT p.id, p.entry_id, p.file_name, p.content_type, p.original_size, p.width, p.height,
            p.created_by_name, p.created_at, e.entry_date, e.title AS entry_title,
-           e.author_id, e.author_name
+           e.author_id, e.author_name,
+           instr(lower(e.content), '[[写真:' || lower(p.id) || ']]') AS content_position
     FROM diary_photos p
     JOIN diary_entries e ON e.id = p.entry_id
     WHERE ${conditions.join(" AND ")}
-    ORDER BY e.entry_date DESC, p.created_at DESC, p.id DESC
+    ORDER BY e.entry_date ${direction}, e.last_published_at ${direction}, e.id ${direction},
+             CASE WHEN content_position = 0 THEN 1 ELSE 0 END ${direction}, content_position ${direction},
+             p.created_at ${direction}, p.id ${direction}
     LIMIT ? OFFSET ?
   `).bind(...bindings).all();
   const rows = result.results || [];
@@ -1530,9 +1565,8 @@ async function servePhoto(id, variant, request, env, session, url) {
   headers.set("ETag", object.httpEtag);
   headers.set("Cache-Control", "private, max-age=3600");
   headers.set("Content-Type", headers.get("Content-Type") || (variant === "original" ? row.content_type : "image/webp"));
-  if (url.searchParams.get("download") === "1") {
-    const name = variant === "original" ? row.file_name : `${stripExtension(row.file_name)}-low.webp`;
-    headers.set("Content-Disposition", contentDisposition(name));
+  if (variant === "original" && url.searchParams.get("download") === "1") {
+    headers.set("Content-Disposition", contentDisposition(row.file_name));
   }
   if (request.method === "HEAD") return new Response(null, { status: 200, headers });
   return new Response(object.body, { status: 200, headers });
@@ -2652,10 +2686,6 @@ function validateDateRange(dateFrom, dateTo) {
 function normalizeFileName(value) {
   const normalized = String(value || "photo").normalize("NFC").replace(/[\u0000-\u001f\u007f]/g, "").trim();
   return (normalized || "photo").slice(0, 240);
-}
-
-function stripExtension(value) {
-  return String(value || "photo").replace(/\.[^.]+$/, "") || "photo";
 }
 
 function contentDisposition(fileName) {

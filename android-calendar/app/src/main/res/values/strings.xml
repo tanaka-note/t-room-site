@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">カレンダー</string>
+    <string name="asset_statements">[{\"include\":\"https://tanaka-note.com/.well-known/assetlinks.json\"}]</string>
+</resources>

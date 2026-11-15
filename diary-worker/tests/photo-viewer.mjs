@@ -15,7 +15,7 @@ function fixture() {
       entryDate: '2026-10-01', entryTitle: '写真', originalSize: 100, width: 20, height: 30 },
     { fileName: 'second.jpg', displayUrl: '/full/2', originalUrl: '/original/2', originalSize: 200 }
   ], index: 0 };
-  const nodes = { image: new TestImage(), date: {}, title: {}, status: {}, file: {}, downloadLow: {}, downloadOriginal: {} };
+  const nodes = { image: new TestImage(), date: {}, title: {}, status: {}, file: {}, deleteButton: {}, downloadOriginal: {} };
   const viewer = createPhotoViewer({ nodes, selection,
     formatDate: value => value || '', formatBytes: value => `${value} bytes`,
     createImage() { const image = new TestImage(); images.push(image); return image; }
@@ -31,7 +31,7 @@ test('render keeps thumbnail, labels, download URLs and decoded full image behav
   assert.equal(f.nodes.image.alt, '<img src=x>.jpg');
   assert.equal(f.nodes.title.textContent, '写真');
   assert.equal(f.nodes.file.textContent, '<img src=x>.jpg / 100 bytes / 20×30');
-  assert.equal(f.nodes.downloadLow.href, '/full/1?download=1');
+  assert.equal(f.nodes.deleteButton.hidden, true, 'deletion requires caller authorization');
   assert.equal(f.nodes.downloadOriginal.href, '/original/1?download=1');
   assert.equal(f.nodes.status.textContent, '写真を読み込んでいます...');
   await f.images[1].onload();

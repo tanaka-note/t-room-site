@@ -18,6 +18,7 @@ await import("../public/crypto-vault.js");
 
 const db = new DatabaseSync(":memory:");
 for (const file of readdirSync(new URL("../migrations/", import.meta.url)).filter((f) => f.endsWith(".sql")).sort()) db.exec(readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8"));
+db.exec("UPDATE cloud_trash_control SET cutover_ready=1 WHERE id=1");
 const salt = Buffer.from("local-test-salt");
 const proofHash = `pbkdf2-sha256$100000$${salt.toString("base64url")}$${pbkdf2Sync("local-proof", salt, 100000, 32, "sha256").toString("base64url")}`;
 db.prepare(`INSERT INTO cloud_folders(id,parent_id,name,password_hash,created_by) VALUES
@@ -32,7 +33,7 @@ function statement(sql, args = []) {
 let selected;
 let revokedScope = null;
 const access = [];
-const env = { DB: { prepare: statement, async batch(statements) { return Promise.all(statements.map((s) => s.run())); } },
+const env = { TRASH_CUTOVER_MODE: "ready", DB: { prepare: statement, async batch(statements) { return Promise.all(statements.map((s) => s.run())); } },
   SESSION_SECRET: randomBytes(32).toString("hex"), SESSION_VERSION: "5", PASSKEY_ENABLED: "true", ACCOUNT_KDF_ID: "test",
   ADMIN_LOGIN_ID: "admin@test", SUBADMIN_LOGIN_ID: "subadmin@test", ADMIN_AUTH_PROOF_HASH: proofHash, SUBADMIN_AUTH_PROOF_HASH: proofHash,
   SECURITY: { async redeemHandoff() { return selected; }, async validatePasskeySession(input) {

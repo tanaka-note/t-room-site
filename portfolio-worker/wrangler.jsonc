@@ -1,0 +1,50 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "t-room-portfolio",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-14",
+  "routes": [
+    {
+      "pattern": "tanaka-note.com/asset-report/*",
+      "zone_name": "tanaka-note.com"
+    },
+    {
+      "pattern": "tanaka-note.com/asset-report",
+      "zone_name": "tanaka-note.com"
+    }
+  ],
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "portfolio-db",
+      "database_id": "8fd0d41b-8ce2-42b8-a2e8-8c4461d08b32",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "services": [
+    {
+      "binding": "SECURITY",
+      "service": "t-room-security"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "SECURITY_AUDIT",
+        "queue": "t-room-security-audit"
+      }
+    ]
+  },
+  "vars": {
+    "SESSION_VERSION": "1",
+    "PASSKEY_ENABLED": "true"
+  },
+  "observability": {
+    "enabled": false
+  }
+}

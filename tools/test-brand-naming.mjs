@@ -150,6 +150,7 @@ const allowed = {
   "cloud-worker/src/index.js": /const context = "T-ROOM Cloud Storage account key v1\|tanaka-note\.com\|";/,
   "android-tcloud/app/src/main/java/jp/tanaka/tcloud/crypto/TCloudCrypto.kt": /private const val \w+_CONTEXT = "T-ROOM Cloud Storage [^"]+"/,
   "cloud-worker/tests/crypto-roundtrip.mjs": /T-ROOM Cloud Storage account key v1\|tanaka-note\.com\|test@example\.com/,
+  "security-worker/test/household-automatic.test.js": /const ADMIN_WRAP_CONTEXT = "T-ROOM Cloud Storage admin private key v1";/,
   "android-tcloud/app/src/test/java/jp/tanaka/tcloud/crypto/TCloudCryptoCompatibilityTest.kt": /T-ROOM Cloud Storage account key v1\|tanaka-note\.com\|\$legacyLoginId/,
   "security-worker/wrangler.jsonc": /"RP_NAME": "T-ROOM"/,
   "security-worker/src/index.js": /rpName: env\.RP_NAME \|\| "T-ROOM",/,

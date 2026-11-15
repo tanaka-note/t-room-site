@@ -8,7 +8,7 @@ import { chromium } from "playwright";
 
 // Load the shipped CSS and shared dialog implementation, never a mock dialog.
 const root = fileURLToPath(new URL("../../../", import.meta.url));
-const services = ["diary", "billing", "cloud"];
+const services = ["diary", "billing", "cloud", "household"];
 const assets = new Map(await Promise.all(services.map(async (service) => [
   `/${service}.css`, ["text/css", await readFile(resolve(root, `${service}-worker/public/${service}.css`), "utf8")]
 ])));
@@ -80,7 +80,7 @@ function assertWithinViewport(g, viewport, label) {
 
 try {
   browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
-  for (const service of services) for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+  for (const service of services) for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }, ...(service === "household" ? [{ width: 320, height: 568 }] : [])]) {
     const context = await browser.newContext({ viewport, reducedMotion: "reduce" });
     const page = await context.newPage();
     const errors = [];
@@ -135,7 +135,7 @@ try {
     await page.keyboard.press("Escape");
     await page.waitForFunction(() => window.accountChoice === null);
     assert.equal(await page.locator("dialog").count(), 0);
-    assert.deepEqual(await page.evaluate(link => TRoomPasskeys.chooseLinkDialog([link], "diary"), links[0]), links[0]);
+    assert.deepEqual(await page.evaluate(({link, service}) => TRoomPasskeys.chooseLinkDialog([link], service), {link: links[0], service}), links[0]);
     if (service !== "cloud") {
       const longLinks = Array.from({ length: 16 }, (_, i) => ({ ...links[i % 2], id: `long-${i}`, accountDisplayName: `非常に長い名前${"Account".repeat(18)}`, roleLabel: `管理者・全体管理${"Scope".repeat(20)}` }));
       for (const size of [viewport, { width: 390, height: 360 }]) {

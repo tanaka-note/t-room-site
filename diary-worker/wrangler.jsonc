@@ -46,6 +46,7 @@
       }
     ]
   },
+  "workflows": [{"binding":"D1_BACKUPS","name":"t-room-d1-backup","class_name":"D1BackupWorkflow","script_name":"t-room-backup"}],
   "triggers": {
     "crons": ["25 18 * * *"]
   },

@@ -266,6 +266,8 @@ try {
         assert.equal(await page.locator('.table-scroll').evaluate(el => el.scrollWidth <= el.clientWidth),true);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),true);
       }
+      const expired=await context.newPage();await expired.goto(page.url());await expired.locator('#app-view').waitFor({state:'visible'});await expired.locator('#entries tr').first().getByRole('button',{name:/明細を編集$/}).click();await expired.locator('#entry-form [name=payee]').fill('SECRET-UNSAVED');
+      await expired.route('**/payments/api/entries/**',r=>r.fulfill({status:401,body:'invalid JSON'}));await expired.locator('#save').click();await expired.locator('#login-view').waitFor({state:'visible'});assert.equal(await expired.locator('dialog[open]').count(),0);assert.equal(await expired.locator('#entries tr,#month-items>*').count(),0);assert.equal(await expired.locator('#entry-form [name=payee]').inputValue(),'');assert.equal(await expired.locator('#account-name').textContent(),'');await expired.close();
       await page.locator('#logout').click(); await page.locator('#login-view').waitFor({ state: 'visible' });
       assert.deepEqual(errors, []);
     } finally { await context.close(); await new Promise(resolve => server.close(resolve)); f.close(); }

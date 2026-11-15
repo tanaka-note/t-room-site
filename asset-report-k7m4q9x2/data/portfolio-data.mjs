@@ -1,6 +1,6 @@
 export default {
   "schemaVersion": 1,
-  "period": "2026-10-17",
+  "period": "2026-10-31",
   "basePrincipal": 6000000,
   "realizedProfit": {
     "name": "投資信託売却益",
@@ -341,6 +341,76 @@ export default {
       "period": "2026-10-17",
       "basePrincipal": 6000000,
       "rawMarketValue": 6650163
+    },
+    {
+      "period": "2026-10-18",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6661178
+    },
+    {
+      "period": "2026-10-19",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6658869
+    },
+    {
+      "period": "2026-10-20",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6596978
+    },
+    {
+      "period": "2026-10-21",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6698563
+    },
+    {
+      "period": "2026-10-22",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6565643
+    },
+    {
+      "period": "2026-10-23",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6513782
+    },
+    {
+      "period": "2026-10-24",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6485839
+    },
+    {
+      "period": "2026-10-25",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6458885
+    },
+    {
+      "period": "2026-10-26",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6478975
+    },
+    {
+      "period": "2026-10-27",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6503105
+    },
+    {
+      "period": "2026-10-28",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6561024
+    },
+    {
+      "period": "2026-10-29",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6548260
+    },
+    {
+      "period": "2026-10-30",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6411901
+    },
+    {
+      "period": "2026-10-31",
+      "basePrincipal": 6000000,
+      "rawMarketValue": 6418416
     }
   ],
   "assets": [
@@ -349,7 +419,7 @@ export default {
       "name": "iFナス100H無",
       "category": "米株",
       "costBasis": 2002329,
-      "marketValue": 2115771,
+      "marketValue": 2037294,
       "color": "#ff8a61"
     },
     {
@@ -357,7 +427,7 @@ export default {
       "name": "iSNIFTY50",
       "category": "インド株",
       "costBasis": 866320,
-      "marketValue": 828240,
+      "marketValue": 825384,
       "color": "#f4ca64"
     },
     {
@@ -365,7 +435,7 @@ export default {
       "name": "三菱電",
       "category": "日本株",
       "costBasis": 553200,
-      "marketValue": 500500,
+      "marketValue": 464000,
       "color": "#52e6aa"
     },
     {
@@ -373,7 +443,7 @@ export default {
       "name": "三菱HCキャピタル",
       "category": "日本株",
       "costBasis": 430200,
-      "marketValue": 394500,
+      "marketValue": 393000,
       "color": "#52e6aa"
     },
     {
@@ -381,7 +451,7 @@ export default {
       "name": "伊藤忠",
       "category": "日本株",
       "costBasis": 198100,
-      "marketValue": 228400,
+      "marketValue": 232650,
       "color": "#52e6aa"
     },
     {
@@ -389,7 +459,7 @@ export default {
       "name": "アコム",
       "category": "日本株",
       "costBasis": 142500,
-      "marketValue": 137160,
+      "marketValue": 132960,
       "color": "#52e6aa"
     },
     {
@@ -397,7 +467,7 @@ export default {
       "name": "イオン",
       "category": "日本株",
       "costBasis": 135100,
-      "marketValue": 111950,
+      "marketValue": 120050,
       "color": "#52e6aa"
     },
     {
@@ -405,7 +475,7 @@ export default {
       "name": "ソフトバンク",
       "category": "日本株",
       "costBasis": 111500,
-      "marketValue": 122350,
+      "marketValue": 117100,
       "color": "#52e6aa"
     },
     {
@@ -413,7 +483,7 @@ export default {
       "name": "NTT",
       "category": "日本株",
       "costBasis": 75500,
-      "marketValue": 87250,
+      "marketValue": 86650,
       "color": "#52e6aa"
     },
     {
@@ -421,7 +491,7 @@ export default {
       "name": "ムニノバHD",
       "category": "日本株",
       "costBasis": 43900,
-      "marketValue": 41700,
+      "marketValue": 39400,
       "color": "#52e6aa"
     },
     {
@@ -429,7 +499,7 @@ export default {
       "name": "ビットコイン",
       "category": "ビットコイン",
       "costBasis": 2500000,
-      "marketValue": 2082342,
+      "marketValue": 1969928,
       "color": "#a98cff"
     }
   ]

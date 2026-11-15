@@ -103,6 +103,9 @@ async function login(loginId, password) {
 try {
   await waitForServer();
 
+  const savePath = "/photos/save-list?dateFrom=2026-01-01&dateTo=2026-12-31";
+  assert.equal((await request(savePath)).response.status, 401, "photo save list requires the existing session");
+
   for (let attempt = 0; attempt < 6; attempt += 1) {
     const wrongId = await request("/login", { method: "POST", body: { loginId: "unknown@example.test", password: "wrong" } });
     assert.equal(wrongId.response.status, 401);
@@ -111,6 +114,7 @@ try {
   const wife = await login("wife@example.test", "wife-test");
   assert.equal(wife.session.canViewTrash, true);
   assert.equal(wife.session.canPermanentlyDelete, true);
+  assert.equal((await request(savePath, { cookie: wife.cookie })).response.status, 200, "authenticated photo save metadata is available without changing permissions");
   const refreshedSession = await request("/session", { cookie: wife.cookie });
   assert.equal(refreshedSession.response.status, 200);
   assert.equal(refreshedSession.result.authenticated, true);
