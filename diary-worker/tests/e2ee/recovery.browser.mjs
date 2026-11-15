@@ -3,20 +3,31 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import {readFileSync} from 'node:fs';
 import { resolve, sep, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {createHmac,randomBytes} from 'node:crypto';
 import { chromium } from 'playwright';
 import { systemFixture } from './system-fixture.mjs';
 import { publicTrustPackage } from '../../e2ee/setup.mjs';
 import { handleDiaryKeys } from '../../../security-worker/src/diary-keys.js';
 import '../../../cloud-worker/public/crypto-vault.js';
 
-const f = await systemFixture({recoveryExtractable:true}), user = f.users['main-admin'];
+let f = await systemFixture({recoveryExtractable:true}), user = f.users['main-admin'];
+const {default:SecurityWorker}=await import('../../../security-worker/src/index.js');
+const security=new SecurityWorker();security.env={...f.centralEnv,SESSION_SECRET:randomBytes(32).toString('base64url'),PASSKEY_ENABLED:'true'};security.ctx=f.ctx;
+const securityCookie=kind=>{
+  const value=Buffer.from(JSON.stringify({kind,identityId:user.identityId,credentialId:user.credentialId,passkeySessionEpoch:1,authenticatedAt:Math.floor(Date.now()/1000),authMethod:'passkey',exp:Math.floor(Date.now()/1000)+3600})).toString('base64url');
+  return value+'.'+createHmac('sha256',security.env.SESSION_SECRET).update(value).digest('base64url');
+};
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const wire = [], errors = [];
-let origin, loseResponse = true, loseInvestmentResponse=true;
+let origin, loseResponse = true, loseInvestmentResponse=true,failOwn=false;
+const checkpoints=[];
+f.env.D1_BACKUPS={create:async value=>{checkpoints.push(value);return {id:value.id};}};
 // Build a synthetic existing T-Cloud admin envelope using its real PRF wrapper.
 // Fixture secrets stay in process memory and Playwright's isolated injection.
+async function addAdminEnvelope(f,user) {
 const accountKey = await crypto.subtle.generateKey({name:'AES-GCM', length:256}, false, ['encrypt','decrypt']);
 const raw = new Uint8Array(await crypto.subtle.exportKey('pkcs8', f.recovery.privateKey));
 let envelope;
@@ -30,6 +41,8 @@ try {
 } finally { raw.fill(0); }
 f.central.sqlite.prepare("INSERT INTO security_service_links(id,identity_id,service,service_account_id,display_label,status) VALUES('fixture-existing-cloud','primary-admin','cloud','owner','Synthetic existing cloud','active')").run();
 f.central.sqlite.prepare("INSERT INTO security_tcloud_key_envelopes(id,identity_id,credential_id,service_link_id,envelope_type,encrypted_payload,payload_iv) VALUES('fixture-envelope','primary-admin',?,'fixture-existing-cloud','admin_private_prf',?,?)").run(user.credentialId, envelope.encryptedPayload, envelope.payloadIv);
+}
+await addAdminEnvelope(f,user);
 
 const server = createServer(async (req,res) => {
   try {
@@ -38,11 +51,11 @@ const server = createServer(async (req,res) => {
       const chunks = []; for await (const chunk of req) chunks.push(chunk);
       const body = Buffer.concat(chunks);
       wire.push({path, body:body.toString()});
+      if(path==='/security/api/diary/own'&&failOwn){failOwn=false;res.writeHead(500,{'Content-Type':'application/json'});res.end('{"error":"synthetic internal diagnostic must stay private"}');return;}
       const request = new Request(url, {method:req.method, headers:req.headers,
         ...(body.length ? {body, duplex:'half'} : {})});
       const reply = path.startsWith('/security/api/diary/')
-        ? await handleDiaryKeys(path.slice('/security'.length), request, f.centralEnv,
-          {...user, authenticatedAt:Date.now()/1000}, f.helpers)
+        ? await security.fetch(request)
         : await f.worker.fetch(request, f.env, f.ctx);
       if(path==='/security/api/diary/investment'&&req.method==='POST'&&loseInvestmentResponse){loseInvestmentResponse=false;res.writeHead(503,{'Content-Type':'application/json'});res.end('{"error":"SyntheticResponseLoss"}');return;}
       if (path === '/security/api/diary/config' && loseResponse) {
@@ -74,13 +87,20 @@ const browser = await chromium.launch({headless:true});
 try {
   const context = await browser.newContext();
   await context.addCookies([{name:'troom_diary_session', value:f.cookie().slice('troom_diary_session='.length), url:origin}]);
+  await context.addCookies(['identity','admin'].map(kind=>({name:'troom_security_'+kind,value:securityCookie(kind),url:origin})));
   const page = await context.newPage(); page.on('pageerror', e => errors.push(e.message));
   await page.goto(origin);
   const trust = await publicTrustPackage(f.configuration);
   await page.evaluate(({prf,credentialId,trust}) => {
-    window.TRoomPasskeys = {authenticate:async () => ({credentialId, prfOutput:new Uint8Array(prf)})};
+    window.TRoomPasskeys = {authenticate:async () => {window.lastSetupPrf=new Uint8Array(prf);return {credentialId, prfOutput:window.lastSetupPrf};}};
     localStorage.setItem('tlain-diary-authority-public-v1',JSON.stringify(trust));
   }, {prf:[...user.prf], credentialId:user.credentialId, trust});
+  assert.equal(await page.evaluate(async()=>typeof(await import('/security/diary-setup.mjs')).prepareDiaryData),'function','the published management entrypoint must connect to the migration controller');
+  failOwn=true;
+  const failure=await page.evaluate(async()=>{try{await(await import('/security/diary-setup.mjs')).configureDiary();return '';}catch(error){return error.message;}});
+  assert.match(failure,/DKEY-VAULT-500/);assert.equal(failure.includes('synthetic internal'),false);
+  assert.equal(await page.evaluate(()=>window.lastSetupPrf.every(value=>value===0)),true);
+  assert.equal(f.central.sqlite.prepare('SELECT generation FROM security_diary_key_config').get().generation,1);
   assert.equal(await page.evaluate(async () => {
     const setup = await import('/security/diary-setup.mjs');
     try {await setup.configureDiary();return false;} catch {return true;}
@@ -129,9 +149,31 @@ try {
   const cache=await portfolio.evaluate(async()=>{const store=await (await import('/diary/crypto/e2ee/cache.mjs')).openCipherCache();const tx=JSON.stringify(await store.get('investment/main-admin/'+(await (await fetch('/diary/api/encryption/profile')).json()).profile.actor.credentialId));store.close();return tx;});
   assert.equal(cache.includes('7812345670'),false);
   await portfolio.close();
+  // Exercise the same public management entrypoint as the real UI, through
+  // Security's HTTP/session/mutation gates, rather than only the pure controller.
+  await page.evaluate(()=>window.fixtureBridge.lock());await f.close();
+  f=await systemFixture({phase:'legacy',recoveryExtractable:true});user=f.users['main-admin'];
+  await addAdminEnvelope(f,user);f.env.DIARY_ENCRYPTION_ORIGIN=origin;
+  f.env.D1_BACKUPS={create:async value=>{checkpoints.push(value);return {id:value.id};}};
+  security.env={...f.centralEnv,SESSION_SECRET:randomBytes(32).toString('base64url'),PASSKEY_ENABLED:'true'};security.ctx=f.ctx;
+  await context.addCookies(['identity','admin'].map(kind=>({name:'troom_security_'+kind,value:securityCookie(kind),url:origin})));
+  await page.evaluate(({prf,credentialId,trust})=>{window.TRoomPasskeys={authenticate:async()=>{window.lastSetupPrf=new Uint8Array(prf);return {credentialId,prfOutput:window.lastSetupPrf};}};localStorage.setItem('tlain-diary-authority-public-v1',JSON.stringify(trust));},{prf:[...user.prf],credentialId:user.credentialId,trust:await publicTrustPackage(f.configuration)});
+  f.db.sqlite.exec("INSERT INTO diary_entries(id,entry_date,title,content,author_id,author_name,household_id) VALUES(900,'2026-11-15','Setup migration title','SETUP_LEGACY_PRIVATE','main-admin','Synthetic owner','tanaka-household');");
+  f.db.sqlite.exec(readFileSync(new URL('../../e2ee/legacy-fences.sql',import.meta.url),'utf8'));
+  const pausedVault=f.central.sqlite.prepare('SELECT * FROM security_diary_key_vaults WHERE recipient_id=?').get(f.users['main-user'].recipientId);
+  f.central.sqlite.prepare('DELETE FROM security_diary_key_vaults WHERE recipient_id=?').run(pausedVault.recipient_id);
+  const waiting=await page.evaluate(async()=>{try{await(await import('/security/diary-setup.mjs')).prepareDiaryData();return '';}catch(error){return error.message;}});
+  assert.match(waiting,/全利用者/);assert.equal(f.db.sqlite.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'legacy');assert.equal(checkpoints.length,0);
+  f.central.sqlite.prepare('INSERT INTO security_diary_key_vaults VALUES(?,?,?,?,?,?)').run(...Object.values(pausedVault));
+  const result=await page.evaluate(async()=>(await import('/security/diary-setup.mjs')).prepareDiaryData());
+  assert.equal(result.requiresRestoreDrill,true);assert.match(result.checkpoint.key,/^v10\/checkpoints\/[a-f0-9-]+\.json\.gz$/);
+  assert.equal(checkpoints.length,1);assert.equal(f.db.sqlite.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'migrating');
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) count FROM diary_entries').get().count,1,'the management entrypoint must not delete source data or cut over before restore verification');
+  assert.equal(JSON.stringify(f.db.sqlite.prepare('SELECT * FROM diary_e2ee_records').all()).includes('SETUP_LEGACY_PRIVATE'),false);
+  assert.equal(await page.evaluate(()=>window.lastSetupPrf.every(value=>value===0)),true);
   assert.deepEqual(errors,[]);
-  await page.evaluate(() => window.fixtureBridge.lock());
-  console.log('Recovery browser: real T-Cloud PRF envelope, Security setup response-loss retry, strict public trust and actual encrypted Diary/Investment HTTP runtime and encrypted financial import retry passed (synthetic authentication).');
+  await page.evaluate(() => window.fixtureBridge?.lock());
+  console.log('Recovery browser: full Security HTTP/session gates, real T-Cloud PRF envelope, safe setup diagnostics, encrypted Diary/Investment, and the public migration entrypoint through checkpoint creation passed (synthetic authentication).');
 } finally {await browser.close(); await new Promise(r => server.close(r)); await f.close();}
 
 await import('./automatic-preparation.browser.mjs');
