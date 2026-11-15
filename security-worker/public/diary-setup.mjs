@@ -66,3 +66,37 @@ export async function finishDiaryData(file) {
 export async function currentDiaryTrust() {
   return validatePublicTrust(JSON.parse(localStorage.getItem(PIN)||'null'));
 }
+
+
+export async function importDiaryInvestment(file) {
+  if(!file||file.size>20_000_000)throw new Error('投資履歴ファイルを確認してください。');
+  const input=JSON.parse(await file.text()),auth=await TRoomPasskeys.authenticate('security');let plans,key;
+  try {
+    const crypto=await import('/security/diary-crypto/e2ee/crypto.mjs');
+    const record=await import('/security/diary-crypto/e2ee/record.mjs');
+    const investment=await import('/security/diary-crypto/e2ee/investment.mjs');
+    const maintenance=await import('/security/diary-crypto/e2ee/maintenance.mjs');
+    const trust=await validatePublicTrust(JSON.parse(localStorage.getItem(PIN)||'null')),status=await api('/admin');
+    if(status.rollout.phase!=='encrypted')throw new Error('日記の暗号化移行・鍵更新を完了してから投資履歴を更新してください。');
+    const directory=await crypto.verifyDirectory(status.config.directory,trust.anchor,trust.minimumGeneration),own=await api('/maintenance/signing-vault',{});
+    const vault=await crypto.unlockVault(auth.prfOutput,own.recipientId,own.vault),binding=investment.investmentBinding(directory);
+    const grant=own.grants.find(packet=>packet.value.scope===binding.scope);if(!grant)throw new Error('InvestmentGrantRequired');
+    key=await crypto.unwrapGrant(grant,{directory,anchor:trust.anchor,accountId:own.accountId,credentialId:own.recipientId,household:binding.household,scope:binding.scope,epoch:binding.epoch,privateKey:vault.rsa});
+    const incoming=investment.investmentRecords(Array.isArray(input)?input:input.records);
+    if(!incoming.length)throw new Error('更新する投資履歴がありません。');
+    plans=await maintenance.openMaintenancePlans();let pending=await plans.getInvestment();
+    if(pending) {
+      const next={...binding,revision:pending.proposal.expectedRevision+1};
+      const value=await crypto.open(key,pending.proposal.envelope,{...next,kind:'document'}),prepared=investment.investmentRecords(value.entry.records);
+      if(incoming.some(row=>!prepared.some(previous=>previous.date===row.date&&crypto.b64(crypto.encode(previous))===crypto.b64(crypto.encode(row)))))throw new Error('前回と同じ投資履歴ファイルで再試行してください。');
+    } else {
+      const {record:current}=await api('/investment');let existing=[];
+      if(current){await record.verifyRecord(current,directory);existing=(await crypto.open(key,current.envelope,{...record.bindingOf(current),kind:'document'})).entry.records;investment.investmentRecords(existing);}
+      const rows=new Map(existing.map(row=>[row.recorded_at??row.date,row]));for(const row of incoming)rows.set(row.date,{recorded_at:row.date,...Object.fromEntries(investment.INVESTMENT_VALUES.map(name=>[name,row[name]])),updated_at:new Date().toISOString()});
+      const sealed=await investment.sealInvestment({records:[...rows.values()],current,directory,key,signingKey:vault.sign,writer:own.recipientId});
+      pending={proposal:investment.investmentProposal(sealed,cryptoRandomId())};await plans.putInvestment(pending);
+    }
+    await api('/investment',pending);await plans.clearInvestment();return {completed:true};
+  }finally{plans?.close();key=null;auth.prfOutput?.fill(0);}
+}
+function cryptoRandomId(){return crypto.randomUUID();}

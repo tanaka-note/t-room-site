@@ -1,5 +1,5 @@
 import { verifyLegacyCoverage,requireFrozenMigration } from './migration-store.mjs';
-import { b64, encode, verifySigned } from './crypto.mjs';
+import { b64, encode, verifySigned,DIARY_READER_PROTOCOL } from './crypto.mjs';
 
 export const READ_FORMATS = Object.freeze([1,2]);
 const fail = (message,status=409) => { throw Object.assign(new Error(message),{status}); };
@@ -39,7 +39,7 @@ async function verifyCutover(db,packet,directory,actor) {
     db.prepare('SELECT COUNT(*) records FROM diary_e2ee_records'),
     db.prepare('SELECT COALESCE(MAX(seq),0) sequence FROM diary_e2ee_changes')
   ]);
-  if(Object.keys(proof||{}).sort().join(',')!==['protocol','version','records','sequence','directoryGeneration','sourceManifestDigest','restoreDigest','readerBuild','writerBuild','formats'].sort().join(',')||proof.protocol!=='T-lain diary cutover'||proof.version!==1||proof.records!==counts[0].records||proof.sequence!==sequences[0].sequence||proof.directoryGeneration!==directory.generation||!digest(proof.sourceManifestDigest)||!digest(proof.restoreDigest)||!token(proof.readerBuild)||!token(proof.writerBuild)||JSON.stringify(proof.formats)!==JSON.stringify(READ_FORMATS))fail('CutoverEvidenceMismatch');
+  if(Object.keys(proof||{}).sort().join(',')!==['protocol','version','records','sequence','directoryGeneration','sourceManifestDigest','restoreDigest','readerBuild','writerBuild','formats'].sort().join(',')||proof.protocol!=='T-lain diary cutover'||proof.version!==DIARY_READER_PROTOCOL||proof.records!==counts[0].records||proof.sequence!==sequences[0].sequence||proof.directoryGeneration!==directory.generation||!digest(proof.sourceManifestDigest)||!digest(proof.restoreDigest)||!token(proof.readerBuild)||!token(proof.writerBuild)||JSON.stringify(proof.formats)!==JSON.stringify(READ_FORMATS))fail('CutoverEvidenceMismatch');
   return proof;
 }
 
@@ -58,7 +58,7 @@ export async function transitionRollout(db,{actor,expectedGeneration,next,eviden
     await db.batch([
       db.prepare("UPDATE diary_e2ee_control SET phase=CASE WHEN phase='migrating' AND generation=? AND (SELECT COUNT(*) FROM diary_e2ee_records)=? AND (SELECT COALESCE(MAX(seq),0) FROM diary_e2ee_changes)=? THEN 'purging' ELSE 'invalid-cutover' END,generation=generation+1,ever_encrypted=1,evidence=? WHERE id=1")
         .bind(expectedGeneration,proof.records,proof.sequence,JSON.stringify(proof)),
-      ...['diary_staged_photos','diary_photo_upload_sessions','diary_favorites','diary_tags','diary_trash_scopes','diary_photos','diary_entries'].map(table=>db.prepare(`DELETE FROM ${table}`)),
+      ...['investment_history','diary_staged_photos','diary_photo_upload_sessions','diary_favorites','diary_tags','diary_trash_scopes','diary_photos','diary_entries'].map(table=>db.prepare(`DELETE FROM ${table}`)),
       db.prepare("UPDATE diary_e2ee_control SET phase='encrypted' WHERE id=1 AND phase='purging'")
     ]);
     return readRollout(db);
@@ -72,7 +72,7 @@ export async function transitionRollout(db,{actor,expectedGeneration,next,eviden
 // Planning does not promote a Cloudflare version. Pause, validate an explicitly
 // retained encrypted reader, then use the existing operator release mechanism.
 export function rollbackPlan(control,stable) {
-  if(!stable||!token(stable.build)||!token(stable.workerVersion)||!Array.isArray(stable.formats)||READ_FORMATS.some(format=>!stable.formats.includes(format))||stable.protocol!==1)fail('IncompatibleRollbackTarget');
+  if(!stable||!token(stable.build)||!token(stable.workerVersion)||!Array.isArray(stable.formats)||READ_FORMATS.some(format=>!stable.formats.includes(format))||stable.protocol!==DIARY_READER_PROTOCOL)fail('IncompatibleRollbackTarget');
   return {requiresPause:true,sourceGeneration:control.generation,workerVersion:stable.workerVersion,build:stable.build,dataAction:'preserve-ciphertext',resumePhase:control.everEncrypted?'encrypted':'legacy'};
 }
 

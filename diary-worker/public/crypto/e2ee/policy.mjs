@@ -1,5 +1,6 @@
 // Opaque account IDs and role flags are trusted session claims, never body input.
 export const publishedScope = (household) => `${household}:published`;
+export const investmentScope = household => `${household}:investment`;
 export const draftScope = (household) => `${household}:drafts`;
 export const preferencesScope = (household, account) =>
   `${household}:preferences:${account}`;
@@ -15,6 +16,7 @@ export function assertActor(actor, household) {
 export function canRead(actor, row) {
   if (!actor?.active || !actor.households?.includes(row.household))
     return false;
+  if (row.state === "investment") return Boolean(actor.canViewInvestment);
   if (row.state === "published") return true;
   if (row.state === "draft") return Boolean(actor.canManageEntries);
   if (row.state === "preferences") return row.author === actor.accountId;
@@ -44,7 +46,9 @@ export function trashScope(household, accounts) {
 export function assertWrite(actor, row) {
   assertActor(actor, row.household);
   if (
-    row.state === "preferences"
+    row.state === "investment"
+      ? !actor.isGlobalOwner || !canRead(actor,row)
+      : row.state === "preferences"
       ? row.author !== actor.accountId
       : !actor.canManageEntries || !canRead(actor, row)
   )
@@ -55,7 +59,7 @@ export function scopeDefinition(scope,households) {
   const household=Object.keys(households).find(id=>scope.startsWith(id+':'));
   if(!household)throw new Error('UnknownScope');
   const [kind,...ids]=scope.slice(household.length+1).split(':');
-  const state={published:'published',drafts:'draft',preferences:'preferences',trash:'trash'}[kind];
-  if(!state||state==='preferences'&&ids.length!==1||state==='trash'&&!ids.length||['published','draft'].includes(state)&&ids.length)throw new Error('UnknownScope');
-  return {household,scope,state,author:state==='preferences'?ids[0]:'',retainedFor:state==='trash'?ids:[]};
+  const state={published:'published',drafts:'draft',preferences:'preferences',trash:'trash',investment:'investment'}[kind];
+  if(!state||state==='preferences'&&ids.length!==1||state==='trash'&&!ids.length||['published','draft','investment'].includes(state)&&ids.length)throw new Error('UnknownScope');
+  return {household,scope,state,author:state==='preferences'?ids[0]:state==='investment'?households[household].owner:'',retainedFor:state==='trash'?ids:[]};
 }

@@ -1,7 +1,7 @@
 import { b64,encode,newKey,open,seal,signed,fingerprint,makeGrant,openRecipientKey,verifyDirectory } from './crypto.mjs';
 import { bindingOf,proofOf,verifyRecord } from './record.mjs';
 import { canRead,preferencesScope } from './policy.mjs';
-import { scopeDefinitions } from './setup.mjs';
+import { scopeDefinitions,assertKnownRecipientKeys } from './setup.mjs';
 import { createRecoveryEnvelope,openRecoveryEnvelope } from './recovery.mjs';
 
 export const rotationDigest = async value => b64(await crypto.subtle.digest('SHA-256',encode(value)));
@@ -16,6 +16,7 @@ export async function prepareRotation({status,recoveryPrivateKey,trustedAnchor,r
   if (!status.config || !trustedAnchor || records.length>5000 || new Set(records.map(r=>r.id)).size!==records.length || new Set(media.map(r=>r.id)).size!==media.length)
     throw new Error('InvalidRotationInventory');
   const previous=await verifyDirectory(status.config.directory,trustedAnchor,status.config.generation);
+  assertKnownRecipientKeys(previous,status.members);
   if (!equal(previous.households,status.households) || await fingerprint(status.recoveryPublicKey)!==previous.recoveryFingerprint)
     throw new Error('RotationHouseholdOrRecoveryChangeUnsupported');
   const kit=await openRecoveryEnvelope({packet:status.config.recoveryEnvelope,recoveryPrivateKey,anchor:trustedAnchor,minimumGeneration:previous.generation});

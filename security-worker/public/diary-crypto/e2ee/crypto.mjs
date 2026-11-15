@@ -1,3 +1,4 @@
+export const DIARY_READER_PROTOCOL = 2;
 import { compressDocument,decompressDocument,MAX_DOCUMENT_BYTES } from "./codec.mjs";
 // Candidate protocol. No runtime secret or production binding is defined here.
 const encoder = new TextEncoder(),

@@ -4,7 +4,7 @@ import { openCipherCache } from './crypto/e2ee/cache.mjs';
 import { createPrivateNavigation } from './crypto/e2ee/privacy.mjs';
 import { createEncryptedDiaryApi } from './crypto/e2ee/ui-api.mjs';
 import { createEncryptedMediaClient } from './crypto/e2ee/media-client.mjs';
-import { validatePublicTrust } from './crypto/e2ee/crypto.mjs';
+import { validatePublicTrust,DIARY_READER_PROTOCOL } from './crypto/e2ee/crypto.mjs';
 const PIN='tlain-diary-authority-public-v1';
 export async function importDiaryTrust(file) {
   if(!file||file.size>12000)throw new Error('信頼設定ファイルを確認してください。');
@@ -26,11 +26,12 @@ async function createEncryptedDiary(session,authentication) {
   };
   const request=(path,init)=>nativeApi('/encryption'+path,init);
   const initial=await request('/profile');
+  if(initial.protocol!==DIARY_READER_PROTOCOL)throw new Error('暗号化対応の最新版で開き直してください。');
   if(initial.profile.webAuthnCredentialId!==authentication.credentialId)throw new Error('ログインしたパスキーが一致しません。');
   const expectedAccount=initial.profile.actor.accountId,expectedCredential=initial.profile.webAuthnCredentialId;
   let client,navigation,api,media,cache,deadline=session.expiresAt||null;
   const transport={
-    valid:async()=>{try{const result=await nativeApi('/session');deadline=result.expiresAt||deadline;return result.authenticated&&result.encryption?.enabled&&result.encryption.accountId===expectedAccount&&result.encryption.webAuthnCredentialId===expectedCredential&&result.activeHouseholdId===client.household&&result.encryption.generation===initial.rollout.generation;}catch(error){if([401,403].includes(error.status))return false;throw error;}},
+    valid:async()=>{try{const result=await nativeApi('/session');deadline=result.expiresAt||deadline;return result.authenticated&&result.encryption?.enabled&&result.encryption.protocol===DIARY_READER_PROTOCOL&&result.encryption.accountId===expectedAccount&&result.encryption.webAuthnCredentialId===expectedCredential&&result.activeHouseholdId===client.household&&result.encryption.generation===initial.rollout.generation;}catch(error){if([401,403].includes(error.status))return false;throw error;}},
     timestamp:async()=>(await request('/time')).timestamp,
     snapshot:(household,since)=>readSnapshotPages(options=>request(`/snapshot?${new URLSearchParams(Object.entries(options).filter(([,value])=>value!==null))}`),household,since,{fetchHead:h=>request(`/head?household=${encodeURIComponent(h)}`)}),
     mutation:(proposal,operation)=>request('/mutation',{method:'POST',body:{proposal,operation}}),

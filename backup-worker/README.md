@@ -136,7 +136,7 @@ Security/Cloud/Healthは組み合わせる世代を照合し、最新の失効�
 
 ### 日記D1暗号化の追加形式（候補・未切替）
 
-日記の候補schemaを検出した後、legacy状態では従来のv9を維持する。移行中は書込fenceと全sourceの移行完了を確認してから、暗号文だけの`v10/daily/`・`monthly/`へ保存する。本文・タグ・旧写真metadata・お気に入りの平文tableは新形式へ含めない。公開済みdirectory、PRF封印vault、scope/個別record grants、中央復旧envelopeを日記snapshotと同梱し、取得前後の鍵世代と各recordの署名・epochを検証する。Security側の追加tableは`d1/security/v4/`へ保存する。両形式とも候補DDL fragmentと従来DDLを別々に完全hash照合し、未知schemaを黙認しない。
+日記の候補schemaを検出した後、legacy状態では従来のv9を維持する。移行中は書込fenceと全sourceの移行完了を確認してから、暗号文だけの`v10/daily/`・`monthly/`へ保存する。本文・タグ・旧写真metadata・お気に入り・投資履歴の平文tableは新形式へ含めない。公開済みdirectory、PRF封印vault、scope/個別record grants、中央復旧envelopeを日記snapshotと同梱し、取得前後の鍵世代と各recordの署名・epochを検証する。Security側の追加tableは`d1/security/v4/`へ保存する。両形式とも候補DDL fragmentと従来DDLを別々に完全hash照合し、未知schemaを黙認しない。
 
 移行・鍵更新には`v10/checkpoints/{UUID}.json.gz`を使い、同日の正常日次を上書きしない。これは手動の復元確認点であり日次/月次の自動整理へ含めない。checkpoint本体partも自動整理で削除せず、参照を維持する。移行完了後に保管量と不要な手動確認点を確認する。
 

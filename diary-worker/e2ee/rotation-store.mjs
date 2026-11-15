@@ -28,7 +28,7 @@ export async function rotationInventory(db,{after='',kind='records',limit=20}={}
 export async function beginRotation(db,{configuration,manifest,anchor,currentDirectory}) {
   const control=await frozen(db),proof=await verifySigned(manifest,anchor);
   const existing=await rotationStatus(db);
-  if(existing&&equal(existing.manifest,manifest)&&equal(existing.configuration,configuration))return existing;
+  if(existing&&equal(existing.manifest,manifest)&&equal(existing.configuration,configuration))return {...existing,resumed:true};
   if(encode({configuration,manifest}).length>1_800_000)fail('RotationManifestBudgetExceeded');
   const next=await verifyDirectory(configuration.directory,anchor,currentDirectory.generation+1);
   if(!exact(proof,['protocol','version','sourceGeneration','targetGeneration','directoryDigest','configurationDigest','records','media'])||
@@ -50,7 +50,7 @@ export async function beginRotation(db,{configuration,manifest,anchor,currentDir
     db.prepare(`INSERT INTO diary_e2ee_rotation SELECT 1,?,?,'staging',CASE WHEN phase='paused' AND generation=? AND (SELECT COALESCE(MAX(seq),0) FROM diary_e2ee_changes)=? THEN generation ELSE -1 END,? FROM diary_e2ee_control WHERE id=1`)
       .bind(JSON.stringify(manifest),JSON.stringify(configuration),control.generation,control.sequence,control.sequence),
   ]);
-  return rotationStatus(db);
+  return {...await rotationStatus(db),resumed:false};
 }
 export async function stageRotation(db,{kind,rows,anchor}) {
   const control=await frozen(db),run=await rotationStatus(db);

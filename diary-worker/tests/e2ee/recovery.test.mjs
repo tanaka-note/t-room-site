@@ -8,6 +8,7 @@ import { readSnapshotPages } from '../../e2ee/snapshot.mjs';
 import { backup, restoreEmpty } from '../../e2ee/backup.mjs';
 import { bindingOf } from '../../e2ee/record.mjs';
 import { prepareKeyConfiguration, publicTrustPackage } from '../../e2ee/setup.mjs';
+import {prepareRotation} from '../../e2ee/rotation.mjs';
 import { openRecoveryEnvelope } from '../../e2ee/recovery.mjs';
 import { createVault, open, signed, unb64, validatePublicTrust } from '../../e2ee/crypto.mjs';
 import { diaryRecipientId, diaryKeyBundle, handleDiaryKeys } from '../../../security-worker/src/diary-keys.js';
@@ -56,6 +57,40 @@ async function nextConfiguration() {
   return prepareKeyConfiguration({status, recoveryPrivateKey:f.recovery.privateKey,
     trustedAnchor:f.configuration.anchor, recoveryRecords});
 }
+
+test('central control does not depend on signed household property order',async()=>{
+  const original=f.central.sqlite.prepare('SELECT directory_json FROM security_diary_key_config').get().directory_json;
+  const reordered=JSON.parse(original);reordered.value.households=Object.fromEntries(Object.entries(reordered.value.households).sort(([a],[b])=>a.localeCompare(b)));
+  f.central.sqlite.prepare('UPDATE security_diary_key_config SET directory_json=?').run(JSON.stringify(reordered));
+  try {assert.equal((await central('/control',{expectedGeneration:1,next:'paused',evidence:null})).status,200);}
+  finally {f.central.sqlite.prepare('UPDATE security_diary_key_config SET directory_json=?').run(original);f.db.sqlite.exec("UPDATE diary_e2ee_control SET phase='encrypted',generation=1");}
+});
+
+test('an inactive linked Diary account cannot block the remaining global administrator recovery',async()=>{
+  f.db.sqlite.prepare("UPDATE diary_accounts SET active=0 WHERE id='main-user'").run();
+  try {
+    const status=await (await central('/admin')).json();
+    assert.equal(status.members.some(member=>member.accountId==='main-user'),false);
+    assert.equal(status.writerReadiness.ready,true);
+    assert.equal((await central('/control',{expectedGeneration:1,next:'paused',evidence:null})).status,200);
+    const own=await (await central('/maintenance/signing-vault',{})).json();assert.equal(own.accountId,'main-admin');
+  }finally {f.db.sqlite.prepare("UPDATE diary_accounts SET active=1 WHERE id='main-user'").run();f.db.sqlite.exec("UPDATE diary_e2ee_control SET phase='encrypted',generation=1");}
+});
+
+test('a changed server certificate cannot receive rewrapped keys for an existing recipient',async()=>{
+  const status=await (await central('/admin')).json();
+  const own=status.members.find(member=>member.credentialId===owner().recipientId);own.publicKey=f.users['wife-admin'].vault.publicKey;
+  const options={status,recoveryPrivateKey:f.recovery.privateKey,trustedAnchor:f.configuration.anchor};
+  await assert.rejects(prepareKeyConfiguration(options),/RecipientCertificateChanged/);
+  await assert.rejects(prepareRotation({...options,records:[],media:[]}),/RecipientCertificateChanged/);
+});
+
+test('cutover build metadata is read from the canonical public asset root',async()=>{
+  const original=f.env.ASSETS;
+  f.env.ASSETS={fetch:async request=>{assert.equal(new URL(request.url).pathname,'/');return new Response('<meta name="troom-app-build" content="diary-0123456789ab">');}};
+  try {assert.deepEqual(await (await central('/maintenance/build')).json(),{build:'diary-0123456789ab',formats:[1,2],protocol:2});}
+  finally{if(original)f.env.ASSETS=original;else delete f.env.ASSETS;}
+});
 
 test('an exact saved configuration retry succeeds without another generation or grants', async () => {
   const before = f.central.sqlite.prepare('SELECT COUNT(*) count FROM security_diary_key_grants').get().count;

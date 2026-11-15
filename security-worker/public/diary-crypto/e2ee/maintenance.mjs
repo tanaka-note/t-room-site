@@ -1,4 +1,4 @@
-import {encode,fingerprint,verifyDirectory,verifySigned,validateEnvelope} from './crypto.mjs';
+import {DIARY_READER_PROTOCOL,encode,fingerprint,verifyDirectory,verifySigned,validateEnvelope} from './crypto.mjs';
 import {verifyRecord} from './record.mjs';
 import {LEGACY_TABLES,prepareMigration} from './migration.mjs';
 import {prepareRotation,rotationDigest} from './rotation.mjs';
@@ -13,7 +13,7 @@ export async function openMaintenancePlans(name='tlain-diary-maintenance-v1') {
     const tx=db.transaction('plans',mode,{durability:'strict'}),req=callback(tx.objectStore('plans'));
     tx.oncomplete=()=>resolve(req.result);tx.onerror=tx.onabort=()=>reject(new Error('MaintenanceStorageUnavailable'));
   });
-  return {get:()=>operation('readonly',store=>store.get('pending')),put:plan=>operation('readwrite',store=>store.put(plan,'pending')),clear:()=>operation('readwrite',store=>store.delete('pending')),close:()=>db.close()};
+  return {get:()=>operation('readonly',store=>store.get('pending')),put:plan=>operation('readwrite',store=>{store.delete('progress');return store.put(plan,'pending');}),getProgress:()=>operation('readonly',store=>store.get('progress')),putProgress:progress=>operation('readwrite',store=>store.put(progress,'progress')),clear:()=>operation('readwrite',store=>{store.delete('progress');return store.delete('pending');}),getInvestment:()=>operation('readonly',store=>store.get('investment')),putInvestment:plan=>operation('readwrite',store=>store.put(plan,'investment')),clearInvestment:()=>operation('readwrite',store=>store.delete('investment')),close:()=>db.close()};
 }
 const message=()=>new Error('前回の移行と一致しません。保存済みの移行情報を保持して管理者に確認してください。');
 async function validatePlan(plan,anchor,directory) {
@@ -31,7 +31,7 @@ export function* maintenanceBatches(rows) {
 export async function prepareDiaryMaintenance({kind,api,recoveryPrivateKey,trust,plans,onProgress=()=>{}}) {
   if(!['migration','rotation'].includes(kind))throw message();
   let status=await api('/admin');
-  if(kind==='migration'&&status.writerReadiness?.ready===false)throw new Error('先に日記を投稿する全利用者の鍵の準備と管理者承認を完了してください。');
+  if(kind==='migration'&&status.writerReadiness?.ready===false)throw new Error('先に日記を利用する全員の鍵の準備と管理者承認を完了してください。');
   await verifyDirectory(status.config.directory,trust.anchor,trust.minimumGeneration);
   let plan=await plans.get();
   if(plan&&plan.kind!==kind)throw message();
@@ -80,22 +80,26 @@ export async function prepareDiaryMaintenance({kind,api,recoveryPrivateKey,trust
     // Failure to durably retain the exact ciphertext stops before any import.
     await plans.put(plan);
   }
+  const digest=await rotationDigest(plan),savedProgress=await plans.getProgress?.();
+  const progress=savedProgress?.digest===digest?savedProgress:{digest,records:0,media:0};
+  for(const type of ['records','media'])if(!Number.isSafeInteger(progress[type])||progress[type]<0||progress[type]>plan[type].length)throw message();
   if(kind==='rotation') {
     await verifySigned(plan.manifest,trust.anchor);
     const run=await api('/rotation/status');
     if(run?.status!=='committed'||await rotationDigest(run.manifest)!==await rotationDigest(plan.manifest)) {
       if(status.config.generation!==plan.configuration.expectedGeneration)throw message();
-      await api('/rotation/begin',{configuration:plan.configuration,manifest:plan.manifest});
-      for(const type of ['records','media']){let completed=0;for(const rows of maintenanceBatches(plan[type])) {
-        await api('/rotation/stage',{kind:type,rows});completed+=rows.length;
+      const begun=await api('/rotation/begin',{configuration:plan.configuration,manifest:plan.manifest});
+      if(!begun.resumed){progress.records=0;progress.media=0;await plans.putProgress?.(progress);}
+      for(const type of ['records','media']){let completed=progress[type];for(const rows of maintenanceBatches(plan[type].slice(completed))) {
+        await api('/rotation/stage',{kind:type,rows});completed+=rows.length;progress[type]=completed;await plans.putProgress?.(progress);
         onProgress({phase:'writing',completed,total:plan[type].length});
       }
       }
       await api('/rotation/commit',{manifestDigest:await rotationDigest(plan.manifest)});
     }
     if(status.config.generation===plan.configuration.expectedGeneration)await api('/config',plan.configuration);
-  } else for(const type of ['records','media']){let completed=0;for(const rows of maintenanceBatches(plan[type])) {
-    await api('/migration/import',{kind:type,rows,expectedGeneration:plan.rolloutGeneration});completed+=rows.length;
+  } else for(const type of ['records','media']){let completed=progress[type];for(const rows of maintenanceBatches(plan[type].slice(completed))) {
+    await api('/migration/import',{kind:type,rows,expectedGeneration:plan.rolloutGeneration});completed+=rows.length;progress[type]=completed;await plans.putProgress?.(progress);
     onProgress({phase:'writing',completed,total:plan[type].length});
   }}
   return {requiresRestoreDrill:true,kind,records:plan.records.length,media:plan.media.length,directoryGeneration:plan.configuration?.directory.value.generation||plan.directoryGeneration};
@@ -137,7 +141,7 @@ export async function finishDiaryMaintenance({api,recoveryPrivateKey,signingKey,
     }
     for(const row of report.media)await open(kit.scopeKeys.get(mediaBinding(row).scope),JSON.parse(row.metadata),mediaBinding(row));
   }finally{kit.scopeKeys.clear();kit.authority=null;}
-  const evidence=await signed({protocol:'T-lain diary cutover',version:1,records:report.records.length,sequence:report.sequence,directoryGeneration:directory.generation,
+  const evidence=await signed({protocol:'T-lain diary cutover',version:DIARY_READER_PROTOCOL,records:report.records.length,sequence:report.sequence,directoryGeneration:directory.generation,
     sourceManifestDigest,restoreDigest,readerBuild,writerBuild,formats:[1,2]},signingKey);
   await api('/control',{expectedGeneration:status.rollout.generation,next:'encrypted',evidence});
   await plans.clear();return {completed:true};

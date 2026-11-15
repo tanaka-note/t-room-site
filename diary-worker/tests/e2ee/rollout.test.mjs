@@ -9,7 +9,7 @@ let prepared;
 before(async()=>{prepared=await provision();});
 const operator=f=>({...f.actors.ownerA,reauthenticatedAt:Date.now()/1000});
 async function proof(f,client) {
-  return signed({protocol:'T-lain diary cutover',version:1,records:f.db.sqlite.prepare('SELECT COUNT(*) records FROM diary_e2ee_records').get().records,sequence:f.db.sqlite.prepare('SELECT COALESCE(MAX(seq),0) sequence FROM diary_e2ee_changes').get().sequence,directoryGeneration:1,sourceManifestDigest:'a'.repeat(43),restoreDigest:'b'.repeat(43),readerBuild:'reader-1',writerBuild:'writer-1',formats:[1,2]},client.privateKeys.sign);
+  return signed({protocol:'T-lain diary cutover',version:2,records:f.db.sqlite.prepare('SELECT COUNT(*) records FROM diary_e2ee_records').get().records,sequence:f.db.sqlite.prepare('SELECT COALESCE(MAX(seq),0) sequence FROM diary_e2ee_changes').get().sequence,directoryGeneration:1,sourceManifestDigest:'a'.repeat(43),restoreDigest:'b'.repeat(43),readerBuild:'reader-1',writerBuild:'writer-1',formats:[1,2]},client.privateKeys.sign);
 }
 test('default schema is legacy and encrypted writes fail closed before cutover',async()=>{
   const db=memoryDatabase({phase:'legacy'});try {
@@ -40,19 +40,20 @@ test('cutover requires signed restore/source evidence pinned to current count an
     assert.deepEqual(f.db.sqlite.prepare('SELECT * FROM diary_e2ee_records').all(),before);
     await assert.rejects(transitionRollout(f.db,{actor:operator(f),expectedGeneration:2,next:'legacy'}),/InvalidRolloutTransition/);
     assert.throws(()=>f.db.sqlite.exec("UPDATE diary_e2ee_control SET phase='legacy'"),/PlaintextRollbackForbidden/);
-    const plan=rollbackPlan(await readRollout(f.db),{build:'stable-reader-1',workerVersion:'trusted-version-1',formats:[1,2],protocol:1});assert.equal(plan.dataAction,'preserve-ciphertext');
-    assert.throws(()=>rollbackPlan(result,{build:'old-plaintext',workerVersion:'old-version',formats:[],protocol:1}),/IncompatibleRollbackTarget/);
+    const plan=rollbackPlan(await readRollout(f.db),{build:'stable-reader-1',workerVersion:'trusted-version-1',formats:[1,2],protocol:2});assert.equal(plan.dataAction,'preserve-ciphertext');
+    assert.throws(()=>rollbackPlan(result,{build:'pre-investment-reader',workerVersion:'old-encrypted',formats:[1,2],protocol:1}),/IncompatibleRollbackTarget/);
+    assert.throws(()=>rollbackPlan(result,{build:'old-plaintext',workerVersion:'old-version',formats:[],protocol:2}),/IncompatibleRollbackTarget/);
     await transitionRollout(f.db,{actor:operator(f),expectedGeneration:2,next:'encrypted',directory:prepared.directory,evidence});
     await client.saveEntry(entry({title:'after resume'}));assert.equal(client.records.size,2);
   }finally{f.close();}
 });
 test('legacy DB triggers block writes from an old Worker after migration starts',()=>{
   const db=memoryDatabase({phase:'legacy'});try {
-    for(const table of ['diary_entries','diary_tags','diary_photos','diary_favorites','diary_photo_upload_sessions','diary_staged_photos','diary_trash_scopes'])db.sqlite.exec(`CREATE TABLE ${table}(id INTEGER PRIMARY KEY,value TEXT)`);
+    for(const table of ['diary_entries','diary_tags','diary_photos','diary_favorites','diary_photo_upload_sessions','diary_staged_photos','diary_trash_scopes','investment_history'])db.sqlite.exec(`CREATE TABLE ${table}(id INTEGER PRIMARY KEY,value TEXT)`);
     db.sqlite.exec(readFileSync(new URL('../../e2ee/legacy-fences.sql',import.meta.url),'utf8'));
-    for(const table of ['diary_entries','diary_tags','diary_photos','diary_favorites','diary_photo_upload_sessions','diary_staged_photos','diary_trash_scopes'])db.sqlite.exec(`INSERT INTO ${table} VALUES(1,'before')`);
+    for(const table of ['diary_entries','diary_tags','diary_photos','diary_favorites','diary_photo_upload_sessions','diary_staged_photos','diary_trash_scopes','investment_history'])db.sqlite.exec(`INSERT INTO ${table} VALUES(1,'before')`);
     db.sqlite.exec("UPDATE diary_e2ee_control SET phase='migrating'");
-    for(const table of ['diary_entries','diary_tags','diary_photos','diary_favorites','diary_photo_upload_sessions','diary_staged_photos','diary_trash_scopes']){
+    for(const table of ['diary_entries','diary_tags','diary_photos','diary_favorites','diary_photo_upload_sessions','diary_staged_photos','diary_trash_scopes','investment_history']){
       assert.throws(()=>db.sqlite.exec(`INSERT INTO ${table} VALUES(2,'plaintext')`),/DiaryWritesPaused/);
       assert.throws(()=>db.sqlite.exec(`UPDATE ${table} SET value='plaintext'`),/DiaryWritesPaused/);
     }

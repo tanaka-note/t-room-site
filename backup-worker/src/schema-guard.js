@@ -34,7 +34,7 @@ export async function assertSchema(service, rows) {
 }
 // These fragments are pinned to the candidate SQL, including all old-writer
 // fences. Removing an expected trigger or adding an unknown table still fails.
-const ENCRYPTED_FRAGMENTS={diary:'b88abcb0f914d117773bc636593e42cc4c6d26a4f0665d3eb664091d8de0faa7',security:'fba11d54f4e7ffbabff26541b688517007da622dbf4c3c75fed5c05b6802247e'};
+const ENCRYPTED_FRAGMENTS={diary:'609160b000a7bfe17c02101a3e18fc941890bc46058edadc3256d064c2ee639c',security:'fba11d54f4e7ffbabff26541b688517007da622dbf4c3c75fed5c05b6802247e'};
 export async function assertEncryptedSchema(service,rows) {
   const encrypted=row=>service==='diary'?(row.name.startsWith('diary_e2ee_')||row.name.startsWith('diary_plaintext_')):service==='security'&&row.name.startsWith('security_diary_key_');
   const fragment=rows.filter(encrypted).map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);

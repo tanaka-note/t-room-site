@@ -23,3 +23,6 @@ CREATE TRIGGER diary_plaintext_staged_delete BEFORE DELETE ON diary_staged_photo
 CREATE TRIGGER diary_plaintext_scope_insert BEFORE INSERT ON diary_trash_scopes WHEN (SELECT phase FROM diary_e2ee_control WHERE id=1)!='legacy' BEGIN SELECT RAISE(ABORT,'DiaryWritesPaused'); END;
 CREATE TRIGGER diary_plaintext_scope_update BEFORE UPDATE ON diary_trash_scopes WHEN (SELECT phase FROM diary_e2ee_control WHERE id=1)!='legacy' BEGIN SELECT RAISE(ABORT,'DiaryWritesPaused'); END;
 CREATE TRIGGER diary_plaintext_scope_delete BEFORE DELETE ON diary_trash_scopes WHEN (SELECT phase FROM diary_e2ee_control WHERE id=1) NOT IN ('legacy','purging') BEGIN SELECT RAISE(ABORT,'DiaryWritesPaused'); END;
+CREATE TRIGGER diary_plaintext_investment_insert BEFORE INSERT ON investment_history WHEN (SELECT phase FROM diary_e2ee_control WHERE id=1)!='legacy' BEGIN SELECT RAISE(ABORT,'DiaryWritesPaused'); END;
+CREATE TRIGGER diary_plaintext_investment_update BEFORE UPDATE ON investment_history WHEN (SELECT phase FROM diary_e2ee_control WHERE id=1)!='legacy' BEGIN SELECT RAISE(ABORT,'DiaryWritesPaused'); END;
+CREATE TRIGGER diary_plaintext_investment_delete BEFORE DELETE ON investment_history WHEN (SELECT phase FROM diary_e2ee_control WHERE id=1)NOT IN ('legacy','purging') BEGIN SELECT RAISE(ABORT,'DiaryWritesPaused'); END;

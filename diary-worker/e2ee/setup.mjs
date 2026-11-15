@@ -1,12 +1,13 @@
 import { b64,encode,newKey,signingKey,signed,fingerprint,makeGrant,openRecipientKey,verifyDirectory,validatePublicKey } from './crypto.mjs';
 import { bindingOf,verifyRecord } from './record.mjs';
-import { canRead,publishedScope,draftScope,preferencesScope,trashScope,scopeDefinition } from './policy.mjs';
+import { canRead,publishedScope,draftScope,preferencesScope,trashScope,scopeDefinition,investmentScope } from './policy.mjs';
 import { createRecoveryEnvelope,openRecoveryEnvelope } from './recovery.mjs';
 
 export function scopeDefinitions(households,members,retainedScopes=[]) {
   const rows=new Map();
   const add=row=>rows.set(row.scope,row);
   for(const [household,config] of Object.entries(households)) {
+    if(!config.independent)add({household,state:'investment',scope:investmentScope(household),author:config.owner,retainedFor:[]});
     add({household,state:'published',scope:publishedScope(household),author:'',retainedFor:[]});
     add({household,state:'draft',scope:draftScope(household),author:'',retainedFor:[]});
     const accounts=[...new Set(members.filter(m=>m.households.includes(household)).map(m=>m.accountId))];
@@ -18,6 +19,16 @@ export function scopeDefinitions(households,members,retainedScopes=[]) {
   }
   for(const row of retainedScopes)if(households[row.household]&&Array.isArray(row.retainedFor)&&row.retainedFor.length)add({household:row.household,state:'trash',scope:trashScope(row.household,row.retainedFor),author:'',retainedFor:[...new Set(row.retainedFor)].sort()});
   return [...rows.values()];
+}
+
+// Existing recipient certificates are pinned by the already verified directory.
+// A server response must never replace a known key before we wrap any data key.
+export function assertKnownRecipientKeys(previous,members) {
+  for(const old of previous.members) {
+    const current=members.find(member=>member.credentialId===old.credentialId);if(!current)continue;
+    if(['publicKey','signPublicKey'].some(key=>b64(encode(old[key]))!==b64(encode(current[key])))||
+      ['accountId','identityId','serviceLinkId','webAuthnCredentialId'].some(key=>Object.hasOwn(old,key)&&old[key]!==current[key]))throw new Error('RecipientCertificateChanged');
+  }
 }
 
 // Prove the API's recovery public key matches the locally unlocked EXISTING
@@ -42,6 +53,7 @@ export async function prepareKeyConfiguration({status,recoveryPrivateKey,trusted
   if(status.config) {
     if(!trustedAnchor)throw new Error('TrustedAnchorRequired');
     previous=await verifyDirectory(status.config.directory,trustedAnchor,status.config.generation);
+    assertKnownRecipientKeys(previous,status.members);
     if(previous.members.some(old=>!status.members.some(m=>m.credentialId===old.credentialId&&m.canManageEntries===old.canManageEntries&&b64(encode(m.households))===b64(encode(old.households)))))throw new Error("RekeyRequired");
     const restored=await openRecoveryEnvelope({packet:status.config.recoveryEnvelope,recoveryPrivateKey,anchor:trustedAnchor,minimumGeneration:previous.generation});
     authority=restored.authority;scopeKeys=restored.scopeKeys;anchor=trustedAnchor;
