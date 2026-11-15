@@ -90,7 +90,7 @@ test('initial migration preserves existing D1 data and photo bytes, then every a
       assert.equal(reader.entry(101).content,content);assert.equal(reader.entry(101).isFavorite,true);reader.transport.snapshot=original;
     }finally{isolated.close();}
     const sequence=f.db.sqlite.prepare('SELECT MAX(seq) sequence FROM diary_e2ee_changes').get().sequence;
-    const proof=await signed({protocol:'T-lain diary cutover',version:1,records:6,sequence,directoryGeneration:1,
+    const proof=await signed({protocol:'T-lain diary cutover',version:2,records:6,sequence,directoryGeneration:1,
       sourceManifestDigest:await rotationDigest(plan),restoreDigest:await rotationDigest(archive),readerBuild:'fixture-reader',writerBuild:'fixture-writer',formats:[1,2]},admin.privateKeys.sign);
     await central('/control',{expectedGeneration:1,next:'encrypted',evidence:proof});
     for(const table of LEGACY_TABLES)assert.equal(f.db.sqlite.prepare(`SELECT COUNT(*) count FROM ${table}`).get().count,0);

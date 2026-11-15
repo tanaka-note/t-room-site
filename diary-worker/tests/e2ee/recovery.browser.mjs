@@ -14,7 +14,7 @@ import '../../../cloud-worker/public/crypto-vault.js';
 const f = await systemFixture({recoveryExtractable:true}), user = f.users['main-admin'];
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const wire = [], errors = [];
-let origin, loseResponse = true;
+let origin, loseResponse = true, loseInvestmentResponse=true;
 // Build a synthetic existing T-Cloud admin envelope using its real PRF wrapper.
 // Fixture secrets stay in process memory and Playwright's isolated injection.
 const accountKey = await crypto.subtle.generateKey({name:'AES-GCM', length:256}, false, ['encrypt','decrypt']);
@@ -44,6 +44,7 @@ const server = createServer(async (req,res) => {
         ? await handleDiaryKeys(path.slice('/security'.length), request, f.centralEnv,
           {...user, authenticatedAt:Date.now()/1000}, f.helpers)
         : await f.worker.fetch(request, f.env, f.ctx);
+      if(path==='/security/api/diary/investment'&&req.method==='POST'&&loseInvestmentResponse){loseInvestmentResponse=false;res.writeHead(503,{'Content-Type':'application/json'});res.end('{"error":"SyntheticResponseLoss"}');return;}
       if (path === '/security/api/diary/config' && loseResponse) {
         loseResponse = false; res.writeHead(503, {'Content-Type':'application/json'}); res.end('{"error":"SyntheticResponseLoss"}'); return;
       }
@@ -55,12 +56,12 @@ const server = createServer(async (req,res) => {
       res.setHeader('Content-Type','text/html'); res.end('<!doctype html><meta charset="utf-8"><script src="/cloud/crypto-vault.js"></script>'); return;
     }
     const mapping = path.startsWith('/security/') ? ['security-worker/public', path.slice(10)]
-      : path.startsWith('/diary/') ? ['diary-worker/public', path.slice(7)]
+      : path.startsWith('/diary/') ? ['diary-worker/public',path==='/diary/investment/'?'investment.html':path.slice(7)]
       : path === '/cloud/crypto-vault.js' ? ['cloud-worker/public','crypto-vault.js'] : null;
     if (!mapping) {res.writeHead(404); res.end(); return;}
     const base = resolve(root,mapping[0]), file = resolve(base,mapping[1]);
     if (!file.startsWith(base+sep)) throw new Error('InvalidFixturePath');
-    res.setHeader('Content-Type', ['.js','.mjs'].includes(extname(file)) ? 'text/javascript' : 'text/plain');
+    res.setHeader('Content-Type', ['.js','.mjs'].includes(extname(file)) ? 'text/javascript' : extname(file)==='.html'?'text/html':extname(file)==='.css'?'text/css':'text/plain');
     res.end(await readFile(file));
   } catch(error) {
     if (!error.status) errors.push(error.message);
@@ -112,7 +113,23 @@ try {
   assert.equal(contents,canary);
   assert.equal(JSON.stringify(wire).includes(canary),false);
   assert.equal(JSON.stringify(f.db.sqlite.prepare('SELECT * FROM diary_e2ee_records').all()).includes(canary),false);
+  const financialRecords=[{date:'2026-01-01',total:7812345670,cash:7812345670,stocks:0,funds:0,bonds:0,crypto:0,futures:0,points:0,other:0},
+    {date:'2026-02-01',total:7812345671,cash:7812345671,stocks:0,funds:0,bonds:0,crypto:0,futures:0,points:0,other:0}];
+  assert.equal(await page.evaluate(async records=>{try{await (await import('/security/diary-setup.mjs')).importDiaryInvestment(new File([JSON.stringify({records})],'investment.json'));return false;}catch{return true;}},financialRecords),true);
+  await page.evaluate(async records=>(await import('/security/diary-setup.mjs')).importDiaryInvestment(new File([JSON.stringify({records})],'investment.json')),financialRecords);
+  const portfolio=await context.newPage();portfolio.on('pageerror',error=>errors.push(error.message));
+  await portfolio.route('**/security/passkey-client.js*',route=>route.fulfill({contentType:'text/javascript',body:'/* Synthetic authentication is injected through the isolated test channel. */'}));
+  await portfolio.addInitScript(({prf,credentialId})=>{window.TRoomPasskeys={authenticate:async()=>({credentialId,prfOutput:new Uint8Array(prf),link:{accountId:'main-admin'},handoff:{handoffToken:'main-admin'}})};},{prf:[...user.prf],credentialId:user.credentialId});
+  await portfolio.goto(origin+'/diary/investment/');
+  await portfolio.waitForSelector('#investment-passkey',{state:'visible'});await portfolio.click('#investment-passkey');
+  await portfolio.waitForSelector('#dashboard:not([hidden])');
+  assert.equal((await portfolio.locator('#current-total').innerText()).replace(/[^0-9]/g,''),'7812345671');
+  assert.equal(JSON.stringify(wire).includes('7812345670'),false);
+  assert.equal(JSON.stringify(f.db.sqlite.prepare('SELECT * FROM diary_e2ee_records').all()).includes('7812345670'),false);
+  const cache=await portfolio.evaluate(async()=>{const store=await (await import('/diary/crypto/e2ee/cache.mjs')).openCipherCache();const tx=JSON.stringify(await store.get('investment/main-admin/'+(await (await fetch('/diary/api/encryption/profile')).json()).profile.actor.credentialId));store.close();return tx;});
+  assert.equal(cache.includes('7812345670'),false);
+  await portfolio.close();
   assert.deepEqual(errors,[]);
   await page.evaluate(() => window.fixtureBridge.lock());
-  console.log('Recovery browser: real T-Cloud PRF envelope, Security setup response-loss retry, strict public trust and actual encrypted Diary HTTP runtime passed (synthetic authentication).');
+  console.log('Recovery browser: real T-Cloud PRF envelope, Security setup response-loss retry, strict public trust and actual encrypted Diary/Investment HTTP runtime and encrypted financial import retry passed (synthetic authentication).');
 } finally {await browser.close(); await new Promise(r => server.close(r)); await f.close();}

@@ -21,7 +21,7 @@ export const DATABASES = {
 };
 
 export function exportSpec(service,migration) {
-  if(service==='diary'&&migration===DIARY_ENCRYPTED_MIGRATION)return {database:'diary-db',binding:'DIARY_DB',migration,tables:[...BACKUP_TABLES.filter(t=>['diary_accounts','investment_history'].includes(t.name)).map(t=>({...t,sourceColumns:t.columns.join(',')})),...ENCRYPTED_DIARY_TABLES]};
+  if(service==='diary'&&migration===DIARY_ENCRYPTED_MIGRATION)return {database:'diary-db',binding:'DIARY_DB',migration,tables:[...BACKUP_TABLES.filter(t=>t.name==='diary_accounts').map(t=>({...t,sourceColumns:t.columns.join(',')})),...ENCRYPTED_DIARY_TABLES]};
   if(service==='security'&&migration===SECURITY_DIARY_MIGRATION)return {...SERVICES.security,migration,tables:[...SERVICES.security.tables,...SECURITY_DIARY_TABLES]};
   if (service === 'diary') return { database: 'diary-db', binding: 'DIARY_DB', migration: '0022_photo_backup_identity.sql',
     tables: BACKUP_TABLES.map(t => ({ ...t, sourceColumns: t.columns.join(',') })) };

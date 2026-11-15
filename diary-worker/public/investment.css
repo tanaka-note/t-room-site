@@ -290,3 +290,8 @@ button, a { font: inherit; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+
+.investment-unlock { display: grid; gap: 1rem; margin: 1.5rem 0; }
+.investment-unlock[hidden] { display: none; }
+.investment-unlock button { justify-self: start; font: inherit; padding: .75rem 1.25rem; border: 1px solid currentColor; border-radius: .5rem; background: transparent; color: inherit; cursor: pointer; }
+.investment-unlock label { display: grid; gap: .5rem; }

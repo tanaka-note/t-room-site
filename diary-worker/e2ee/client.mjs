@@ -1,3 +1,4 @@
+import {investmentRecords} from './investment.mjs';
 import {
   b64,
   encode,
@@ -187,7 +188,7 @@ export class EncryptedDiaryClient {
           )
             throw new Error("UnsupportedPayload");
           if (
-            row.state !== "preferences" &&
+            !["preferences","investment"].includes(row.state) &&
             (typeof value.entry.title !== "string" ||
               typeof value.entry.content !== "string" ||
               !Array.isArray(value.entry.photos) ||
@@ -197,6 +198,7 @@ export class EncryptedDiaryClient {
               ))
           )
             throw new Error("InvalidPayload");
+          if(row.state==='investment')investmentRecords(value.entry.records);
           records.set(row.id, { row, entry: value.entry });
         }
       }),
@@ -413,7 +415,7 @@ export class EncryptedDiaryClient {
   }
   entry(id) {
     const record = this.records.get(String(id));
-    if (!record) throw new InputError(404, "NotFound");
+    if (!record || !["published","draft","trash"].includes(record.row.state)) throw new InputError(404, "NotFound");
     return {
       ...record.entry,
       id: Number(record.row.id),

@@ -10,8 +10,8 @@ function scopeRecord(scope,households) {
   const household=Object.keys(households).find(h=>scope.startsWith(h+':'));
   if(!household)fail(400,'InvalidScope');
   const [kind,...ids]=scope.slice(household.length+1).split(':');
-  const state={published:'published',drafts:'draft',preferences:'preferences',trash:'trash'}[kind];
-  if(!state||state==='preferences'&&ids.length!==1||state==='trash'&&!ids.length||['published','draft'].includes(state)&&ids.length)fail(400,'InvalidScope');
+  const state={published:'published',drafts:'draft',preferences:'preferences',trash:'trash',investment:'investment'}[kind];
+  if(!state||state==='preferences'&&ids.length!==1||state==='trash'&&!ids.length||['published','draft','investment'].includes(state)&&ids.length)fail(400,'InvalidScope');
   return {household,state,author:ids[0]||'',retainedFor:state==='trash'?ids:[]};
 }
 export const diaryKeysEnabled=env=>String(env.DIARY_ENCRYPTION_ENABLED||'false')==='true';
@@ -25,9 +25,14 @@ export async function diaryRecipientId(credentialId,serviceLinkId) {
 async function liveLinks(env,identityId,credentialId) {
   return (await env.DB.prepare(`SELECT l.id,l.service_account_id accountId FROM security_service_links l JOIN security_credentials c ON c.identity_id=l.identity_id JOIN security_identities i ON i.id=l.identity_id WHERE l.identity_id=? AND c.credential_id=? AND l.service='diary' AND l.status='active' AND c.status='active' AND i.status='active'`).bind(identityId,credentialId).all()).results;
 }
-async function accountClaims(env,accountId) {
+async function activeAccountClaims(env,accountId) {
   const claims=await env.DIARY_AUTH.describeEncryptionAccount({accountId});
-  if(!claims||claims.accountId!==accountId)fail(403,'DiaryAccountUnavailable');
+  if(claims&&claims.accountId!==accountId)fail(403,'DiaryAccountUnavailable');
+  return claims?.active?claims:null;
+}
+async function accountClaims(env,accountId) {
+  const claims=await activeAccountClaims(env,accountId);
+  if(!claims)fail(403,'DiaryAccountUnavailable');
   return claims;
 }
 async function config(env) {
@@ -67,9 +72,9 @@ async function writerReadiness(env,current) {
     WHERE l.service='diary' AND l.status='active' AND i.status='active' AND c.status='active'`).all()).results;
   const missingAccountIds=[];
   for(const row of rows) {
-    const claims=await accountClaims(env,row.account_id);if(!claims.active||!claims.canManageEntries)continue;
+    const claims=await activeAccountClaims(env,row.account_id);if(!claims)continue;
     let ready=false;
-    for(const member of current?.directory.value.members.filter(m=>m.accountId===row.account_id&&m.canManageEntries)||[]) {
+    for(const member of current?.directory.value.members.filter(m=>m.accountId===row.account_id)||[]) {
       const prepared=await env.DB.prepare(`SELECT 1 ready FROM security_diary_key_vaults v JOIN security_diary_key_grants g ON g.recipient_id=v.recipient_id AND g.service_link_id=v.service_link_id WHERE v.recipient_id=? AND v.account_id=? AND g.generation=?`).bind(member.credentialId,row.account_id,current.generation).first();
       if(prepared&&(await liveLinks(env,member.identityId,member.webAuthnCredentialId)).some(link=>link.id===member.serviceLinkId&&link.accountId===row.account_id)){ready=true;break;}
     }
@@ -108,22 +113,34 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
     const current=await config(env),cloud=await env.CLOUD_AUTH.getPrimaryAdminCryptoConfig();
     const adminEnvelope=await env.DB.prepare("SELECT encrypted_payload encryptedPayload,payload_iv payloadIv FROM security_tcloud_key_envelopes WHERE identity_id='primary-admin' AND credential_id=? AND envelope_type='admin_private_prf'").bind(actor.credentialId).first();
     const rows=(await env.DB.prepare(`SELECT v.* FROM security_diary_key_vaults v JOIN security_credentials c ON c.credential_id=v.credential_id JOIN security_identities i ON i.id=v.identity_id JOIN security_service_links l ON l.id=v.service_link_id WHERE c.status='active' AND i.status='active' AND l.status='active'`).all()).results;
-    const members=[];for(const row of rows){const claims=await accountClaims(env,row.account_id);members.push({identityId:row.identity_id,serviceLinkId:row.service_link_id,credentialId:row.recipient_id,webAuthnCredentialId:row.credential_id,...claims,...JSON.parse(row.vault_json),privateEnvelope:undefined});}
+    const members=[];for(const row of rows){const claims=await activeAccountClaims(env,row.account_id);if(!claims)continue;members.push({identityId:row.identity_id,serviceLinkId:row.service_link_id,credentialId:row.recipient_id,webAuthnCredentialId:row.credential_id,...claims,...JSON.parse(row.vault_json),privateEnvelope:undefined});}
     const households=await env.DIARY_AUTH.encryptionHouseholds();
     return json({config:current,recoveryPublicKey:cloud?.publicKeyJwk||null,adminEnvelope,members,households,
       writerReadiness:await writerReadiness(env,current),scopeAccounts:(await env.DIARY_AUTH.encryptionScopeAccounts()).filter(Boolean),retainedScopes:await env.DIARY_AUTH.encryptionRetainedScopes(),rollout:await env.DIARY_AUTH.encryptionRollout()});
   }
   if(path==='/api/diary/control'&&request.method==='POST') {
     const current=await config(env);if(!current)fail(409,'EncryptionPreparationRequired');
-    const link=links.find(l=>l.accountId===current.directory.value.households[Object.keys(current.directory.value.households)[0]].owner);
+    let link,claims;
+    for(const candidate of links){const live=await activeAccountClaims(env,candidate.accountId);if(live?.isGlobalOwner){link=candidate;claims=live;break;}}
     if(!link)fail(403,'AccessDenied');
-    const claims=await accountClaims(env,link.accountId);if(!claims.isGlobalOwner)fail(403,'AccessDenied');
     const body=await readJson(request,20000);if(!exact(body,['expectedGeneration','next','evidence']))fail(400,'InvalidRolloutRequest');
     if(body.next==='encrypted'&&!(await writerReadiness(env,current)).ready)fail(409,'DiaryWriterPreparationRequired');
     const actorClaims={...claims,credentialId:await diaryRecipientId(actor.credentialId,link.id),reauthenticatedAt:actor.authenticatedAt};
     const directory=await verifyDirectory(current.directory,current.anchor,current.generation);
     const result=await env.DIARY_AUTH.transitionEncryption({...body,actor:actorClaims,directory});
     await audit('diary_rollout_changed',actor.identityId);return json(result);
+  }
+  if(path==='/api/diary/investment'&&['GET','POST'].includes(request.method)) {
+    const current=await config(env);if(!current)fail(409,'EncryptionPreparationRequired');
+    let operator;
+    for(const link of links){const claims=await activeAccountClaims(env,link.accountId);if(claims?.isGlobalOwner&&claims.canViewInvestment){operator={...claims,credentialId:await diaryRecipientId(actor.credentialId,link.id),reauthenticatedAt:actor.authenticatedAt};break;}}
+    if(!operator)fail(403,'AccessDenied');
+    const directory=await verifyDirectory(current.directory,current.anchor,current.generation);
+    if(request.method==='GET')return json(await env.DIARY_AUTH.encryptionInvestmentRecord({actor:operator,directory}));
+    if((await diaryKeyBundle(env,{identityId:actor.identityId,credentialId:actor.credentialId,serviceLinkId:links.find(link=>link.accountId===operator.accountId).id,serviceAccountId:operator.accountId}))?.rekeyRequired)fail(423,'RekeyRequired');
+    const body=await readJson(request,2_000_000);if(!exact(body,['proposal']))fail(400,'InvalidInvestmentRequest');
+    const result=await env.DIARY_AUTH.saveEncryptedInvestment({actor:operator,directory,proposal:body.proposal});
+    await audit('diary_investment_updated',actor.identityId);return json(result);
   }
   if(path==='/api/diary/maintenance/backup'&&request.method==='POST') {
     const current=await config(env);if(!current)fail(409,'EncryptionPreparationRequired');
@@ -137,11 +154,11 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
   if(path==='/api/diary/maintenance/signing-vault'&&request.method==='POST') {
     const current=await config(env);if(!current)fail(409,'EncryptionPreparationRequired');
     for(const link of links) {
-      const claims=await accountClaims(env,link.accountId);if(!claims.isGlobalOwner)continue;
+      const claims=await activeAccountClaims(env,link.accountId);if(!claims?.isGlobalOwner)continue;
       const recipientId=await diaryRecipientId(actor.credentialId,link.id);
       const member=current.directory.value.members.find(member=>member.credentialId===recipientId&&member.accountId===link.accountId);
       const row=await env.DB.prepare('SELECT vault_json FROM security_diary_key_vaults WHERE recipient_id=? AND account_id=? AND credential_id=?').bind(recipientId,link.accountId,actor.credentialId).first();
-      if(member&&row)return json({recipientId,accountId:link.accountId,vault:JSON.parse(row.vault_json)});
+      if(member&&row){const grant=await env.DB.prepare('SELECT grants_json FROM security_diary_key_grants WHERE recipient_id=? AND service_link_id=? AND generation=?').bind(recipientId,link.id,current.generation).first();if(grant)return json({recipientId,accountId:link.accountId,vault:JSON.parse(row.vault_json),grants:JSON.parse(grant.grants_json)});}
     }
     fail(403,'AccessDenied');
   }
@@ -190,7 +207,7 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
     validateEnvelope(body.recoveryEnvelope.envelope);
     if(!exact(body.recoveryEnvelope,['version','generation','authority','recoveryFingerprint','envelope','wrappedKey'])||body.recoveryEnvelope.version!==1||unb64(body.recoveryEnvelope.wrappedKey,684).length!==recoveryWrappedBytes(directory.recoveryPublicKey))fail(400,'DiaryRecoveryMismatch');
     if(!equal(directory.households,await env.DIARY_AUTH.encryptionHouseholds()))fail(403,'DiaryHouseholdsMismatch');
-    const operatorMembers=await Promise.all(links.map(l=>accountClaims(env,l.accountId)));
+    const operatorMembers=(await Promise.all(links.map(l=>activeAccountClaims(env,l.accountId)))).filter(Boolean);
     if(!operatorMembers.some(m=>m.isGlobalOwner))fail(403,'AccessDenied');
     if(!directory.members.some(m=>m.identityId===actor.identityId&&operatorMembers.some(c=>c.isGlobalOwner&&c.accountId===m.accountId)))fail(403,'DiaryOwnerRequired');
     if(!rekey&&current?.directory.value.members.some(old=>!directory.members.some(member=>member.credentialId===old.credentialId&&equal(member.publicKey,old.publicKey)&&equal(member.signPublicKey,old.signPublicKey))))fail(409,'HistoricalSigningKeyRequired');

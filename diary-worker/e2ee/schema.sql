@@ -10,7 +10,7 @@ CREATE TABLE diary_e2ee_control (
 INSERT INTO diary_e2ee_control VALUES(1,'legacy',0,0,NULL);
 CREATE TABLE diary_e2ee_records (
  id TEXT PRIMARY KEY, household TEXT NOT NULL, scope TEXT NOT NULL,
- state TEXT NOT NULL CHECK(state IN ('published','draft','trash','preferences')),
+ state TEXT NOT NULL CHECK(state IN ('published','draft','trash','preferences','investment')),
  author TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision>0), epoch INTEGER NOT NULL CHECK(epoch>0),
  source_id TEXT, source_revision INTEGER,
  retained_for TEXT NOT NULL CHECK(json_valid(retained_for)),

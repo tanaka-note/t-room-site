@@ -3,6 +3,7 @@ import {
   assertActor,
   assertWrite,
   canRead,
+  investmentScope,
   publishedScope,
   draftScope,
   preferencesScope,
@@ -46,7 +47,7 @@ export function createStore(db, registry) {
   const owner = (household) =>
     registry.households[household]?.owner || fail("UnknownHousehold", 403);
   function scope(row) {
-    return row.state === "published"
+    return row.state === "investment" ? investmentScope(row.household) : row.state === "published"
       ? publishedScope(row.household)
       : row.state === "draft"
         ? draftScope(row.household)
@@ -165,7 +166,7 @@ export function createStore(db, registry) {
       next.author = actor.accountId;
     if (!current) assertWrite(actor, next);
     if (
-      !["published", "draft", "preferences"].includes(next.state) &&
+      !["published", "draft", "preferences", "investment"].includes(next.state) &&
       operation === "save" &&
       !current
     )
@@ -506,8 +507,8 @@ export function createStore(db, registry) {
       records: records.results.map(parseRecord).filter((row) => canRead(actor, row)),
     };
   }
-  const visibleSQL=`(r.state='published' OR (r.state='draft' AND ?=1) OR (r.state='preferences' AND r.author=?) OR (r.state='trash' AND ?=1 AND EXISTS(SELECT 1 FROM json_each(r.retained_for) owned WHERE owned.value IN (SELECT value FROM json_each(?)))))`;
-  const visibleBindings=(actor,household)=>[actor.canManageEntries?1:0,actor.accountId,actor.canViewTrash?1:0,JSON.stringify(retentionIds(actor,household))];
+  const visibleSQL=`(r.state='published' OR (r.state='investment' AND ?=1) OR (r.state='draft' AND ?=1) OR (r.state='preferences' AND r.author=?) OR (r.state='trash' AND ?=1 AND EXISTS(SELECT 1 FROM json_each(r.retained_for) owned WHERE owned.value IN (SELECT value FROM json_each(?)))))`;
+  const visibleBindings=(actor,household)=>[actor.canViewInvestment?1:0,actor.canManageEntries?1:0,actor.accountId,actor.canViewTrash?1:0,JSON.stringify(retentionIds(actor,household))];
   async function snapshotHead(actor,household) {
     assertActor(actor,household);
     const [sequence,records]=await db.batch([

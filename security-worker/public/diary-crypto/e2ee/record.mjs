@@ -8,6 +8,7 @@ import {
   recoveryWrappedBytes,
 } from "./crypto.mjs";
 import {
+  investmentScope,
   publishedScope,
   draftScope,
   preferencesScope,
@@ -71,7 +72,7 @@ export function validateRecord(row) {
     row.revision < 1 ||
     !Number.isSafeInteger(row.epoch) ||
     row.epoch < 1 ||
-    !["published", "draft", "trash", "preferences"].includes(row.state)
+    !["published", "draft", "trash", "preferences", "investment"].includes(row.state)
   )
     throw new Error("InvalidRecord");
   if (
@@ -90,14 +91,18 @@ export function validateRecord(row) {
   )
     throw new Error("InvalidRecord");
   if (
-    row.state === "preferences"
+    row.state === "investment"
+      ? row.id !== investmentScope(row.household) || row.sourceId !== null || row.photoIds?.length !== 0
+      : row.state === "preferences"
       ? row.id !== preferencesScope(row.household, row.author)
       : !/^[1-9][0-9]{0,15}$/.test(row.id) ||
         !Number.isSafeInteger(Number(row.id))
   )
     throw new Error("InvalidRecord");
   const scope =
-    row.state === "published"
+    row.state === "investment"
+      ? investmentScope(row.household)
+      : row.state === "published"
       ? publishedScope(row.household)
       : row.state === "draft"
         ? draftScope(row.household)
@@ -138,6 +143,7 @@ export function validateRecord(row) {
 
 export async function verifyRecord(row,directory,{currentRecipients=false}={}) {
   validateRecord(row);
+  if(row.state==='investment'&&(directory.households[row.household]?.independent!==false||row.author!==directory.households[row.household]?.owner))throw new Error("InvalidInvestmentRecord");
   if (row.keyBox[RECOVERY_RECIPIENT] && unb64(row.keyBox[RECOVERY_RECIPIENT], 684).length !== recoveryWrappedBytes(directory.recoveryPublicKey))
     throw new Error("InvalidRecipients");
   if (row.attestation.writer === RECOVERY_RECIPIENT) {
@@ -158,7 +164,9 @@ export async function verifyRecord(row,directory,{currentRecipients=false}={}) {
   if (
     !member ||
     !member.households.includes(row.household) ||
-    (row.state === "preferences"
+    (row.state === "investment"
+      ? member.accountId !== row.author || !member.canManageEntries
+      : row.state === "preferences"
       ? member.accountId !== row.author
       : !member.canManageEntries)
   )

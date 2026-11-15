@@ -68,7 +68,11 @@
   async function init() {
     bindEvents();
     try {
-      const response = await fetch("/diary/api/investment-history", { headers: { Accept: "application/json" } });
+      const sessionResponse=await fetch('/diary/api/session',{headers:{Accept:'application/json'},cache:'no-store'});
+      if(sessionResponse.status===401){window.location.replace('/diary/');return;}
+      if(!sessionResponse.ok)throw new Error('ログイン状態を確認できません。');
+      const session=await sessionResponse.json();
+      const response = session.encryption?.enabled ? await encryptedResponse(session) : await fetch("/diary/api/investment-history", { headers: { Accept: "application/json" } });
       if (response.status === 401) {
         window.location.replace("/diary/");
         return;
@@ -89,6 +93,23 @@
     } catch (error) {
       elements.loading.textContent = error instanceof Error ? error.message : "資産データを読み込めませんでした。";
     }
+  }
+
+  async function encryptedResponse(session) {
+    const panel=document.querySelector('#investment-unlock'),button=document.querySelector('#investment-passkey'),input=document.querySelector('#investment-trust-import');
+    panel.hidden=false;elements.loading.textContent='パスキーで資産データを表示してください。';
+    const module=()=>import('/diary/investment-encryption.js');
+    input.onchange=async()=>{try{await (await module()).importInvestmentTrust(input.files[0]);elements.loading.textContent='信頼設定を保存しました。パスキーで表示してください。';}catch{elements.loading.textContent='信頼設定ファイルを確認してください。';}finally{input.value='';}};
+    return new Promise(resolve=>{button.onclick=async()=>{
+      button.disabled=true;let authentication;
+      try {
+        authentication=await TRoomPasskeys.authenticate('diary',async links=>{
+          const link=links.find(link=>link.accountId===session.encryption.accountId);if(!link)throw new Error('現在と同じアカウントのパスキーを使用してください。');return link;
+        });
+        const payload=await (await module()).loadEncryptedInvestment(session,authentication);panel.hidden=true;resolve(Response.json(payload));
+      }catch{elements.loading.textContent='資産データを表示できません。信頼設定とパスキーを確認して、もう一度お試しください。';}
+      finally{authentication?.prfOutput?.fill(0);button.disabled=false;}
+    };});
   }
 
   function bindEvents() {

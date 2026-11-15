@@ -1,3 +1,4 @@
+import {investmentBinding,investmentRecords} from './investment.mjs';
 import {b64,encode,open,seal,signed,verifyDirectory} from './crypto.mjs';
 import {bindingOf,proofOf,verifyRecord} from './record.mjs';
 import {preferencesScope,publishedScope,draftScope,trashScope} from './policy.mjs';
@@ -6,7 +7,7 @@ import {mediaBinding,rotationDigest} from './rotation.mjs';
 import {createDiaryEntryDomain} from '../src/entry-domain.js';
 const domain=createDiaryEntryDomain({HttpError:Error,basePath:'/diary'});
 const equal=(a,b)=>b64(encode(a))===b64(encode(b));
-export const LEGACY_TABLES=Object.freeze(['diary_entries','diary_tags','diary_photos','diary_trash_scopes','diary_favorites']);
+export const LEGACY_TABLES=Object.freeze(['diary_entries','diary_tags','diary_photos','diary_trash_scopes','diary_favorites','investment_history']);
 export function legacyEntryBinding(row,{photos,scopes},epochs) {
   const state=row.deleted_at?'trash':row.status==='draft'?'draft':'published';
   const retainedFor=state==='trash'?[...new Set(scopes.filter(scope=>scope.entry_id===row.id).map(scope=>scope.owner_account_id))].sort():[];
@@ -35,12 +36,13 @@ export async function prepareMigration({source,configuration,recoveryPrivateKey,
     const add=async(binding,entry)=>{
       const key=kit.scopeKeys.get(binding.scope);if(!key)throw new Error('MigrationScopeMissing');
       const row={...binding,keyBox:{},envelope:await seal(key,{version:1,entry},{...binding,kind:'document'},{format:2}),
-        summary:await seal(key,binding.state==='preferences'?{}:{entryDate:entry.entryDate,title:entry.title,tags:entry.tags,weather:entry.weather,photoCount:entry.photos.length},{...binding,kind:'summary'}),
+        summary:await seal(key,['preferences','investment'].includes(binding.state)?{}:{entryDate:entry.entryDate,title:entry.title,tags:entry.tags,weather:entry.weather,photoCount:entry.photos.length},{...binding,kind:'summary'}),
         attestation:{writer:'__recovery__',recovery:{operation:'migration',previousDigest:await rotationDigest(binding),previousGeneration:0,directoryGeneration:directory.generation}}};
       if(!equal({version:1,entry},await open(key,row.envelope,{...binding,kind:'document'})))throw new Error('MigrationContentMismatch');
       row.attestation.signature=(await signed(proofOf(row),kit.authority)).signature;
       await verifyRecord(row,directory);records.push(row);
     };
+    if(source.investment_history.length){investmentRecords(source.investment_history);await add(investmentBinding(directory),{records:source.investment_history});}
     for(const raw of source.diary_entries) {
       const tags=source.diary_tags.filter(tag=>tag.entry_id===raw.id).sort((a,b)=>(a.sort_order||0)-(b.sort_order||0)).map(tag=>tag.tag);
       const binding=legacyEntryBinding(raw,{photos:source.diary_photos,scopes:source.diary_trash_scopes},directory.epochs);

@@ -1,3 +1,4 @@
+import {investmentBinding} from './investment.mjs';
 import {b64,encode,validateEnvelope} from './crypto.mjs';
 import {bindingOf,verifyRecord} from './record.mjs';
 import {parseRecord} from './store.mjs';
@@ -10,7 +11,7 @@ const MEDIA_COLUMNS=['id','household','account_id','session_id','status','origin
 export async function requireFrozenMigration(db) {
   const control=await readRollout(db);
   if(control.phase!=='migrating'||control.everEncrypted)fail('MigrationRequiresFrozenLegacyDatabase');
-  const expected=LEGACY_TABLES.flatMap(table=>['insert','update','delete'].map(action=>`diary_plaintext_${{diary_entries:'entry',diary_tags:'tag',diary_photos:'photo',diary_trash_scopes:'scope',diary_favorites:'favorite'}[table]}_${action}`));
+  const expected=LEGACY_TABLES.flatMap(table=>['insert','update','delete'].map(action=>`diary_plaintext_${{diary_entries:'entry',diary_tags:'tag',diary_photos:'photo',diary_trash_scopes:'scope',diary_favorites:'favorite',investment_history:'investment'}[table]}_${action}`));
   const count=await db.prepare("SELECT COUNT(*) count FROM sqlite_schema WHERE type='trigger' AND name IN (SELECT value FROM json_each(?))").bind(JSON.stringify(expected)).first();
   if(count.count!==expected.length)fail('LegacyWriteFencesRequired');
   const active=await db.prepare("SELECT COUNT(*) count FROM diary_photo_upload_sessions WHERE status='active' AND expires_at>strftime('%Y-%m-%dT%H:%M:%fZ','now')").first();
@@ -25,6 +26,10 @@ export async function migrationInventory(db,{table,after=0,limit=20}={}) {
   return {controlGeneration:control.generation,rows:page.map(({_cursor,...row})=>row),nextCursor:result.length>limit?page.at(-1)._cursor:null};
 }
 async function sourceBinding(db,row,directory) {
+  if(row.state==='investment') {
+    if(!(await db.prepare('SELECT 1 found FROM investment_history LIMIT 1').first()))fail('UnexpectedMigrationInvestment');
+    return investmentBinding(directory);
+  }
   if(row.state==='preferences') {
     const exists=await db.prepare('SELECT 1 found FROM diary_favorites f JOIN diary_entries e ON e.id=f.entry_id WHERE f.account_id=? AND e.household_id=? LIMIT 1').bind(row.author,row.household).first();
     if(!exists)fail('UnexpectedMigrationPreference');
@@ -73,8 +78,9 @@ export async function importMigration(db,{kind,rows,directory,expectedGeneration
 }
 export async function verifyLegacyCoverage(db) {
   const checks=[
+    "SELECT CASE WHEN (SELECT COUNT(*) FROM diary_e2ee_records WHERE state='investment')!=CASE WHEN EXISTS(SELECT 1 FROM investment_history) THEN 1 ELSE 0 END THEN 1 ELSE 0 END count",
     "SELECT COUNT(*) count FROM diary_entries e LEFT JOIN diary_e2ee_records r ON r.id=CAST(e.id AS TEXT) WHERE r.id IS NULL OR r.household!=e.household_id OR r.revision!=e.revision OR r.author!=e.author_id",
-    "SELECT COUNT(*) count FROM diary_e2ee_records r LEFT JOIN diary_entries e ON r.id=CAST(e.id AS TEXT) WHERE r.state!='preferences' AND e.id IS NULL",
+    "SELECT COUNT(*) count FROM diary_e2ee_records r LEFT JOIN diary_entries e ON r.id=CAST(e.id AS TEXT) WHERE r.state NOT IN ('preferences','investment') AND e.id IS NULL",
     "SELECT COUNT(*) count FROM diary_favorites f JOIN diary_entries e ON e.id=f.entry_id LEFT JOIN diary_e2ee_records r ON r.id=e.household_id||':preferences:'||f.account_id WHERE r.id IS NULL",
     "SELECT COUNT(*) count FROM diary_photos p LEFT JOIN diary_e2ee_media m ON m.id=p.id WHERE m.id IS NULL OR p.original_key!=m.original_key OR p.display_key!=m.display_key OR p.thumbnail_key!=m.thumbnail_key",
     "SELECT COUNT(*) count FROM diary_e2ee_media m LEFT JOIN diary_photos p ON m.id=p.id WHERE p.id IS NULL",

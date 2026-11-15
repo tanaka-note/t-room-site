@@ -1,3 +1,7 @@
+import {DIARY_READER_PROTOCOL} from '../e2ee/crypto.mjs';
+import {investmentHousehold} from '../e2ee/investment.mjs';
+import {investmentScope,canRead as canReadEncryptedRecord} from '../e2ee/policy.mjs';
+import {createStore as createEncryptedStore} from '../e2ee/store.mjs';
 import { migrationInventory,importMigration } from '../e2ee/migration-store.mjs';
 import { rotationStatus,rotationInventory,beginRotation,stageRotation,commitRotation,maintenanceInventory } from '../e2ee/rotation-store.mjs';
 import { proxyDiaryAuthentication,diaryEncryptionOrigin } from "../e2ee/origin.mjs";
@@ -83,12 +87,24 @@ export class SecurityIntegration extends WorkerEntrypoint {
 
   async describeEncryptionAccount(input) {
     const account=await findAccountById(String(input?.accountId||''),this.env);
-    return account?{accountId:account.id,households:account.isGlobalOwner?[TANAKA_HOUSEHOLD_ID,CHIHARU_HOUSEHOLD_ID]:[account.householdId],canManageEntries:Boolean(account.canManageEntries),canViewTrash:Boolean(account.canViewTrash),canPermanentlyDelete:Boolean(account.canPermanentlyDelete),isGlobalOwner:Boolean(account.isGlobalOwner),active:true,trashAliases:account.isGlobalOwner?{[CHIHARU_HOUSEHOLD_ID]:[CHIHARU_ADMIN_ACCOUNT_ID]}:{}}:null;
+    return account?{accountId:account.id,households:account.isGlobalOwner?[TANAKA_HOUSEHOLD_ID,CHIHARU_HOUSEHOLD_ID]:[account.householdId],canManageEntries:Boolean(account.canManageEntries),canViewTrash:Boolean(account.canViewTrash),canViewInvestment:Boolean(account.canViewInvestment),canPermanentlyDelete:Boolean(account.canPermanentlyDelete),isGlobalOwner:Boolean(account.isGlobalOwner),active:true,trashAliases:account.isGlobalOwner?{[CHIHARU_HOUSEHOLD_ID]:[CHIHARU_ADMIN_ACCOUNT_ID]}:{}}:null;
   }
   async encryptionRecoveryRecords({after="",limit=20}={}) {
     if(!encryptionEnabled(this.env))return {records:[],nextCursor:null};
     if(typeof after!=="string"||after.length>160||!Number.isInteger(limit)||limit<1||limit>20)throw new Error("InvalidPage");
     const result=await this.env.DB.prepare("SELECT * FROM diary_e2ee_records WHERE key_box!='{}' AND id>? ORDER BY id LIMIT ?").bind(after,limit+1).all();const rows=result.results.slice(0,limit);return {records:rows.map(parseRecord),nextCursor:result.results.length>limit?rows.at(-1).id:null};
+  }
+  async encryptionInvestmentRecord({actor,directory}) {
+    if(!encryptionEnabled(this.env)||!actor?.active||!actor.isGlobalOwner||!actor.canViewInvestment)throw new Error('AccessDenied');
+    const household=investmentHousehold(directory),store=createEncryptedStore(this.env.DB,{directory,epochs:directory.epochs,households:directory.households,photos:{},enforceRollout:true});
+    const record=await store.get(investmentScope(household));
+    if(record&&!canReadEncryptedRecord(actor,record))throw new Error('AccessDenied');return {record};
+  }
+  async saveEncryptedInvestment({actor,directory,proposal}) {
+    if(!encryptionEnabled(this.env)||!actor?.active||!actor.isGlobalOwner||!actor.canViewInvestment)throw new Error('AccessDenied');
+    const household=investmentHousehold(directory);
+    if(proposal?.household!==household||proposal?.id!==investmentScope(household)||proposal?.state!=='investment')throw new Error('InvalidInvestmentRecord');
+    return createEncryptedStore(this.env.DB,{directory,epochs:directory.epochs,households:directory.households,photos:{},enforceRollout:true}).mutation(actor,proposal,'save');
   }
   async encryptionMaintenanceInventory(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return maintenanceInventory(this.env.DB,input); }
   async createEncryptionCheckpoint({directoryGeneration}) {
@@ -106,9 +122,9 @@ export class SecurityIntegration extends WorkerEntrypoint {
   }
   async encryptionBuild() {
     if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");
-    const html=await (await this.env.ASSETS.fetch(new Request('https://assets.internal/index.html'))).text();
+    const html=await (await this.env.ASSETS.fetch(new Request('https://assets.internal/'))).text();
     const build=html.match(/<meta name="troom-app-build" content="(diary-[a-f0-9]{12})"/)?.[1];
-    if(!build)throw new Error('EncryptionBuildUnavailable');return {build,formats:[1,2]};
+    if(!build)throw new Error('EncryptionBuildUnavailable');return {build,formats:[1,2],protocol:DIARY_READER_PROTOCOL};
   }
   async encryptionMigrationInventory(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return migrationInventory(this.env.DB,input); }
   async importEncryptionMigration(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return importMigration(this.env.DB,input); }
@@ -381,7 +397,7 @@ async function handleApi(request, env, url, path, context, getSession, timing) {
     try {
       const encrypted=await handleEncryptedApi(request,env,url,path,session,{json,readJson,readMultipartForm});if(encrypted)return encrypted;
       const policy=await encryptionStatus(env);
-      const dataPath=/^\/api\/(bootstrap|meta|entries|drafts|photos|photo-upload-sessions)(?:\/|$)/.test(path);
+      const dataPath=/^\/api\/(bootstrap|meta|entries|drafts|photos|photo-upload-sessions|investment-history)(?:\/|$)/.test(path);
       if(dataPath&&policy.enabled)throw new HttpError(426,'暗号化対応アプリで日記を開き直してください。');
       if(dataPath&&request.method!=='GET'&&policy.phase!=='legacy')throw new HttpError(423,'日記の書き込みを一時停止しています。内容を保管してお待ちください。');
     }catch(error){if(error instanceof HttpError)throw error;if(String(error.message).includes("DiaryWritesPaused"))throw new HttpError(423,"日記の書き込みを一時停止しています。");if([400,401,403,404,409,413,423,428,503].includes(error.status))throw new HttpError(error.status,'暗号化された日記を処理できません。ログイン・鍵の準備状態・書き込み停止状態を確認してください。');throw error;}
@@ -633,7 +649,8 @@ async function serveAsset(request, env, url, path) {
     ["/icons/favicon-64-v3.png", "/icons/favicon-64-v3.png"],
     ["/icons/favicon-64-v4.png", "/icons/favicon-64-v4.png"],
     ["/investment.css", "/investment.css"],
-    ["/investment.js", "/investment.js"]
+    ["/investment.js", "/investment.js"],
+    ["/investment-encryption.js","/investment-encryption.js"]
   ]);
   const isDiaryRoute = path === "/" || path === "/tags" || path === "/tags/" || path.startsWith("/entry/") || path.startsWith("/tag/") || path === "/trash" || path === "/favorites" || path === "/favorites/";
   const isInvestmentRoute = path === "/investment" || path === "/investment/";
@@ -663,7 +680,8 @@ function isInvestmentAssetPath(path) {
   return path === "/investment"
     || path === "/investment/"
     || path === "/investment.css"
-    || path === "/investment.js";
+    || path === "/investment.js"
+    || path === "/investment-encryption.js";
 }
 
 async function listInvestmentHistory(env) {

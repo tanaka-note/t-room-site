@@ -21,6 +21,7 @@ const records = investmentRecords();
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, "http://127.0.0.1");
+  if (url.pathname === "/diary/api/session") return sendJson(response,{authenticated:true,canViewInvestment:true});
   if (url.pathname === "/diary/api/investment-history") {
     return sendJson(response, { asOf: records.at(-1).date, records });
   }

@@ -1,6 +1,8 @@
+import {investmentHousehold} from './investment.mjs';
+import {investmentScope,canRead} from './policy.mjs';
 import { assertDiaryEncryptionOrigin } from "./origin.mjs";
 import { handleEncryptedMedia } from "./media.mjs";
-import { verifyDirectory } from './crypto.mjs';
+import { verifyDirectory,DIARY_READER_PROTOCOL } from './crypto.mjs';
 import { createStore } from './store.mjs';
 import { readRollout,READ_FORMATS } from './rollout.mjs';
 
@@ -9,7 +11,7 @@ export const encryptionEnabled=env=>String(env.DIARY_ENCRYPTION_ENABLED||'false'
 export async function encryptionStatus(env) {
   if(!encryptionEnabled(env))return {enabled:false};
   const control=await readRollout(env.DB);
-  return {enabled:control.everEncrypted||control.phase==='encrypted',phase:control.phase,generation:control.generation,readOnly:control.phase!=='encrypted',formats:READ_FORMATS};
+  return {protocol:DIARY_READER_PROTOCOL,enabled:control.everEncrypted||control.phase==='encrypted',phase:control.phase,generation:control.generation,readOnly:control.phase!=='encrypted',formats:READ_FORMATS};
 }
 export async function encryptedContext(env,session) {
   if(!encryptionEnabled(env))fail(404,'EncryptionDisabled');
@@ -20,7 +22,7 @@ export async function encryptedContext(env,session) {
   const directory=await verifyDirectory(bundle.directory,bundle.anchor,bundle.generation);
   const households=session.isGlobalOwner?Object.keys(directory.households):[session.householdId];
   if(!households.includes(session.activeHouseholdId))fail(403,'HouseholdDenied');
-  const actor={accountId:session.accountId,credentialId:bundle.recipientId,active:true,households,canManageEntries:Boolean(session.canManageEntries),canViewTrash:Boolean(session.canViewTrash),canPermanentlyDelete:Boolean(session.canPermanentlyDelete),isGlobalOwner:Boolean(session.isGlobalOwner),trashAliases:session.isGlobalOwner?Object.fromEntries(Object.entries(directory.households).filter(([,v])=>v.independent).map(([h,v])=>[h,[v.owner]])):{}};
+  const actor={accountId:session.accountId,credentialId:bundle.recipientId,active:true,households,canManageEntries:Boolean(session.canManageEntries),canViewInvestment:Boolean(session.canViewInvestment),canViewTrash:Boolean(session.canViewTrash),canPermanentlyDelete:Boolean(session.canPermanentlyDelete),isGlobalOwner:Boolean(session.isGlobalOwner),trashAliases:session.isGlobalOwner?Object.fromEntries(Object.entries(directory.households).filter(([,v])=>v.independent).map(([h,v])=>[h,[v.owner]])):{}};
   const registry={households:directory.households,epochs:directory.epochs,directory,photos:{},enforceRollout:true};
   return {actor,bundle,directory,registry,store:createStore(env.DB,registry)};
 }
@@ -35,7 +37,13 @@ export async function handleEncryptedApi(request,env,url,path,session,{json,read
   actor.activeHouseholdId=session.activeHouseholdId;
   if(bundle.rekeyRequired&&request.method!=='GET')fail(423,'DiaryRekeyRequired');
   const media=await handleEncryptedMedia(request,env,url,path,actor,{json,readJson,readMultipartForm,store});if(media)return media;
-  if(path==='/api/encryption/profile'&&request.method==='GET')return json({profile:{actor,household:session.activeHouseholdId,displayName:session.accountName,directory:bundle.directory,epochs:directory.epochs,vault:bundle.vault,grants:bundle.grants,recordGrants:bundle.recordGrants,webAuthnCredentialId:bundle.webAuthnCredentialId},minimumGeneration:bundle.generation,rekeyRequired:bundle.rekeyRequired,rollout:{phase:control.phase,generation:control.generation}});
+  if(path==='/api/encryption/profile'&&request.method==='GET')return json({protocol:DIARY_READER_PROTOCOL,profile:{actor,household:session.activeHouseholdId,displayName:session.accountName,directory:bundle.directory,epochs:directory.epochs,vault:bundle.vault,grants:bundle.grants,recordGrants:bundle.recordGrants,webAuthnCredentialId:bundle.webAuthnCredentialId},minimumGeneration:bundle.generation,rekeyRequired:bundle.rekeyRequired,rollout:{phase:control.phase,generation:control.generation}});
+  if(path==='/api/encryption/investment'&&request.method==='GET') {
+    if(!actor.canViewInvestment)fail(403,'AccessDenied');
+    const row=await store.get(investmentScope(investmentHousehold(directory)));
+    if(row&&!canRead(actor,row))fail(403,'AccessDenied');
+    return json({record:row});
+  }
   if(path==='/api/encryption/time'&&request.method==='GET')return json({timestamp:new Date().toISOString()});
   if(path==='/api/encryption/head'&&request.method==='GET'){if(url.searchParams.get('household')!==session.activeHouseholdId)fail(403,'HouseholdDenied');return json(await store.snapshotHead(actor,session.activeHouseholdId));}
   if(path==='/api/encryption/snapshot'&&request.method==='GET') {

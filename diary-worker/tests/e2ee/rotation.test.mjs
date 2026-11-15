@@ -88,7 +88,7 @@ test('central recovery rotates every record and personal preference, fences part
     // the own-account preference restriction after the central recovery pass.
     const control=await f.integration.encryptionRollout();
     const sequence=f.db.sqlite.prepare('SELECT COALESCE(MAX(seq),0) seq FROM diary_e2ee_changes').get().seq;
-    const proof=await signed({protocol:'T-lain diary cutover',version:1,records:records.length,sequence,directoryGeneration:2,
+    const proof=await signed({protocol:'T-lain diary cutover',version:2,records:records.length,sequence,directoryGeneration:2,
       sourceManifestDigest:await rotationDigest(plan.manifest),restoreDigest:await rotationDigest(plan.configuration),readerBuild:'fixture-reader',writerBuild:'fixture-writer',formats:[1,2]},fresh.privateKeys.sign);
     await central('/control',{expectedGeneration:control.generation,next:'encrypted',evidence:proof});
     await fresh.saveEntry({...entry(),title:'NEW_ENCRYPTED_POST'});
