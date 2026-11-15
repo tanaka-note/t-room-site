@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { productionPlan, manualVerification, assertActionsRelease, uploadedVersion, assertDeployedVersion, assertVersionSettings, assertDenied, checkTokenScope, assertD1ExportReadiness } from './release-actions.mjs';
+import { productionPlan, manualVerification, assertActionsRelease, uploadedVersion, assertDeployedVersion, waitForProductionVerification, assertVersionSettings, assertDenied, checkTokenScope, assertD1ExportReadiness } from './release-actions.mjs';
 import { affected } from './verify-plan.mjs';
 
 test('Diary cannot switch to D1 exports before the central Workflow and Secret are provisioned',()=>{
@@ -53,6 +53,40 @@ test('promotion is pinned to a unique uploaded Worker/version and read back at 1
   for (const deployments of [[],[{versions:[{version_id:'different',percentage:100}]}],[{versions:[{version_id:version,percentage:50}]}]]) {
     assert.throws(() => assertDeployedVersion({deployments},version));
   }
+});
+test('post-promotion readback waits for the exact version at 100% and rejects a permanently stale or split deployment', async () => {
+  const version='12345678-1234-1234-1234-123456789abc';
+  const deployment = versions => ({deployments:[{versions}]});
+  const pending = [deployment([{version_id:'previous',percentage:100}]),
+    deployment([{version_id:version,percentage:50},{version_id:'previous',percentage:50}]),
+    deployment([{version_id:version,percentage:100}])];
+  const delays=[];
+  await waitForProductionVerification(() => assertDeployedVersion(pending.shift(),version), {
+    sleep: async ms => delays.push(ms)
+  });
+  assert.deepEqual(delays,[5000,5000]);
+  assert.equal(pending.length,0);
+  for (const stale of [deployment([{version_id:'previous',percentage:100}]),
+    deployment([{version_id:version,percentage:50}]),deployment([])]) {
+    let reads=0,sleeps=0;
+    await assert.rejects(waitForProductionVerification(() => {
+      reads++; assertDeployedVersion(stale,version);
+    },{attempts:3,sleep:async()=>{sleeps++;}}),/not serving the uploaded version at 100%/);
+    assert.equal(reads,3);assert.equal(sleeps,2);
+  }
+});
+test('public build propagation is retried within a bound and never turns a persistent mismatch into success', async () => {
+  let reads=0;
+  const checked=await waitForProductionVerification(() => {
+    if(++reads<3)throw new Error('Production command failed.');
+    return 'verified expected build';
+  },{attempts:6,sleep:async()=>{}});
+  assert.equal(checked,'verified expected build');assert.equal(reads,3);
+  reads=0;
+  await assert.rejects(waitForProductionVerification(() => {
+    reads++;throw new Error('Production command failed.');
+  },{attempts:6,sleep:async()=>{}}),/Production command failed/);
+  assert.equal(reads,6);
 });
 test('code release refuses infrastructure changes instead of silently ignoring them', () => {
   const before={routes:[{pattern:'example.test/*'}],triggers:{crons:['0 * * * *']},queues:{consumers:[{queue:'existing'}]}};
