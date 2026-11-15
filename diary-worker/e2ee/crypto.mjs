@@ -367,6 +367,8 @@ export async function verifyDirectory(packet, anchor, minimumGeneration = 1) {
     (await fingerprint(value.recoveryPublicKey)) !== value.recoveryFingerprint
   )
     throw new Error("InvalidDirectory");
+  if (value.recoveryAuthority && b64(encode(value.recoveryAuthority)) !== b64(encode(anchor)))
+    throw new Error("InvalidRecoveryAuthority");
   const ids = new Set();
   for (const member of value.members) {
     if (

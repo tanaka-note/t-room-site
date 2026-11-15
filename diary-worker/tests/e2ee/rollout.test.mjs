@@ -48,11 +48,11 @@ test('cutover requires signed restore/source evidence pinned to current count an
 });
 test('legacy DB triggers block writes from an old Worker after migration starts',()=>{
   const db=memoryDatabase({phase:'legacy'});try {
-    for(const table of ['diary_entries','diary_tags','diary_photos','diary_favorites','diary_photo_upload_sessions','diary_staged_photos'])db.sqlite.exec(`CREATE TABLE ${table}(id INTEGER PRIMARY KEY,value TEXT)`);
+    for(const table of ['diary_entries','diary_tags','diary_photos','diary_favorites','diary_photo_upload_sessions','diary_staged_photos','diary_trash_scopes'])db.sqlite.exec(`CREATE TABLE ${table}(id INTEGER PRIMARY KEY,value TEXT)`);
     db.sqlite.exec(readFileSync(new URL('../../e2ee/legacy-fences.sql',import.meta.url),'utf8'));
-    for(const table of ['diary_entries','diary_tags','diary_photos','diary_favorites','diary_photo_upload_sessions','diary_staged_photos'])db.sqlite.exec(`INSERT INTO ${table} VALUES(1,'before')`);
+    for(const table of ['diary_entries','diary_tags','diary_photos','diary_favorites','diary_photo_upload_sessions','diary_staged_photos','diary_trash_scopes'])db.sqlite.exec(`INSERT INTO ${table} VALUES(1,'before')`);
     db.sqlite.exec("UPDATE diary_e2ee_control SET phase='migrating'");
-    for(const table of ['diary_entries','diary_tags','diary_photos','diary_favorites','diary_photo_upload_sessions','diary_staged_photos']){
+    for(const table of ['diary_entries','diary_tags','diary_photos','diary_favorites','diary_photo_upload_sessions','diary_staged_photos','diary_trash_scopes']){
       assert.throws(()=>db.sqlite.exec(`INSERT INTO ${table} VALUES(2,'plaintext')`),/DiaryWritesPaused/);
       assert.throws(()=>db.sqlite.exec(`UPDATE ${table} SET value='plaintext'`),/DiaryWritesPaused/);
     }

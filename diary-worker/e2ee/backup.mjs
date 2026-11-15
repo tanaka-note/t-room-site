@@ -6,6 +6,8 @@ import {
   unb64,
   validatePublicKey,
   recoveryWrappedBytes,
+  fingerprint,
+  verifySigned,
 } from "./crypto.mjs";
 import { verifyRecord } from "./record.mjs";
 const digest = async (value) =>
@@ -23,7 +25,7 @@ const exact = (value, keys) =>
   typeof value === "object" &&
   !Array.isArray(value) &&
   Object.keys(value).sort().join(",") === [...keys].sort().join(",");
-function validateKeyMetadata({ vaults, grants, recoveryEnvelope }, directory) {
+export async function validateKeyMetadata({ vaults, grants, recordGrants = {}, recoveryEnvelope }, directory, anchor = null) {
   for (const vault of Object.values(vaults || {})) {
     if (
       !exact(vault, ["publicKey", "signPublicKey", "privateEnvelope"]) ||
@@ -40,7 +42,7 @@ function validateKeyMetadata({ vaults, grants, recoveryEnvelope }, directory) {
     validatePublicKey(vault.publicKey, "recipient");
     validatePublicKey(vault.signPublicKey, "signing");
   }
-  for (const list of Object.values(grants || {})) {
+  for (const [record, collections] of [[false, grants], [true, recordGrants]]) for (const list of Object.values(collections || {})) {
     if (!Array.isArray(list)) throw new Error("InvalidKeyMetadata");
     for (const grant of list) {
       if (
@@ -55,11 +57,21 @@ function validateKeyMetadata({ vaults, grants, recoveryEnvelope }, directory) {
           "fingerprint",
           "directoryGeneration",
           "wrapped",
+          ...(record ? ["id", "revision", "kind"] : []),
         ]) ||
         unb64(grant.signature, 100).length !== 64 ||
         unb64(grant.value.wrapped, 512).length !== 384
       )
         throw new Error("InvalidKeyMetadata");
+      if (anchor) {
+        const value = await verifySigned(grant, anchor);
+        const member = directory.members.find(m => m.credentialId === value.credentialId && m.accountId === value.accountId);
+        if (!member || value.version !== 1 || value.directoryGeneration !== directory.generation ||
+          value.fingerprint !== member.fingerprint || !member.scopes.includes(value.scope) ||
+          value.epoch !== directory.epochs[value.scope] || !value.scope.startsWith(value.household + ':') ||
+          record && (value.kind !== 'record' || !Number.isSafeInteger(value.revision) || value.revision < 1))
+          throw new Error('InvalidKeyMetadata');
+      }
     }
   }
   if (recoveryEnvelope !== null) {
@@ -75,6 +87,7 @@ function validateKeyMetadata({ vaults, grants, recoveryEnvelope }, directory) {
       recoveryEnvelope.version !== 1 ||
       unb64(recoveryEnvelope.wrappedKey, 684).length !== recoveryWrappedBytes(directory.recoveryPublicKey) ||
       recoveryEnvelope.generation !== directory.generation ||
+      anchor && recoveryEnvelope.authority !== await fingerprint(anchor) ||
       recoveryEnvelope.recoveryFingerprint !== directory.recoveryFingerprint
     )
       throw new Error("InvalidKeyMetadata");
@@ -84,9 +97,9 @@ function validateKeyMetadata({ vaults, grants, recoveryEnvelope }, directory) {
 // Ciphertext and public/PRF-sealed key metadata only. Actor/session state is excluded.
 export async function backup(
   db,
-  { directory, vaults, grants, recoveryEnvelope = null },
+  { directory, vaults, grants, recordGrants = {}, recoveryEnvelope = null },
 ) {
-  validateKeyMetadata({ vaults, grants, recoveryEnvelope }, directory.value);
+  await validateKeyMetadata({ vaults, grants, recordGrants, recoveryEnvelope }, directory.value);
   const snapshots = await db.batch(
     TABLES.map((name) =>
       db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).bind(),
@@ -101,6 +114,7 @@ export async function backup(
     directory,
     vaults,
     grants,
+    recordGrants,
     recoveryEnvelope,
     tables,
   };
@@ -129,8 +143,9 @@ export async function restoreEmpty(db, packet, { anchor, minimumGeneration }) {
     anchor,
     minimumGeneration,
   );
-  validateKeyMetadata(value, directory);
+  await validateKeyMetadata(value, directory, anchor);
   const statements = [];
+  const control = await db.prepare('SELECT phase,generation,ever_encrypted FROM diary_e2ee_control WHERE id=1').first();
   for (const table of TABLES) {
     const present = await db
       .prepare(`SELECT COUNT(*) AS count FROM ${table}`)
@@ -138,6 +153,8 @@ export async function restoreEmpty(db, packet, { anchor, minimumGeneration }) {
       .first();
     if (present.count) throw new Error("RestoreRequiresEmptyDatabase");
   }
+  if (!control || control.ever_encrypted || control.generation !== 0)
+    throw new Error('RestoreRequiresIsolatedDatabase');
   for (const row of value.tables.diary_e2ee_records) {
     await verifyRecord(
       {
@@ -160,6 +177,10 @@ export async function restoreEmpty(db, packet, { anchor, minimumGeneration }) {
       directory,
     );
   }
+  // The guard and all writes share one transaction. A concurrent activation or
+  // write cannot turn an isolated restore into an overwrite of a live database.
+  const empty = TABLES.map(table => `NOT EXISTS(SELECT 1 FROM ${table})`).join(' AND ');
+  statements.push(db.prepare(`UPDATE diary_e2ee_control SET phase=CASE WHEN generation=? AND ever_encrypted=0 AND ${empty} THEN 'restoring' ELSE 'invalid-restore' END,generation=generation+1 WHERE id=1`).bind(control.generation));
   for (const table of TABLES) {
     const columns = (
       await db.prepare(`PRAGMA table_info(${table})`).bind().all()
@@ -180,10 +201,12 @@ export async function restoreEmpty(db, packet, { anchor, minimumGeneration }) {
   // with the backed-up sequence (checksum detects accidental corruption; it is not a signature) before the database becomes visible.
   const split=value.tables.diary_e2ee_records.length;
   statements.splice(
-    split,
+    split + 1,
     0,
     db.prepare("DELETE FROM diary_e2ee_changes").bind(),
   );
+  // Restored data remains read-only until the normal signed cutover drill.
+  statements.push(db.prepare("UPDATE diary_e2ee_control SET phase='paused',ever_encrypted=1 WHERE id=1 AND phase='restoring'").bind());
   await db.batch(statements);
   const integrity = await db.prepare("PRAGMA integrity_check").bind().first();
   if (integrity.integrity_check !== "ok")
@@ -192,6 +215,7 @@ export async function restoreEmpty(db, packet, { anchor, minimumGeneration }) {
     directory,
     vaults: value.vaults,
     grants: value.grants,
+    recordGrants: value.recordGrants || {},
     recoveryEnvelope: value.recoveryEnvelope,
     records: value.tables.diary_e2ee_records.length,
   };

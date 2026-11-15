@@ -1,4 +1,4 @@
-import { diaryKeyBundle,handleDiaryKeys,diaryKeysEnabled } from "./diary-keys.js";
+import { diaryKeyBundle,handleDiaryKeys,diaryKeysEnabled,diaryAuthenticationOrigins } from "./diary-keys.js";
 import { runState } from '../../backup-worker/src/monitor.js';
 import { archiveAuditEvents, archiveIfPending } from './audit-archive.js';
 import { healthKeyBundle, handleHealthKeys, healthMembershipStatement, assertHealthMemberAvailable } from './health-keys.js';
@@ -535,7 +535,7 @@ async function authenticationVerify(request, env, url) {
   }
   let verification;
   try {
-    verification = await verifyAuthentication(body.response, challenge.challenge, credential, env);
+    verification = await verifyAuthentication(body.response, challenge.challenge, credential, env,service);
   } catch (error) {
     await writeLocalAudit(env, { eventType: "passkey_authentication_failure", outcome: "failure", identityId: credential.identity_id, authMethod: "passkey", service }, request);
     throw error;
@@ -1717,10 +1717,10 @@ async function verifyRegistration(response, expectedChallenge, env) {
   }
 }
 
-async function verifyAuthentication(response, expectedChallenge, credential, env) {
+async function verifyAuthentication(response, expectedChallenge, credential, env,service) {
   try {
     return await verifyAuthenticationResponse({
-      response, expectedChallenge, expectedOrigin: expectedOrigins(env), expectedRPID: rpId(env), requireUserVerification: true,
+      response, expectedChallenge, expectedOrigin: [...expectedOrigins(env),...diaryAuthenticationOrigins(env,service)], expectedRPID: rpId(env), requireUserVerification: true,
       credential: { id: credential.credential_id, publicKey: base64UrlToBytes(credential.public_key), counter: Number(credential.counter || 0), transports: parseJson(credential.transports_json, []) }
     });
   } catch (error) {

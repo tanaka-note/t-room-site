@@ -50,3 +50,12 @@ export function assertWrite(actor, row) {
   )
     throw Object.assign(new Error("AccessDenied"), { status: 403 });
 }
+
+export function scopeDefinition(scope,households) {
+  const household=Object.keys(households).find(id=>scope.startsWith(id+':'));
+  if(!household)throw new Error('UnknownScope');
+  const [kind,...ids]=scope.slice(household.length+1).split(':');
+  const state={published:'published',drafts:'draft',preferences:'preferences',trash:'trash'}[kind];
+  if(!state||state==='preferences'&&ids.length!==1||state==='trash'&&!ids.length||['published','draft'].includes(state)&&ids.length)throw new Error('UnknownScope');
+  return {household,scope,state,author:state==='preferences'?ids[0]:'',retainedFor:state==='trash'?ids:[]};
+}

@@ -60,6 +60,7 @@ export const proofOf = (row) => ({
   summary: row.summary,
   keyBox: row.keyBox,
   writer: row.attestation.writer,
+  ...(row.attestation.recovery ? {recovery:row.attestation.recovery} : {}),
 });
 
 export function validateRecord(row) {
@@ -116,7 +117,7 @@ export function validateRecord(row) {
   validateEnvelope(row.envelope);
   validateEnvelope(row.summary);
   if (
-    !exact(row.attestation, ["writer", "signature"]) ||
+    !exact(row.attestation, ["writer", "signature", ...(row.attestation?.recovery ? ["recovery"] : [])]) ||
     !/^[\w-]{1,2048}$/.test(row.attestation.writer) ||
     unb64(row.attestation.signature, 100).length !== 64 ||
     !row.keyBox ||
@@ -139,6 +140,18 @@ export async function verifyRecord(row,directory,{currentRecipients=false}={}) {
   validateRecord(row);
   if (row.keyBox[RECOVERY_RECIPIENT] && unb64(row.keyBox[RECOVERY_RECIPIENT], 684).length !== recoveryWrappedBytes(directory.recoveryPublicKey))
     throw new Error("InvalidRecipients");
+  if (row.attestation.writer === RECOVERY_RECIPIENT) {
+    const proof = row.attestation.recovery;
+    if (!directory.recoveryAuthority || !exact(proof,["operation","previousDigest","previousGeneration","directoryGeneration"]) ||
+        !['rekey','migration'].includes(proof.operation) || !/^[\w-]{43}$/.test(proof.previousDigest) ||
+        !Number.isSafeInteger(proof.previousGeneration) || proof.previousGeneration < (proof.operation==='migration'?0:1) || proof.operation==='migration'&&proof.previousGeneration!==0 ||
+        !Number.isSafeInteger(proof.directoryGeneration) || proof.directoryGeneration > directory.generation || proof.previousGeneration >= proof.directoryGeneration ||
+        directory.epochs[row.scope] !== row.epoch || Object.keys(row.keyBox).length)
+      throw new Error('InvalidRecoveryAttestation');
+    await verifySigned({value:proofOf(row),signature:row.attestation.signature},directory.recoveryAuthority);
+    return row;
+  }
+  if (row.attestation.recovery) throw new Error('InvalidRecoveryAttestation');
   const member = directory.members.find(
     (m) => m.credentialId === row.attestation.writer,
   );

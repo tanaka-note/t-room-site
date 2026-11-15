@@ -323,7 +323,7 @@ test("lossless metadata migration resumes, detects changed source data, and neve
 });
 test("encrypted backup restores into empty SQLite and is actually decrypted with the original PRF", async () => {
   const f = await fixture(provisioned),
-    restored = memoryDatabase();
+    restored = memoryDatabase({phase:"legacy"});
   try {
     const client = await f.client("ownerA");
     const e = (await client.saveEntry(entry())).entry;
@@ -343,6 +343,7 @@ test("encrypted backup restores into empty SQLite and is actually decrypted with
       minimumGeneration: 1,
     });
     assert.equal(result.records, 2);
+    assert.deepEqual({...restored.sqlite.prepare("SELECT phase,ever_encrypted FROM diary_e2ee_control").get()}, {phase:"paused",ever_encrypted:1});
     const store = createStore(restored, f.registry);
     client.transport.snapshot = (h) => store.snapshot(f.actors.ownerA, h);
     client.sequence = undefined;
@@ -432,6 +433,23 @@ test("backup metadata substitution is rejected even if an attacker recomputes th
     f.close();
     target.close();
   }
+});
+test("restore rejects an activated empty database and tampered grants before writing", async () => {
+  const f = await fixture(provisioned), target = memoryDatabase({phase:"legacy"});
+  try {
+    const packet = await backup(f.db, {directory:provisioned.packet, vaults:{},
+      grants:{owner:provisioned.profiles.ownerA.grants}});
+    target.sqlite.exec("UPDATE diary_e2ee_control SET ever_encrypted=1,phase='paused'");
+    await assert.rejects(restoreEmpty(target, packet, {anchor:provisioned.anchor,minimumGeneration:1}), /RestoreRequiresIsolatedDatabase/);
+    const fresh = memoryDatabase({phase:"legacy"});
+    try {
+      const bad = structuredClone(packet);
+      bad.value.grants.owner[0].value.accountId = "editorA";
+      bad.digest = b64(await crypto.subtle.digest("SHA-256",encode(bad.value)));
+      await assert.rejects(restoreEmpty(fresh,bad,{anchor:provisioned.anchor,minimumGeneration:1}), /InvalidSignature/);
+      assert.equal(fresh.sqlite.prepare("SELECT phase FROM diary_e2ee_control").get().phase,"legacy");
+    } finally { fresh.close(); }
+  } finally { f.close(); target.close(); }
 });
 test("a viewer with a read key cannot forge an editor signature, even through a compromised store", async () => {
   const f = await fixture(provisioned);

@@ -71,3 +71,10 @@ test('photo staging keeps filename/dimensions encrypted, attaches atomically, an
   await a.deletePhoto(id,a.entry(saved.id).revision);
   assert.equal((await call(`/encryption/media/${id}`,{method:'DELETE'})).status,200);assert.equal(f.r2.size,0);
 });
+
+test('old diary navigation redirects to the dedicated origin without copying plaintext search or tag values',async()=>{
+  for(const path of ['/diary/?q=PRIVATE_SEARCH','/diary/tag/PRIVATE_TAG/']) {
+    const response=await f.worker.fetch(new Request('https://tanaka-note.com'+path,{headers:{Accept:'text/html'}}),f.env,f.ctx);
+    assert.equal(response.status,308);assert.equal(response.headers.get('Location'),f.env.DIARY_ENCRYPTION_ORIGIN+'/diary/');
+  }
+});

@@ -1,9 +1,9 @@
 import { b64,encode,newKey,signingKey,signed,fingerprint,makeGrant,openRecipientKey,verifyDirectory,validatePublicKey } from './crypto.mjs';
 import { bindingOf,verifyRecord } from './record.mjs';
-import { canRead,publishedScope,draftScope,preferencesScope,trashScope } from './policy.mjs';
+import { canRead,publishedScope,draftScope,preferencesScope,trashScope,scopeDefinition } from './policy.mjs';
 import { createRecoveryEnvelope,openRecoveryEnvelope } from './recovery.mjs';
 
-function scopeDefinitions(households,members) {
+export function scopeDefinitions(households,members,retainedScopes=[]) {
   const rows=new Map();
   const add=row=>rows.set(row.scope,row);
   for(const [household,config] of Object.entries(households)) {
@@ -16,6 +16,7 @@ function scopeDefinitions(households,members) {
     }
     add({household,state:'trash',scope:trashScope(household,[config.owner]),author:'',retainedFor:[config.owner]});
   }
+  for(const row of retainedScopes)if(households[row.household]&&Array.isArray(row.retainedFor)&&row.retainedFor.length)add({household:row.household,state:'trash',scope:trashScope(row.household,row.retainedFor),author:'',retainedFor:[...new Set(row.retainedFor)].sort()});
   return [...rows.values()];
 }
 
@@ -50,7 +51,8 @@ export async function prepareKeyConfiguration({status,recoveryPrivateKey,trusted
   try {
     const candidates=new Map((previous?.members||[]).map(m=>[m.credentialId,m]));
     for(const member of status.members)candidates.set(member.credentialId,member);
-    const definitions=scopeDefinitions(status.households,[...candidates.values()]);
+    const definitions=scopeDefinitions(status.households,[...candidates.values(),...(status.scopeAccounts||[])],status.retainedScopes||[]);
+    for(const scope of Object.keys(previous?.epochs||{}))if(!definitions.some(row=>row.scope===scope))definitions.push(scopeDefinition(scope,status.households));
     if(previous&&(b64(encode(previous.households))!==b64(encode(status.households))||previous.members.some(old=>{
       const live=status.members.find(m=>m.credentialId===old.credentialId);
       return old.scopes.some(scope=>{const row=definitions.find(d=>d.scope===scope);return !row||!canRead({...live,active:true},row);});
@@ -63,7 +65,7 @@ export async function prepareKeyConfiguration({status,recoveryPrivateKey,trusted
       members.push({identityId:candidate.identityId,serviceLinkId:candidate.serviceLinkId,webAuthnCredentialId:candidate.webAuthnCredentialId,accountId:candidate.accountId,credentialId:candidate.credentialId,publicKey:candidate.publicKey,signPublicKey:candidate.signPublicKey,fingerprint:await fingerprint(candidate.publicKey),households:candidate.households,canManageEntries:candidate.canManageEntries,scopes:definitions.filter(row=>canRead(claims,row)).map(row=>row.scope)});
     }
     const generation=(previous?.generation||0)+1;
-    const directoryValue={protocol:'T-lain diary directory',version:1,generation,households:status.households,epochs,members,recoveryPublicKey:status.recoveryPublicKey,recoveryFingerprint:await fingerprint(status.recoveryPublicKey)};
+    const directoryValue={protocol:'T-lain diary directory',version:1,generation,households:status.households,epochs,members,recoveryPublicKey:status.recoveryPublicKey,recoveryFingerprint:await fingerprint(status.recoveryPublicKey),recoveryAuthority:anchor};
     const directory=await signed(directoryValue,authority),grants={},recordGrants={};
     for(const member of members){grants[member.credentialId]=[];recordGrants[member.credentialId]=[];for(const scope of member.scopes){const row=definitions.find(d=>d.scope===scope);grants[member.credentialId].push(await makeGrant(scopeKeys.get(scope),{household:row.household,scope,epoch:epochs[scope]},member,generation,authority));}}
     for(const row of recoveryRecords) {

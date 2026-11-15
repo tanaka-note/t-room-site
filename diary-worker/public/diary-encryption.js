@@ -30,7 +30,7 @@ async function createEncryptedDiary(session,authentication) {
   const expectedAccount=initial.profile.actor.accountId,expectedCredential=initial.profile.webAuthnCredentialId;
   let client,navigation,api,media,cache,deadline=session.expiresAt||null;
   const transport={
-    valid:async()=>{try{const result=await nativeApi('/session');deadline=result.expiresAt||deadline;return result.authenticated&&result.encryption?.enabled&&result.encryption.accountId===expectedAccount&&result.encryption.webAuthnCredentialId===expectedCredential&&result.activeHouseholdId===client.household;}catch(error){if([401,403].includes(error.status))return false;throw error;}},
+    valid:async()=>{try{const result=await nativeApi('/session');deadline=result.expiresAt||deadline;return result.authenticated&&result.encryption?.enabled&&result.encryption.accountId===expectedAccount&&result.encryption.webAuthnCredentialId===expectedCredential&&result.activeHouseholdId===client.household&&result.encryption.generation===initial.rollout.generation;}catch(error){if([401,403].includes(error.status))return false;throw error;}},
     timestamp:async()=>(await request('/time')).timestamp,
     snapshot:(household,since)=>readSnapshotPages(options=>request(`/snapshot?${new URLSearchParams(Object.entries(options).filter(([,value])=>value!==null))}`),household,since,{fetchHead:h=>request(`/head?household=${encodeURIComponent(h)}`)}),
     mutation:(proposal,operation)=>request('/mutation',{method:'POST',body:{proposal,operation}}),

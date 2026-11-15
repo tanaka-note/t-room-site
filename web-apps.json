@@ -187,7 +187,15 @@
         "diary-worker/e2ee/rollout.mjs",
         "diary-worker/e2ee/media.mjs",
         "diary-worker/e2ee/origin.mjs",
-        "diary-worker/e2ee/schema.sql"
+        "diary-worker/e2ee/schema.sql",
+        "diary-worker/e2ee/legacy-fences.sql",
+        "diary-worker/e2ee/backup.mjs",
+        "diary-worker/e2ee/setup.mjs",
+        "diary-worker/e2ee/recovery.mjs",
+        "diary-worker/e2ee/rotation.mjs",
+        "diary-worker/e2ee/rotation-store.mjs",
+        "diary-worker/e2ee/migration.mjs",
+        "diary-worker/e2ee/migration-store.mjs"
       ],
       "buildMode": "content-hash",
       "serviceWorker": "diary-worker/public/service-worker.js",
@@ -348,6 +356,11 @@
         "diary-worker/e2ee/record.mjs",
         "diary-worker/e2ee/policy.mjs",
         "diary-worker/e2ee/recovery.mjs",
+        "diary-worker/e2ee/origin.mjs",
+        "diary-worker/e2ee/maintenance.mjs",
+        "diary-worker/e2ee/migration.mjs",
+        "diary-worker/e2ee/rotation.mjs",
+        "diary-worker/src/entry-domain.js",
         "security-worker/src/diary-keys.js",
         "household-worker/public/household-crypto.mjs"
       ],
@@ -390,6 +403,22 @@
         {
           "source": "diary-worker/e2ee/recovery.mjs",
           "copy": "security-worker/public/diary-crypto/e2ee/recovery.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/maintenance.mjs",
+          "copy": "security-worker/public/diary-crypto/e2ee/maintenance.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/migration.mjs",
+          "copy": "security-worker/public/diary-crypto/e2ee/migration.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/rotation.mjs",
+          "copy": "security-worker/public/diary-crypto/e2ee/rotation.mjs"
+        },
+        {
+          "source": "diary-worker/src/entry-domain.js",
+          "copy": "security-worker/public/diary-crypto/src/entry-domain.js"
         }
       ]
     },

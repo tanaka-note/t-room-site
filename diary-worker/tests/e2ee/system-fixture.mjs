@@ -16,7 +16,7 @@ function database(service) {
   const prepare=(sql,args=[])=>({bind:(...values)=>prepare(sql,values),first:async()=>sqlite.prepare(sql).get(...args)||null,all:async()=>({results:sqlite.prepare(sql).all(...args)}),run:async()=>({meta:sqlite.prepare(sql).run(...args)}),execute:()=>{const statement=sqlite.prepare(sql);return statement.columns().length?{results:statement.all(...args)}:{meta:statement.run(...args)};}});
   return {sqlite,prepare,batch:async statements=>{sqlite.exec('BEGIN');try{const results=statements.map(statement=>statement.execute());sqlite.exec('COMMIT');return results;}catch(error){sqlite.exec('ROLLBACK');throw error;}},close:()=>sqlite.close()};
 }
-export async function systemFixture({recoveryBits=3072,recoveryExtractable=false}={}) {
+export async function systemFixture({recoveryBits=3072,recoveryExtractable=false,phase="encrypted"}={}) {
   const db=database('diary'),central=database('security'),r2=new Map(),wire=[],pending=[];
   const env={DB:db,SESSION_SECRET:randomBytes(32).toString('base64url'),SESSION_VERSION:'3',PASSKEY_ENABLED:'true',DIARY_ENCRYPTION_ENABLED:'true',DIARY_ENCRYPTION_ORIGIN:'http://127.0.0.1:8791',DIARY_ENCRYPTION_LOCAL_TEST:'true'};
   const integration=new SecurityIntegration();integration.env=env;
@@ -43,7 +43,7 @@ export async function systemFixture({recoveryBits=3072,recoveryExtractable=false
   }
   const configuration=await prepareKeyConfiguration({status:{members,households:await integration.encryptionHouseholds(),config:null,recoveryPublicKey},recoveryPrivateKey:recovery.privateKey});
   await handleDiaryKeys('/api/diary/config',new Request('https://fixture.test/security/api/diary/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(configuration)}),centralEnv,{identityId:'primary-admin',credentialId:people[0].credentialId,authenticatedAt:Date.now()/1000},helpers);
-  db.sqlite.exec("UPDATE diary_e2ee_control SET phase='encrypted',generation=1,ever_encrypted=1");
+  db.sqlite.prepare("UPDATE diary_e2ee_control SET phase=?,generation=?,ever_encrypted=?").run(phase,phase==="encrypted"?1:0,phase==="encrypted"?1:0);
   env.MEDIA={put:async(key,body,metadata)=>{r2.set(key,{bytes:new Uint8Array(await new Response(body).arrayBuffer()),metadata});},get:async key=>{const value=r2.get(key);return value?{body:new Blob([value.bytes]).stream()}:null;},delete:async key=>{r2.delete(key);}};
   env.SECURITY={getDiaryKeyBundle:input=>diaryKeyBundle(centralEnv,input),validatePasskeySession:async input=>({valid:users[input.serviceAccountId]?.active===true}),passkeyRollingSession:async input=>({valid:users[input.serviceAccountId]?.active!==false,expiresAt:Math.floor(Date.now()/1000)+43200}),recordAuditEvent:async()=>({stored:true}),redeemHandoff:async token=>{const user=users[token];return user?{identityId:user.identityId,credentialId:user.credentialId,serviceLinkId:user.serviceLinkId,serviceAccountId:user.serviceAccountId,sessionEpoch:1}:null;}};
   function cookie(accountId='main-admin',user=users[accountId]) {

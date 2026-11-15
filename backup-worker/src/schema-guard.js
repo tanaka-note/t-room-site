@@ -32,7 +32,17 @@ export async function assertSchema(service, rows) {
   const schema=rows.filter(r=>r.tbl_name!=='d1_migrations').map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
   if(!reviewedSchemaMatches(service, EXPECTED[service], await digest(new TextEncoder().encode(JSON.stringify(schema))))) throw new Error('SchemaReviewRequired');
 }
+// These fragments are pinned to the candidate SQL, including all old-writer
+// fences. Removing an expected trigger or adding an unknown table still fails.
+const ENCRYPTED_FRAGMENTS={diary:'b88abcb0f914d117773bc636593e42cc4c6d26a4f0665d3eb664091d8de0faa7',security:'fba11d54f4e7ffbabff26541b688517007da622dbf4c3c75fed5c05b6802247e'};
+export async function assertEncryptedSchema(service,rows) {
+  const encrypted=row=>service==='diary'?(row.name.startsWith('diary_e2ee_')||row.name.startsWith('diary_plaintext_')):service==='security'&&row.name.startsWith('security_diary_key_');
+  const fragment=rows.filter(encrypted).map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
+  if(!ENCRYPTED_FRAGMENTS[service]||await digest(new TextEncoder().encode(JSON.stringify(fragment)))!==ENCRYPTED_FRAGMENTS[service])throw new Error('SchemaReviewRequired');
+  await assertSchema(service,rows.filter(row=>!encrypted(row)));
+}
 export async function assertArchiveSchema(service,migration,rows) {
+  if(service==='diary'&&(migration==='diary-e2ee-v1'||migration==='0022_photo_backup_identity.sql'&&rows.some(row=>row.name==='diary_e2ee_control'))||service==='security'&&migration==='security-diary-keys-v1')return assertEncryptedSchema(service,rows);
   if(service==='household'&&migration==='0006_independent_households.sql') {
     const schema=rows.filter(r=>r.tbl_name!=='d1_migrations').map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
     if(await digest(new TextEncoder().encode(JSON.stringify(schema)))!=='87c3caeb5b1bd4363759e93de4fe377f03064dc96e226fc531546a16146a2ede')throw new Error('SchemaReviewRequired');

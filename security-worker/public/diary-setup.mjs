@@ -46,3 +46,23 @@ export function downloadDiaryTrust(value) {
   const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:'application/json'}));
   const link=document.createElement('a');link.href=url;link.download='diary-public-trust.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
+
+export async function finishDiaryData(file) {
+  if(!file||file.size>100_000_000)throw new Error('復元確認ファイルを確認してください。');
+  const report=JSON.parse(await file.text()),auth=await TRoomPasskeys.authenticate('security');let plans;
+  try {
+    const trust=JSON.parse(localStorage.getItem(PIN)||'null');await validatePublicTrust(trust);
+    const status=await api('/admin');
+    const privateKey=await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput,status.adminEnvelope);
+    const own=await api('/maintenance/signing-vault',{});
+    const {unlockVault}=await import('/security/diary-crypto/e2ee/crypto.mjs');
+    const vault=await unlockVault(auth.prfOutput,own.recipientId,own.vault);
+    const maintenance=await import('/security/diary-crypto/e2ee/maintenance.mjs');plans=await maintenance.openMaintenancePlans();
+    const {build}=await api('/maintenance/build');
+    return await maintenance.finishDiaryMaintenance({api,recoveryPrivateKey:privateKey,signingKey:vault.sign,trust,plans,report,readerBuild:build,writerBuild:build});
+  }finally{plans?.close();auth.prfOutput?.fill(0);}
+}
+
+export async function currentDiaryTrust() {
+  return validatePublicTrust(JSON.parse(localStorage.getItem(PIN)||'null'));
+}

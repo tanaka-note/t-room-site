@@ -14,6 +14,16 @@ export async function proxyDiaryAuthentication(request,env) {
   if(env.DIARY_ENCRYPTION_ENABLED!=='true')return null;
   assertDiaryEncryptionOrigin(env,url);
   const api=['options','verify','handoff','cancelled'].map(name=>`/security/api/auth/${name}`);
-  if(url.pathname==='/security/passkey-client.js'&&['GET','HEAD'].includes(request.method)||api.includes(url.pathname)&&request.method==='POST')return env.SECURITY.fetch(request);
+  if(url.pathname==='/security/passkey-client.js'&&['GET','HEAD'].includes(request.method))return env.SECURITY.fetch(request);
+  if(api.includes(url.pathname)&&request.method==='POST') {
+    if(request.headers.get('Origin')!==url.origin||!String(request.headers.get('Content-Type')||'').startsWith('application/json'))return new Response('Invalid request',{status:403});
+    const chunks=[],reader=request.body?.getReader();let length=0;
+    if(!reader)return new Response('Invalid request',{status:400});
+    while(true){const {done,value}=await reader.read();if(done)break;length+=value.length;if(length>100000){void reader.cancel();return new Response('Request too large',{status:413});}chunks.push(value);}
+    const bytes=new Uint8Array(length);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}
+    let body;try{body=JSON.parse(new TextDecoder().decode(bytes));}catch{return new Response('Invalid request',{status:400});}
+    if(body?.service!=='diary')return new Response('Service denied',{status:403});
+    return env.SECURITY.fetch(new Request(request,{body:bytes}));
+  }
   return new Response('Not found',{status:404,headers:{'Cache-Control':'no-store'}});
 }

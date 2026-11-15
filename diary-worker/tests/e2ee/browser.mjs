@@ -219,6 +219,14 @@ try {
     const snapshot = await window.encryptedClient.transport.snapshot("A", -1);
     await cache.put("A", snapshot);
     const value = await cache.get("A");
+    await cache.remove("A");
+    if (await cache.get("A") !== undefined || await cache.checkpoint("A") !== snapshot.sequence) throw new Error("CheckpointLost");
+    let rollback = false;
+    if (snapshot.sequence > 0) {
+      try { await cache.put("A", {...snapshot,sequence:snapshot.sequence-1}); }
+      catch (error) { rollback = error.message === "CacheRollbackRejected"; }
+      if (!rollback) throw new Error("CacheRollbackAccepted");
+    }
     let rejected = false;
     try {
       await cache.put("bad", {
@@ -231,6 +239,13 @@ try {
       rejected = true;
     }
     cache.close();
+    const oldRequest=indexedDB.open('synthetic-upgrade',1);
+    oldRequest.onupgradeneeded=()=>oldRequest.result.createObjectStore('snapshots');
+    const old=await new Promise((resolve,reject)=>{oldRequest.onsuccess=()=>resolve(oldRequest.result);oldRequest.onerror=reject;});
+    await new Promise((resolve,reject)=>{const tx=old.transaction('snapshots','readwrite');tx.objectStore('snapshots').put(snapshot,'account/credential/A/1');tx.oncomplete=resolve;tx.onerror=reject;});old.close();
+    const upgraded=await openCipherCache('synthetic-upgrade');await upgraded.remove('account/credential/A/1');upgraded.close();
+    const reopened=await openCipherCache('synthetic-upgrade');
+    if(await reopened.checkpoint('account/credential/A')!==snapshot.sequence)throw new Error('UpgradeCheckpointLost');reopened.close();
     return { serialized: JSON.stringify(value), rejected };
   });
   assert.equal(cache.rejected, true);

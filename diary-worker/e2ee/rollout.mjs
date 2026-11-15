@@ -1,3 +1,4 @@
+import { verifyLegacyCoverage,requireFrozenMigration } from './migration-store.mjs';
 import { b64, encode, verifySigned } from './crypto.mjs';
 
 export const READ_FORMATS = Object.freeze([1,2]);
@@ -7,7 +8,7 @@ const digest = value => typeof value==='string' && /^[\w-]{43}$/.test(value);
 
 export async function readRollout(db) {
   const row=await db.prepare('SELECT phase,generation,ever_encrypted,evidence FROM diary_e2ee_control WHERE id=1').first();
-  if(!row||!Number.isSafeInteger(row.generation)||row.generation<0||![0,1].includes(row.ever_encrypted)||!['legacy','migrating','encrypted','paused','restoring'].includes(row.phase))fail('RolloutUnavailable',503);
+  if(!row||!Number.isSafeInteger(row.generation)||row.generation<0||![0,1].includes(row.ever_encrypted)||!['legacy','migrating','encrypted','paused','restoring','rekeying','purging'].includes(row.phase))fail('RolloutUnavailable',503);
   return {phase:row.phase,generation:row.generation,everEncrypted:Boolean(row.ever_encrypted),evidence:row.evidence?JSON.parse(row.evidence):null};
 }
 
@@ -27,9 +28,13 @@ function requireOperator(actor) {
 // The trusted device signs evidence ONLY after source comparison and a real
 // decrypt/restore drill. A caller-supplied boolean cannot enable the cutover.
 async function verifyCutover(db,packet,directory,actor) {
+  const rotation=await db.prepare('SELECT status,configuration FROM diary_e2ee_rotation WHERE id=1').first();
+  if(rotation && (rotation.status!=='committed' || JSON.parse(rotation.configuration).directory.value.generation>directory?.generation))fail('RotationNotReady');
   const member=directory?.members.find(m=>m.credentialId===actor.credentialId&&m.accountId===actor.accountId&&m.canManageEntries);
   if(!member)fail('AccessDenied',403);
   const proof=await verifySigned(packet,member.signPublicKey);
+  const control=await readRollout(db);
+  if(control.phase==='migrating' && await db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name='diary_entries'").first()){await requireFrozenMigration(db);await verifyLegacyCoverage(db);}
   const [{results:counts},{results:sequences}]=await db.batch([
     db.prepare('SELECT COUNT(*) records FROM diary_e2ee_records'),
     db.prepare('SELECT COALESCE(MAX(seq),0) sequence FROM diary_e2ee_changes')
@@ -43,9 +48,21 @@ export async function transitionRollout(db,{actor,expectedGeneration,next,eviden
   const current=await readRollout(db);
   if(current.generation!==expectedGeneration)fail('RolloutConflict');
   const allowed={legacy:['migrating'],migrating:['legacy','paused','encrypted'],encrypted:['paused'],paused:current.everEncrypted?['encrypted']:['legacy','migrating'],restoring:['paused']};
-  if(!allowed[current.phase].includes(next))fail('InvalidRolloutTransition');
+  if(!allowed[current.phase]?.includes(next))fail('InvalidRolloutTransition');
   let proof=current.evidence;
   if(next==='encrypted')proof=await verifyCutover(db,evidence,directory,actor);
+  if(next==='encrypted'&&current.phase==='migrating'&&await db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name='diary_entries'").first()) {
+    // Final source coverage was checked above. The write fence, plaintext D1
+    // cleanup and ciphertext cutover form ONE transaction. R2 bytes and old
+    // backup/Time Travel generations are never deleted by this operation.
+    await db.batch([
+      db.prepare("UPDATE diary_e2ee_control SET phase=CASE WHEN phase='migrating' AND generation=? AND (SELECT COUNT(*) FROM diary_e2ee_records)=? AND (SELECT COALESCE(MAX(seq),0) FROM diary_e2ee_changes)=? THEN 'purging' ELSE 'invalid-cutover' END,generation=generation+1,ever_encrypted=1,evidence=? WHERE id=1")
+        .bind(expectedGeneration,proof.records,proof.sequence,JSON.stringify(proof)),
+      ...['diary_staged_photos','diary_photo_upload_sessions','diary_favorites','diary_tags','diary_trash_scopes','diary_photos','diary_entries'].map(table=>db.prepare(`DELETE FROM ${table}`)),
+      db.prepare("UPDATE diary_e2ee_control SET phase='encrypted' WHERE id=1 AND phase='purging'")
+    ]);
+    return readRollout(db);
+  }
   const result=await db.prepare(`UPDATE diary_e2ee_control SET phase=?,generation=generation+1,ever_encrypted=CASE WHEN ?='encrypted' THEN 1 ELSE ever_encrypted END,evidence=? WHERE id=1 AND generation=? AND phase=? ${next==='encrypted'?'AND (SELECT COUNT(*) FROM diary_e2ee_records)=? AND (SELECT COALESCE(MAX(seq),0) FROM diary_e2ee_changes)=?':''}`)
     .bind(next,next,proof?JSON.stringify(proof):null,expectedGeneration,current.phase,...(next==='encrypted'?[proof.records,proof.sequence]:[])).run();
   if(result.meta.changes!==1)fail('RolloutConflict');

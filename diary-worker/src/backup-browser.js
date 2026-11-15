@@ -1,14 +1,14 @@
 // Metadata only. This integration never reads backup bodies or writes to R2/D1.
-const CACHE_KEY = "https://diary-backup.internal/browser-summary-v5";
+const CACHE_KEY = "https://diary-backup.internal/browser-summary-v6";
 const CACHE_SECONDS = 6 * 60 * 60;
 const PREFIXES = { daily: "v8/daily/", monthly: "v8/monthly/", legacyV7Daily: "v7/daily/", legacyV7Monthly: "v7/monthly/", legacyDaily: "daily/", legacyMonthly: "monthly/" };
-Object.assign(PREFIXES, { exportDaily: 'v9/daily/', exportMonthly: 'v9/monthly/', exportData: 'v9/data/' });
+Object.assign(PREFIXES, { exportDaily: 'v9/daily/', exportMonthly: 'v9/monthly/', exportData: 'v9/data/',encryptedDaily:'v10/daily/',encryptedMonthly:'v10/monthly/',encryptedData:'v10/data/',encryptedCheckpoints:'v10/checkpoints/' });
 
 export async function scanBackupMetadata(bucket, now = Date.now()) {
   if (!bucket) throw new Error("Backup storage unavailable");
   const groups = {};
   for (const [kind, prefix] of Object.entries(PREFIXES)) {
-    const group = { available: true, bytes: 0, objectCount: 0, lastUpdatedAt: null, ...(kind === 'exportData' ? {} : { objects: [] }) };
+    const group = { available: true, bytes: 0, objectCount: 0, lastUpdatedAt: null, ...(kind.endsWith('Data') ? {} : { objects: [] }) };
     try {
       let cursor;
       do {
@@ -41,10 +41,10 @@ export async function scanBackupMetadata(bucket, now = Date.now()) {
   const merge = (a,b) => ({ available: a.available && b.available, bytes: a.bytes + b.bytes, objectCount: a.objectCount + b.objectCount,
     lastUpdatedAt: [a.lastUpdatedAt,b.lastUpdatedAt].filter(Boolean).sort().at(-1) || null,
     objects: [...a.objects,...b.objects].sort((x,y) => y.name.localeCompare(x.name)) });
-  const daily = merge(groups.exportDaily,groups.daily), monthly = merge(groups.exportMonthly,groups.monthly);
+  const daily = merge(groups.encryptedDaily,merge(groups.exportDaily,groups.daily)), monthly = merge(groups.encryptedMonthly,merge(groups.exportMonthly,groups.monthly));
   const latest = daily.objects.filter(o => /^\d{4}-\d{2}-\d{2}\.json\.gz$/.test(o.name))[0] || null;
-  return { ...groups, daily, monthly, d1Bytes: daily.bytes + monthly.bytes + groups.exportData.bytes,
-    d1Available: daily.available && monthly.available && groups.exportData.available, storagePartial: Object.values(groups).some(g => !g.available),
+  return { ...groups, daily, monthly, d1Bytes: daily.bytes + monthly.bytes + groups.exportData.bytes + groups.encryptedData.bytes + groups.encryptedCheckpoints.bytes,
+    d1Available: daily.available && monthly.available && groups.exportData.available && groups.encryptedData.available && groups.encryptedCheckpoints.available, storagePartial: Object.values(groups).some(g => !g.available),
     backupBytes: Object.values(groups).reduce((sum, g) => sum + g.bytes, 0),
     backupObjectCount: Object.values(groups).reduce((sum, g) => sum + g.objectCount, 0),
     lastBackupAt: latest?.updatedAt || null, latestBackup: latest?.name || null,

@@ -23,3 +23,26 @@ test('fresh session validates ciphertext cache and syncs from its checkpoint wit
     second.lock();await second.unlock(new Uint8Array(prepared.secrets.ownerA.prf));await assert.rejects(second.sync(),/RollbackDetected/);
   }finally{f.close();}
 });
+
+test('a separate durable checkpoint rejects replay after ciphertext eviction and session restart',async()=>{
+  const f=await fixture(prepared);
+  try {
+    const source=await f.client('ownerA');await source.saveEntry(entry());
+    const cache={get:async()=>undefined,checkpoint:async()=>10000,put:async()=>{}};
+    const client=new EncryptedDiaryClient({transport:source.transport,profile:source.profile,anchor:prepared.anchor,cache});
+    await client.unlock(new Uint8Array(prepared.secrets.ownerA.prf));
+    await assert.rejects(client.sync(),/RollbackDetected/);
+    assert.equal(client.records.size,0);client.lock();source.lock();
+  }finally{f.close();}
+});
+
+test('a full snapshot cannot silently omit known records at the same sequence',async()=>{
+  const f=await fixture(prepared);try {
+    const c=await f.client('ownerA');await c.saveEntry(entry());
+    const snapshot=await c.transport.snapshot(c.household,-1),before=c.records;
+    c.transport.snapshot=async()=>({...snapshot,records:[]});
+    await assert.rejects(c.sync(),/RecordEquivocation/);assert.equal(c.records,before);
+    c.transport.snapshot=async()=>snapshot;c.cache={get:async()=>null,put:async()=>{throw new Error('CacheRollbackRejected');}};
+    await assert.rejects(c.sync(),/RollbackDetected/);assert.equal(c.records,before);c.lock();
+  }finally{f.close();}
+});

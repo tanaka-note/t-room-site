@@ -2,7 +2,7 @@
 -- No dates, titles, tags, text, names, MIME types or original filenames.
 CREATE TABLE diary_e2ee_control (
  id INTEGER PRIMARY KEY CHECK(id=1),
- phase TEXT NOT NULL CHECK(phase IN ('legacy','migrating','encrypted','paused','restoring')),
+ phase TEXT NOT NULL CHECK(phase IN ('legacy','migrating','encrypted','paused','restoring','rekeying','purging')),
  generation INTEGER NOT NULL CHECK(generation>=0),
  ever_encrypted INTEGER NOT NULL CHECK(ever_encrypted IN (0,1)),
  evidence TEXT CHECK(evidence IS NULL OR json_valid(evidence))
@@ -65,7 +65,7 @@ CREATE TRIGGER diary_e2ee_write_insert BEFORE INSERT ON diary_e2ee_records
  WHEN COALESCE((SELECT phase FROM diary_e2ee_control WHERE id=1),'paused') NOT IN ('encrypted','migrating','restoring')
  BEGIN SELECT RAISE(ABORT,'DiaryWritesPaused'); END;
 CREATE TRIGGER diary_e2ee_write_update BEFORE UPDATE ON diary_e2ee_records
- WHEN COALESCE((SELECT phase FROM diary_e2ee_control WHERE id=1),'paused')!='encrypted'
+ WHEN COALESCE((SELECT phase FROM diary_e2ee_control WHERE id=1),'paused') NOT IN ('encrypted','rekeying')
  BEGIN SELECT RAISE(ABORT,'DiaryWritesPaused'); END;
 CREATE TRIGGER diary_e2ee_write_delete BEFORE DELETE ON diary_e2ee_records
  WHEN COALESCE((SELECT phase FROM diary_e2ee_control WHERE id=1),'paused')!='encrypted'
@@ -76,8 +76,20 @@ CREATE TRIGGER diary_e2ee_no_plaintext_downgrade BEFORE UPDATE ON diary_e2ee_con
 CREATE TRIGGER diary_e2ee_control_required BEFORE DELETE ON diary_e2ee_control
  BEGIN SELECT RAISE(ABORT,'RolloutControlRequired'); END;
 CREATE TRIGGER diary_e2ee_media_insert_fence BEFORE INSERT ON diary_e2ee_media WHEN NOT COALESCE((SELECT phase FROM diary_e2ee_control WHERE id=1) IN ('encrypted','migrating','restoring'),0) BEGIN SELECT RAISE(ABORT,'DiaryWritesPaused'); END;
-CREATE TRIGGER diary_e2ee_media_update_fence BEFORE UPDATE ON diary_e2ee_media WHEN NOT COALESCE((SELECT phase FROM diary_e2ee_control WHERE id=1) ='encrypted',0) BEGIN SELECT RAISE(ABORT,'DiaryWritesPaused'); END;
+CREATE TRIGGER diary_e2ee_media_update_fence BEFORE UPDATE ON diary_e2ee_media WHEN NOT COALESCE((SELECT phase FROM diary_e2ee_control WHERE id=1) IN ('encrypted','rekeying'),0) BEGIN SELECT RAISE(ABORT,'DiaryWritesPaused'); END;
 CREATE TRIGGER diary_e2ee_media_delete_fence BEFORE DELETE ON diary_e2ee_media WHEN NOT COALESCE((SELECT phase FROM diary_e2ee_control WHERE id=1) ='encrypted',0) BEGIN SELECT RAISE(ABORT,'DiaryWritesPaused'); END;
 CREATE TRIGGER diary_e2ee_uploads_insert_fence BEFORE INSERT ON diary_e2ee_uploads WHEN NOT COALESCE((SELECT phase FROM diary_e2ee_control WHERE id=1) IN ('encrypted','migrating','restoring'),0) BEGIN SELECT RAISE(ABORT,'DiaryWritesPaused'); END;
 CREATE TRIGGER diary_e2ee_uploads_update_fence BEFORE UPDATE ON diary_e2ee_uploads WHEN NOT COALESCE((SELECT phase FROM diary_e2ee_control WHERE id=1) ='encrypted',0) BEGIN SELECT RAISE(ABORT,'DiaryWritesPaused'); END;
 CREATE TRIGGER diary_e2ee_uploads_delete_fence BEFORE DELETE ON diary_e2ee_uploads WHEN NOT COALESCE((SELECT phase FROM diary_e2ee_control WHERE id=1) ='encrypted',0) BEGIN SELECT RAISE(ABORT,'DiaryWritesPaused'); END;
+
+-- Paused, signed rekey staging contains ciphertext only. No R2 byte rewrite.
+CREATE TABLE diary_e2ee_rotation (
+ id INTEGER PRIMARY KEY CHECK(id=1), manifest TEXT NOT NULL CHECK(json_valid(manifest)),
+ configuration TEXT NOT NULL CHECK(json_valid(configuration)),
+ status TEXT NOT NULL CHECK(status IN ('staging','committed')),
+ control_generation INTEGER NOT NULL CHECK(control_generation>=0), sequence INTEGER NOT NULL CHECK(sequence>=0)
+);
+CREATE TABLE diary_e2ee_rotation_items (
+ kind TEXT NOT NULL CHECK(kind IN ('records','media')), id TEXT NOT NULL,
+ payload TEXT NOT NULL CHECK(json_valid(payload)), previous_digest TEXT NOT NULL, PRIMARY KEY(kind,id)
+);

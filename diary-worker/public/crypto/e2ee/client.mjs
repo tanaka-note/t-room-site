@@ -105,13 +105,23 @@ export class EncryptedDiaryClient {
   async sync() {
     await this.check();
     const generation = this.generation;
-    let cached=null;
-    const cacheKey=[this.actor.accountId,this.actor.credentialId,this.household,this.directory.generation].join('/');
+    let cached=null, checkpoint=0;
+    const checkpointKey=[this.actor.accountId,this.actor.credentialId,this.household].join('/');
+    const cacheKey=checkpointKey+'/'+this.directory.generation;
     if(this.sequence===undefined&&this.cache){try{cached=await this.cache.get(cacheKey);}catch{cached=null;}if(cached){validateSnapshot(cached);if(cached.delta||cached.unchanged||cached.household!==this.household)throw new Error('InvalidCache');}}
+    if (this.cache?.checkpoint) {
+      try { checkpoint = await this.cache.checkpoint(checkpointKey) ?? 0; } catch { checkpoint = 0; }
+      if (!Number.isSafeInteger(checkpoint) || checkpoint < 0) throw new Error('InvalidCache');
+    }
     const since=this.sequence??cached?.sequence??-1;
     let snapshot=await this.transport.snapshot(this.household,since);
+    if(generation!==this.generation||this.closed)throw new Error("SessionChanged");
     validateSnapshot(snapshot);
-    if(snapshot.sequence<this.minimumSequence||snapshot.sequence<since)throw new Error('RollbackDetected');
+    if(snapshot.sequence<Math.max(this.minimumSequence,checkpoint)||snapshot.sequence<since)throw new Error('RollbackDetected');
+    if(since>=0&&snapshot.sequence===since&&!snapshot.delta&&!snapshot.unchanged) {
+      const known=cached?.records||[...this.records.values()].map(value=>value.row);
+      if(known.length!==snapshot.records.length||known.some(row=>!snapshot.records.some(next=>next.id===row.id&&equal(row,next))))throw new Error('RecordEquivocation');
+    }
     if(cached){
       const rows=new Map(cached.records.map(row=>[row.id,row]));
       if(snapshot.delta&&snapshot.baseSequence!==since)throw new Error('InvalidSnapshot');
@@ -195,6 +205,8 @@ export class EncryptedDiaryClient {
     if (generation !== this.generation) throw new Error("SessionChanged");
     if (snapshot.sequence < (this.sequence ?? -1))
       throw new Error("RollbackDetected");
+    if(this.cache){const value={version:1,household:this.household,sequence:snapshot.sequence,baseSequence:-1,delta:false,unchanged:false,removed:[],records:[...records.values()].map(r=>r.row)};try{await this.cache.put(cacheKey,value,checkpointKey);}catch(error){if(error.message==='CacheRollbackRejected')throw new Error('RollbackDetected');/* Storage availability cannot turn a durable save into a failed save. */}}
+    if(generation!==this.generation||this.closed)throw new Error('SessionChanged');
     for (const [id, previous] of this.records)
       if (!records.has(id))
         this.revisionFloor.set(id, previous.row.revision + 1);
@@ -202,7 +214,6 @@ export class EncryptedDiaryClient {
       this.revisionFloor.set(id, current.row.revision);
     this.records = records;
     this.sequence = snapshot.sequence;
-    if(this.cache){const value={version:1,household:this.household,sequence:this.sequence,baseSequence:-1,delta:false,unchanged:false,removed:[],records:[...records.values()].map(r=>r.row)};try{await this.cache.put(cacheKey,value);}catch{/* Cache failure cannot turn a durable save into a failed save. */}}
     if(generation!==this.generation||this.closed)throw new Error("SessionChanged");
     return this.records;
   }

@@ -2,7 +2,7 @@ import { SERVICES } from './registry.js';
 import { listObjects } from './backup.js';
 import { runState } from './monitor.js';
 
-const CACHE_KEY = 'https://backups.internal/storage-v3';
+const CACHE_KEY = 'https://backups.internal/storage-v4';
 export async function serviceStatus(env, service) {
   const result = await env.SECURITY_DB.prepare(`SELECT event_id, occurred_at, event_type, details_json
     FROM security_audit_events WHERE target_type = 'backup' AND target_id = ?
@@ -35,14 +35,14 @@ export async function storageSnapshot(env, refresh = false, cache = globalThis.c
   const services = [];
   for (const [id, spec] of Object.entries(SERVICES)) {
     try {
-      const [v3Daily, v3Monthly, v2Daily, v2Monthly, legacyDaily, legacyMonthly, storedDataBytes] = await Promise.all([
+      const [v3Daily, v3Monthly, v2Daily, v2Monthly, legacyDaily, legacyMonthly, storedDataBytes,v4Daily,v4Monthly,v4Bytes] = await Promise.all([
         listObjects(env.BACKUP, `d1/${id}/v3/daily/`), listObjects(env.BACKUP, `d1/${id}/v3/monthly/`),
         listObjects(env.BACKUP, `d1/${id}/v2/daily/`), listObjects(env.BACKUP, `d1/${id}/v2/monthly/`),
-        listObjects(env.BACKUP, `d1/${id}/daily/`), listObjects(env.BACKUP, `d1/${id}/monthly/`), dataBytes(env.BACKUP, `d1/${id}/v3/data/`)]);
-      const daily = [...v3Daily,...v2Daily], monthly = [...v3Monthly,...v2Monthly];
+        listObjects(env.BACKUP, `d1/${id}/daily/`), listObjects(env.BACKUP, `d1/${id}/monthly/`), dataBytes(env.BACKUP, `d1/${id}/v3/data/`),id==='security'?listObjects(env.BACKUP,'d1/security/v4/daily/'):[],id==='security'?listObjects(env.BACKUP,'d1/security/v4/monthly/'):[],id==='security'?dataBytes(env.BACKUP,'d1/security/v4/data/'):0]);
+      const daily = [...v4Daily,...v3Daily,...v2Daily], monthly = [...v4Monthly,...v3Monthly,...v2Monthly];
       services.push({ id, label: spec.label, storageAvailable: true,
         legacy: [...legacyDaily,...legacyMonthly].map(metadata),
-        bytes: storedDataBytes + [...daily, ...monthly, ...legacyDaily, ...legacyMonthly].reduce((n, o) => n + o.size, 0),
+        bytes: storedDataBytes + v4Bytes + [...daily, ...monthly, ...legacyDaily, ...legacyMonthly].reduce((n, o) => n + o.size, 0),
         daily: daily.map(metadata).sort((a, b) => b.name.localeCompare(a.name)),
         monthly: monthly.map(metadata).sort((a, b) => b.name.localeCompare(a.name)) });
     } catch { services.push({ id, label: spec.label, storageAvailable: false }); }

@@ -1,4 +1,6 @@
-import { proxyDiaryAuthentication } from "../e2ee/origin.mjs";
+import { migrationInventory,importMigration } from '../e2ee/migration-store.mjs';
+import { rotationStatus,rotationInventory,beginRotation,stageRotation,commitRotation,maintenanceInventory } from '../e2ee/rotation-store.mjs';
+import { proxyDiaryAuthentication,diaryEncryptionOrigin } from "../e2ee/origin.mjs";
 import { drainEncryptedMedia } from "../e2ee/media.mjs";
 import { parseRecord } from "../e2ee/store.mjs";
 import { encryptionEnabled,encryptionStatus,handleEncryptedApi } from "../e2ee/http.mjs";
@@ -88,8 +90,52 @@ export class SecurityIntegration extends WorkerEntrypoint {
     if(typeof after!=="string"||after.length>160||!Number.isInteger(limit)||limit<1||limit>20)throw new Error("InvalidPage");
     const result=await this.env.DB.prepare("SELECT * FROM diary_e2ee_records WHERE key_box!='{}' AND id>? ORDER BY id LIMIT ?").bind(after,limit+1).all();const rows=result.results.slice(0,limit);return {records:rows.map(parseRecord),nextCursor:result.results.length>limit?rows.at(-1).id:null};
   }
+  async encryptionMaintenanceInventory(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return maintenanceInventory(this.env.DB,input); }
+  async createEncryptionCheckpoint({directoryGeneration}) {
+    if(!encryptionEnabled(this.env))throw new Error('EncryptionDisabled');
+    const control=await readRollout(this.env.DB);
+    if(!['migrating','paused'].includes(control.phase)||!Number.isSafeInteger(directoryGeneration)||directoryGeneration<1)throw new Error('MaintenanceRequiresPausedDatabase');
+    const {sequence}=await this.env.DB.prepare('SELECT COALESCE(MAX(seq),0) sequence FROM diary_e2ee_changes').first();
+    const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify({protocol:'T-lain diary restore checkpoint',generation:control.generation,sequence,directoryGeneration}))));
+    bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
+    const hex=[...bytes.slice(0,16)].map(b=>b.toString(16).padStart(2,'0')).join('');
+    const checkpoint=`${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`,id='diary-checkpoint-'+checkpoint;
+    try{await this.env.D1_BACKUPS.create({id,params:{service:'diary',scheduledTime:Date.now(),checkpoint}});}
+    catch{const instance=await this.env.D1_BACKUPS.get(id);const {status}=await instance.status();if(!['queued','running','waiting','paused','complete'].includes(status))throw new Error('DiaryCheckpointFailed');}
+    return {checkpoint,instanceId:id,key:`v10/checkpoints/${checkpoint}.json.gz`};
+  }
+  async encryptionBuild() {
+    if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");
+    const html=await (await this.env.ASSETS.fetch(new Request('https://assets.internal/index.html'))).text();
+    const build=html.match(/<meta name="troom-app-build" content="(diary-[a-f0-9]{12})"/)?.[1];
+    if(!build)throw new Error('EncryptionBuildUnavailable');return {build,formats:[1,2]};
+  }
+  async encryptionMigrationInventory(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return migrationInventory(this.env.DB,input); }
+  async importEncryptionMigration(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return importMigration(this.env.DB,input); }
+  async encryptionRotationStatus() { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return rotationStatus(this.env.DB); }
+  async encryptionRotationInventory(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return rotationInventory(this.env.DB,input); }
+  async beginEncryptionRotation(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return beginRotation(this.env.DB,input); }
+  async stageEncryptionRotation(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return stageRotation(this.env.DB,input); }
+  async commitEncryptionRotation(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return commitRotation(this.env.DB,input); }
   async encryptionRollout() { if(!encryptionEnabled(this.env))return {enabled:false};return readRollout(this.env.DB); }
   async transitionEncryption(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return transitionRollout(this.env.DB,input); }
+  async encryptionRetainedScopes() {
+    const rows=(await this.env.DB.prepare('SELECT household_id, json_group_array(DISTINCT owner_account_id) retained_for FROM diary_trash_scopes GROUP BY household_id,entry_id').all()).results;
+    return rows.map(row=>({household:row.household_id,retainedFor:JSON.parse(row.retained_for)}));
+  }
+  async encryptionScopeAccounts() {
+    // Scope definitions preserve old personal data even if its author is no
+    // longer an active login. These rows never become credential recipients.
+    const rows=(await this.env.DB.prepare(`SELECT id account_id,household_id FROM diary_accounts
+      UNION SELECT author_id,household_id FROM diary_entries
+      UNION SELECT p.created_by_id,e.household_id FROM diary_photos p JOIN diary_entries e ON e.id=p.entry_id
+      UNION SELECT f.account_id,e.household_id FROM diary_favorites f JOIN diary_entries e ON e.id=f.entry_id
+      UNION SELECT owner_account_id,household_id FROM diary_trash_scopes`).all()).results;
+    const groups=new Map();
+    for(const row of rows){if(!row.account_id)continue;if(!groups.has(row.account_id))groups.set(row.account_id,new Set());groups.get(row.account_id).add(row.household_id);}
+    for(const account of DIARY_ACCOUNTS){if(!groups.has(account.id))groups.set(account.id,new Set());groups.get(account.id).add(account.householdId);}
+    return [...groups].map(([accountId,households])=>({accountId,households:[...households]}));
+  }
   async encryptionHouseholds() {
     return {[TANAKA_HOUSEHOLD_ID]:{owner:MAIN_ADMIN_ACCOUNT_ID,independent:false},[CHIHARU_HOUSEHOLD_ID]:{owner:CHIHARU_ADMIN_ACCOUNT_ID,independent:true}};
   }
@@ -130,6 +176,15 @@ export default {
     let timing;
     try {
       const url = new URL(request.url);
+      if(encryptionEnabled(env)&&env.DIARY_ENCRYPTION_ORIGIN&&url.origin!==diaryEncryptionOrigin(env)&&request.method==='GET'&&url.pathname.startsWith('/diary')&&!url.pathname.startsWith('/diary/api/')&&String(request.headers.get('Accept')||'').includes('text/html')) {
+        const control=await readRollout(env.DB);
+        if(control.everEncrypted) {
+          // Legacy search/tag URLs can contain plaintext. Do not copy them to
+          // the dedicated origin or forward POST bodies across that boundary.
+          const path=url.pathname.startsWith('/diary/tag/')?'/diary/':url.pathname;
+          return secureResponse(Response.redirect(new URL(path,diaryEncryptionOrigin(env)),308));
+        }
+      }
       const authentication=await proxyDiaryAuthentication(request,env);if(authentication)return secureResponse(authentication);
       if(url.pathname==="/assets/pwa-auto-update.js"&&encryptionEnabled(env))return env.ASSETS.fetch(new Request(new URL("/origin-assets/pwa-auto-update.js",url),request));
       if (url.pathname === `${BASE_PATH}.html`) {

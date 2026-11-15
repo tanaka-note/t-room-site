@@ -132,3 +132,12 @@ Security/Cloud/Healthは組み合わせる世代を照合し、最新の失効�
 `tools/restore-isolated.mjs`は新manifest/partと旧形式に対応し、Node専用で必ず自ら作る`:memory:`へ復元する。新形式はpartごとにSHA・列・件数を検証し、INSERT RETURNINGで各cellの保存値を照合する。payload内のschema SQLは実行せず、信頼済みmigrationだけを適用する。復元時の在庫trigger二重加算等を避けるため隔離DB内だけでmigration由来triggerを一時停止し再作成する。全列・行数照合後、Identity/credential/link/招待/各accountは隔離無効化し、処理中AI requestは再実行不可とする。鍵暗号文と料金予約は保存して手動照合に使う。本番切替用の復元器ではない。
 
 `pnpm test`は実migrationを用いた全11サービスの取得・隔離SQLite復元・内容照合・integrity/foreign_key_check、読戻し不一致、保存失敗、schema drift、保持、監査配送失敗、cacheと状態の分離を検証する。`security-worker/test/audit-archive.test.js`は長期保管の保存・検証・更新競合を検証する。非空の合成データをR2 fixtureに保存した世代から各サービスを復元し、在庫数量・支払配分・請求/精算金額・AI利用額を照合する。Portfolio専用fixtureはWorkflowあり/なしの両形式を使い、実際の保存APIで銘柄変更・過去日追加・同日訂正を行い、共通scheduledから保存した世代の全列・全履歴・revisionの隔離復元とアカウント無効化、revision triggerの復旧を確認する。メモリ内で生成した合成RSA/AES鍵のwrap/unwrap・暗号文復号も確認する。日記は別の復元/写真fixtureで検証する。いずれも合成データで、実R2/本番D1の復元実証・実端末PRF・本番鍵の復号を行ったものではない。
+
+
+### 日記D1暗号化の追加形式（候補・未切替）
+
+日記の候補schemaを検出した後、legacy状態では従来のv9を維持する。移行中は書込fenceと全sourceの移行完了を確認してから、暗号文だけの`v10/daily/`・`monthly/`へ保存する。本文・タグ・旧写真metadata・お気に入りの平文tableは新形式へ含めない。公開済みdirectory、PRF封印vault、scope/個別record grants、中央復旧envelopeを日記snapshotと同梱し、取得前後の鍵世代と各recordの署名・epochを検証する。Security側の追加tableは`d1/security/v4/`へ保存する。両形式とも候補DDL fragmentと従来DDLを別々に完全hash照合し、未知schemaを黙認しない。
+
+移行・鍵更新には`v10/checkpoints/{UUID}.json.gz`を使い、同日の正常日次を上書きしない。これは手動の復元確認点であり日次/月次の自動整理へ含めない。checkpoint本体partも自動整理で削除せず、参照を維持する。移行完了後に保管量と不要な手動確認点を確認する。
+
+`restoreIsolated(bucket,key,'diary',{anchor,minimumGeneration})`は別経路の公開trustを必須とし、候補SQLから空の隔離SQLiteを構築して各暗号文・署名済みgrantを検証する。復元直後はpaused、既存アカウントは無効化する。`diaryRestoreReport(restored)`のJSONはciphertextだけであり、管理者端末が実際に再復号・全件照合して切替証明へ署名する。元のPRFや復号鍵をNode処理・Worker・CIへ渡さない。旧backupとTime Travelの平文履歴、R2写真本体の暗号化は別工程として残る。

@@ -17,7 +17,7 @@ before(async () => { f = await systemFixture(); });
 after(async () => { await f.close(); });
 const owner = () => f.users['main-admin'];
 async function central(path, body, actor = owner()) {
-  return handleDiaryKeys(`/api/diary${path}`, new Request(`https://fixture.test/security/api/diary${path}`, {
+  return handleDiaryKeys(`/api/diary${path.split("?")[0]}`, new Request(`https://fixture.test/security/api/diary${path}`, {
     method: body === undefined ? 'GET' : 'POST',
     ...(body === undefined ? {} : {body:JSON.stringify(body), headers:{'Content-Type':'application/json'}}),
   }), f.centralEnv, {...actor, authenticatedAt:Date.now()/1000}, f.helpers);
@@ -156,7 +156,20 @@ test('approved replacement passkey recovers narrowed trash across successive key
     const next = await nextConfiguration();
     await central('/config', next);
     const second = await client(replacement); await second.sync();
-    assert.equal(second.entry(saved.id).content, saved.content); second.lock();
+    assert.equal(second.entry(saved.id).content, saved.content);
+    const archive = await backup(f.db, {directory:next.directory, vaults:{replacement:replacement.vault},
+      grants:next.grants, recordGrants:next.recordGrants, recoveryEnvelope:next.recoveryEnvelope});
+    const isolated = memoryDatabase({phase:'legacy'});
+    try {
+      const restored = await restoreEmpty(isolated, archive, {anchor:next.anchor, minimumGeneration:next.directory.value.generation});
+      assert.deepEqual(restored.recordGrants, next.recordGrants);
+      const {createStore} = await import('../../e2ee/store.mjs');
+      const store = createStore(isolated, {directory:restored.directory,epochs:restored.directory.epochs,households:restored.directory.households,photos:{}});
+      second.transport.snapshot = (household,since) => store.snapshot(second.actor,household,since);
+      second.sequence = undefined; second.records.clear();
+      await second.sync();
+      assert.equal(second.entry(saved.id).content, saved.content);
+    } finally { isolated.close(); second.lock(); }
     assert.equal((await central('/config', next)).status, 200);
     await assert.rejects(central('/config', configuration), /DiaryKeyGenerationConflict/);
   } finally { prf.fill(0); c.lock(); admin.lock(); }
