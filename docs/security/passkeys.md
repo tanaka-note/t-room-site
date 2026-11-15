@@ -1,5 +1,9 @@
 # T-lain 共通Identity・パスキー仕様
 
+## 資産運用報告のサービス連携
+
+`portfolio` は `/asset-report/` の管理者 `owner` と閲覧者 `viewer` を提供する。既存の共通パスキー・handoff・12時間rolling session・監査を使用し、認可はPortfolio側のサービスアカウントを正本とする。`owner` は `primary-admin` に限定し、閲覧用は第一管理者が複数Identityへ明示的に連携できる。同じIdentityの複数credentialも同じ有効な連携を利用できる。追加・承認・連携は第一管理者がSecurity Centerで実施し、初期化から利用者への権限を付与しない。サービス追加の `0030_portfolio_service.sql` は既存の行・外部キー・監査集計・家計簿の複数Identity共有を保持する。詳細は [Portfolio Worker](../../portfolio-worker/README.md)。
+
 ## 招待登録の完了表示
 
 一般利用者の招待登録では、`/security/api/setup/status` が有効な登録状態（`active` / `completed` / `resumable` / `needsTCloudSetup`）、`credentialStatus=pending`、`pendingApproval=true`、`tcloudReady=true`、`needsTCloudSetup=false` を返すと、専用の完了画面へ切り替える。T-Cloud連携がない場合も、サーバーの `tcloudReady` は準備不要としてtrueになる。表示は「パスキーの登録が完了しました。」「管理者の確認後、利用できるようになります。しばらくお待ちください。」のみで、サービスへの移動ボタンは設けない。再読み込み・BFCacheから戻った際も同APIを読み直し、ブラウザ保存領域の成功フラグには依存しない。setup cookieの期限や権限は延長しない。
@@ -105,6 +109,8 @@ PW、authProof、cookie、session token、生の招待token、PRF出力、秘密
 
 ## Identityとサービス連携
 
+家計簿はサービスアカウントごとに所属家計と権限を解決する。既存`owner`は`primary-admin`専用、既存`viewer`は宏知の家計だけの共有閲覧用とする。追加の独立管理用`chiharu-admin`は第一管理者が明示的に連携したIdentityから利用でき、管理用アカウントの複数Identityへの重複連携は拒否する。パスキーの登録・承認・失効は既存手順を維持し、migrationで連携やcredentialを自動作成しない。詳細は[家計簿README](../../household-worker/README.md)を参照する。
+
 Identityはサービスaccountではなく一人の人を表し、同じIdentityへ同一サービスを含む複数のservice linkを持てる。日記の管理者用・一般利用用accountを使い分ける場合もIdentityやパスキーを分けない。日記・請求書accountは原則として有効なlinkを一人だけに限定する。ただし既存の一般利用用Identityを切断せず第一管理者の同じパスキーから日記の管理者用・一般利用用accountを選べるよう、`primary-admin`の`diary/main-user`だけは狭い追加aliasとして許可し、他Identityの重複は引き続き拒否する。T-Cloudのfolder-memberは複数Identityとの共有を許可する。
 
 連携候補の正本は各サービスの`SecurityIntegration`である。Security Workerは明示的なservice registry、Service Binding、providerの候補取得・再検証を通じてだけlinkを作成する。Security Centerの通常UIでは内部account ID、role値、T-Cloudの数値folder IDを自由入力させず、人間向け表示名・role・folder pathから選択させる。候補取得失敗時に自由入力へフォールバックしない。将来サービスを追加する場合も、registry allowlist、Service Binding、provider実装、DB migrationの要否、契約テストを明示的に追加し、自動発見したサービスを信頼しない。
@@ -132,6 +138,10 @@ T-Cloudの各タブは選択済みsessionの公開識別子をsessionStorageに�
 
 member vaultの登録はcredential単位のINSERTのみとし、競合時は保存済み公開鍵・指紋・暗号文・IVを照合する。同じ内容の再送は許し、異なる内容への置換は409で拒否する。既存委譲鍵の再生成は行わない。パスキーで解除したadmin／memberのRSA秘密鍵はextractable=false・decrypt専用のCryptoKeyとして、既存tcloud-device-vault／crypto-keysへ保存できる。memberは承認済みの複数folderScopesに対応するRSA暗号化folder envelopeの集合（folder_keys_rsa）を併せて保存し、raw folder keyは復元時のメモリー内だけに保持する。cache bindingにはsessionCacheId・credential ID・Identity ID・auth method・role・service account／link・cloudScopeId・root／folderScopes・Cloud session version・passkey epoch・crypto version／作成時刻／公開鍵を含める。cacheにはserver sessionのexpiresAtを保存し、同じsession IDの正常なrolling応答で単調に更新する。起動時はserver session検証後だけ復元し、Cookie消滅・12時間超過・credential／Identity／link／scope／version／epoch等の失効が判明した現在sessionのcacheと、期限切れのpasskey cacheだけを削除する。期限は必ず署名検証済みserver sessionで判断し、cache自身から延長しない。CryptoKeyは復元時に型・非抽出性・algorithm／usagesと実際の復号を検証する。raw PRF、秘密鍵のJWK／PEM／raw、extractable秘密鍵、raw folder key、PW、SESSION_SECRETは保存しない。明示的logoutはserver session終了・Cookie削除・tab context破棄・現在sessionのcache削除を行い、他sessionのcacheは削除しない。API失効時にもメモリーを解除して現在sessionのcacheを削除する。過去に`passkey:<identityId>:<config作成時刻>`で保存された管理者秘密鍵レコードだけを起動時に削除し、PW用鍵キャッシュ・folder-sessionレコード・暗号化済みオフラインデータを削除しない。
 
+## 家計簿の複数Identity連携
+
+家計簿の追加管理用と共有閲覧用は、第一管理者の明示的な設定で同じサービスアカウントを複数Identityへ連携できる。同じIdentityの複数credentialも有効な連携を利用できる。田中宏知の既定`owner`だけは`primary-admin`に限定する。既存の5分以内の再認証・招待・credential承認・Identity／credential／link単位の失効確認を維持する。`0029_household_shared_accounts.sql`は現在の連携をIdentity＋アカウント単位で一意にし、既存の無効なlinkを復活させず、自動で権限を付与しない。詳細は[家計簿README](../../household-worker/README.md)を参照する。
+
 ## Downloaderの利用許可
 
 初期連携はprimary-adminのみ。一般Identityへの許可は、オーナーが利用者詳細の「サービス連携を追加」でDownloaderを選び、既存の再認証を通したときだけ作成する。新規招待には含めず、パスキー登録・承認・再招待では新規付与しない。追加・解除は対象link IDと操作元を監査へ記録する。既存連携は追加経路を調査して扱いを決め、判断不能を一律解除しない。過去の本番データ調査は[2026-09-09調査記録](../history/security/downloader-grants-review-20260909.md)を参照。
@@ -139,3 +149,9 @@ member vaultの登録はcredential単位のINSERTのみとし、競合時は保�
 過去のmigration、固定データ対応、当時の公開範囲は[Identity・Passkey移行記録](../history/security/passkey-migrations.md)へ分離している。
 
 Cloud専用rolling RPCを使う版はSecurity Workerの対応が必要で、将来の公開時はSecurityを先に反映してからCloudを反映する。DB migration・既存ファイルの再暗号化・credential再登録は不要。旧Cloud sessionが端末cacheを持たない場合は初回だけPRF認証へfallbackする。
+
+## 家計簿の端末側暗号化
+
+家計簿の通常ログインでも既存credentialのPRFを要求する。既存のHousehold用鍵、または同じcredentialのT-Cloud用暗号化済み秘密鍵を端末内で解除し、いずれもなければHousehold用鍵を自動準備する。所有者は家計鍵の初期化・同じ家計の承認済み共有先への委譲・既存データの暗号化を通常ログインから自動実行する。別のSecurity Center準備・家計鍵承認は不要。既存の利用者鍵がない閲覧者への初回委譲だけは、本人の自動準備後に所有者の次の通常利用を必要とする。新規・追加パスキーの招待・承認、role、失効を維持する。他の家計には委譲せず、復号鍵の保有とAPIの編集権限は分ける。
+
+暗号化済み利用者秘密鍵・家計鍵の委譲envelope・T-Cloud管理者公開鍵で包んだ復旧用家計鍵の正本はHousehold D1。通常の自動準備は内部 `SECURITY.getHouseholdAutomaticContext` と `HOUSEHOLD_AUTH.describeKeyScope` で現在のsession・Identity／credential／連携と家計scopeを照合する。T-Cloudからは暗号化済みenvelopeと公開鍵だけを再利用し、Household D1に解除方式と共に保持する。既存の `HOUSEHOLD_AUTH.cryptoKeys` による第一管理者の復旧操作も維持する。公開API本文の家計ID・roleを採用しない。生のPRF・秘密鍵・家計鍵は渡さない。既存T-Cloud管理者鍵、登録・承認・失効の方式は変更しない。バックアップ・移行・PRF非対応と実端末確認の境界は[家計簿README](../../household-worker/README.md#cloudflareに内容を渡さない端末側暗号化)を正本とする。

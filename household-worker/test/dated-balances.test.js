@@ -6,6 +6,28 @@ import {fixture} from './fixture.js';
 const account = () => ({id:crypto.randomUUID(),name:'Synthetic bank',type:'bank',items:[{id:crypto.randomUUID(),name:'Deposit',amount:100}]});
 const save = (data, row, date, amount) => mutateData(data,'account.save',{...row,asOf:date,items:[{...row.items[0],amount}]});
 
+test('account saves retire archiving while preserving dated balances and legacy backup projections',()=>{
+  const a=account(),legacy={...account(),archived:true};legacy.items[0].amount=0;
+  const data=save(emptyData(),a,'2026-09-30',100);data.accounts.push(legacy);
+  const before=assetHistory(data,'2026-10-31');
+  for(const version of [1,2]){
+    const restored=restoreInput({...backup(data),version});
+    assert.equal(restored.accounts.find(row=>row.id===legacy.id).archived,true);
+    assert.deepEqual(assetHistory(restored,'2026-10-31'),before);
+    assert.deepEqual(restored.accounts.find(row=>row.id===a.id).balances,data.accounts[0].balances);
+  }
+  let next=save(data,legacy,'2026-10-01',0);
+  assert.equal(next.accounts.find(row=>row.id===legacy.id).archived,false);
+  next=save(next,{...legacy,archived:true},'2026-10-02',250);
+  const saved=next.accounts.find(row=>row.id===legacy.id);
+  assert.equal(saved.archived,false);assert.equal(saved.items[0].amount,250);
+  assert.deepEqual(saved.balances.map(row=>row.date),['2026-10-01','2026-10-02']);
+  assert.equal(assetHistory(next,'2026-10-31').at(-1).total,350);
+  assert.deepEqual(next.accounts.find(row=>row.id===a.id),data.accounts[0]);
+  const created=save(emptyData(),{...account(),archived:true},'2026-10-01',0);
+  assert.equal(created.accounts[0].archived,false);
+});
+
 test('month-end uses each account latest preceding date, carries forward and never uses the following month',()=>{
   const a=account(),b=account();let data=emptyData();
   data=save(data,a,'2026-08-28',100);data=save(data,a,'2026-09-01',900);data=save(data,a,'2026-09-28',200);data=save(data,b,'2026-09-15',-50);

@@ -1,3 +1,4 @@
+import { selectAlbumMonth } from "./album-month-fixture.mjs";
 import assert from 'node:assert/strict';
 import { createDiaryFixtureServer as createServer } from "./bootstrap-fixture.mjs";
 import { readFile } from 'node:fs/promises';
@@ -24,6 +25,8 @@ export async function runDialogs(service) {
   let writes = 0, releaseSave;
   let albumSize = 96, failAlbumOffset = -1, pauseAlbumOffset = -1, releaseAlbum;
   const albumRequests = [];
+  const auditRequests = [];
+  let holdAudit = false, releaseAudit;
   const delayedPhotos = new Set(), pendingPhotos = new Map(), photoWaiters = new Map(), photoRequests = new Map();
   const waitForPhoto = id => pendingPhotos.has(id) ? Promise.resolve() : new Promise(resolve => photoWaiters.set(id, resolve));
   const releasePhoto = id => { pendingPhotos.get(id)?.(); pendingPhotos.delete(id); };
@@ -59,7 +62,12 @@ export async function runDialogs(service) {
       if (path === '/session') return json(response, { authenticated: true, role: 'owner', accountId: account.id, accountName: 'fixture' });
       if (path === '/accounts') return json(response, { accounts: [account] });
       if (path === '/summary') return json(response, { account, month: url.searchParams.get('month'), entries: [], settlements: [settlement], settlementTotals: { incomingYen: 100, outgoingYen: 0 }, openingBalanceYen: 0, closingBalanceYen: 100 });
-      if (path === '/audit-logs') return json(response, { logs: [] });
+      if (path === '/audit-logs') {
+        const accountId = url.searchParams.get('accountId'); auditRequests.push(accountId);
+        if (accountId && holdAudit) { holdAudit = false; await new Promise(resolve => { releaseAudit = resolve; }); }
+        return json(response, { logs: Array.from({ length: 80 }, () => ({ occurredAt: '2026-11-01T00:00:00Z',
+          eventType: 'entry.create', actorName: 'fixture', targetName: accountId ? 'filtered-audit' : 'all-audit' })) });
+      }
       if (request.method !== 'GET') {
         writes++;
         await new Promise(resolveSave => { releaseSave = resolveSave; });
@@ -287,7 +295,7 @@ export async function runDialogs(service) {
         assert.deepEqual(albumRequests.map(request => request.offset), [0, 48, 144, 240], 'double click must not duplicate requests');
         assert.equal(await page.evaluate(() => retainedPhotoCard === document.querySelector('[data-photo-index="0"]')), true);
         assert.equal(await page.locator('#camera-roll-more').isVisible(), false);
-        await page.selectOption('#photo-month-filter', '2026-10');
+        await selectAlbumMonth(page, '2026-10');
         await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 48 && !document.getElementById('camera-roll-more').disabled);
         albumRequests.length = 0;
         await page.click('#camera-roll-more');
@@ -323,7 +331,7 @@ export async function runDialogs(service) {
           await page.keyboard.press('Shift+ArrowRight');
           assert.equal(await page.locator('#photo-viewer-image').getAttribute('alt'), 'fixture-1.svg', 'modified arrows retain their normal meaning');
           const scrollBefore = await page.locator('#photo-viewer-dialog').evaluate(dialog => dialog.scrollTop);
-          await page.locator('#photo-download-low').focus();
+          await page.locator('#photo-delete').focus();
           await page.keyboard.press('ArrowRight');
           await displayed(2);
           assert.equal(await page.locator('#photo-viewer-dialog').evaluate(dialog => dialog.scrollTop), scrollBefore, 'arrow navigation must not also scroll the viewer');
@@ -417,7 +425,8 @@ export async function runDialogs(service) {
         await page.waitForFunction(() => document.querySelector('.photo-stage').clientHeight === 900);
         await navigate(1);
         await displayed(2);
-        assert.equal(await page.locator('#photo-download-low').getAttribute('href'), '/display/2.svg?download=1', 'download follows the selected photo');
+        assert.equal(await page.locator('#photo-download-low').count(), 0, 'low-quality download is retired');
+        assert.equal(await page.locator('#photo-delete').isVisible(), true);
         await navigate(-1);
         await displayed(1);
         assert.deepEqual(await page.evaluate(() => ({ state: JSON.stringify(history.state), length: history.length })), viewerHistory, 'photo navigation must not add or replace dialog history');
@@ -445,7 +454,6 @@ export async function runDialogs(service) {
 
         // A failed page can resume without losing or duplicating earlier pages.
         await page.fill('#photo-entry-search', 'tag');
-        await page.fill('#photo-file-name-search', 'fixture');
         await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 48 && !document.getElementById('camera-roll-more').disabled);
         failAlbumOffset = 144;
         await page.click('#camera-roll-more');
@@ -456,16 +464,16 @@ export async function runDialogs(service) {
         await page.waitForFunction(() => document.getElementById('camera-roll-more').hidden);
         assert.equal(await page.locator('#camera-roll-grid button').count(), 317);
         assert.equal(albumRequests[0].offset, 144);
-        assert.ok(albumRequests.every(request => request.entryQuery === 'tag' && request.fileName === 'fixture'));
+        assert.ok(albumRequests.every(request => request.entryQuery === 'tag' && request.fileName === null));
 
         // Switching months invalidates a late page and stops its remaining loop.
-        await page.selectOption('#photo-month-filter', '');
+        await selectAlbumMonth(page, '');
         await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 48 && !document.getElementById('camera-roll-more').disabled);
         pauseAlbumOffset = 48;
         releaseAlbum = null;
         await page.click('#camera-roll-more');
         while (!releaseAlbum) await new Promise(resolve => setTimeout(resolve, 10));
-        await page.selectOption('#photo-month-filter', '2026-09');
+        await selectAlbumMonth(page, '2026-09');
         await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 7);
         const requestsBeforeRelease = albumRequests.length;
         const staleResponse = page.waitForResponse(response => {
@@ -489,7 +497,7 @@ export async function runDialogs(service) {
         albumSize = 5001;
         albumRequests.length = 0;
         await page.click('#camera-roll-button');
-        await page.selectOption('#photo-month-filter', '');
+        await selectAlbumMonth(page, '');
         await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 48 && !document.getElementById('camera-roll-more').disabled);
         await page.locator('#camera-roll-more').evaluate(button => { button.click(); button.click(); });
         await page.waitForFunction(() => !document.getElementById('camera-roll-more').disabled);
@@ -507,13 +515,13 @@ export async function runDialogs(service) {
         assert.equal(albumRequests.length, requestsAtCap, 'the total cap must also guard the loader');
         assert.equal(albumRequests.at(-1).offset, 4752);
         assert.equal(albumRequests.at(-1).limit, '48', 'the last request fits the remaining capacity');
-        await page.selectOption('#photo-month-filter', '2026-09');
+        await selectAlbumMonth(page, '2026-09');
         await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 7 && !document.getElementById('camera-roll-more').disabled);
         assert.doesNotMatch(await page.locator('#camera-roll-status').textContent(), /表示上限/);
         await back('camera-roll-dialog');
         albumSize = 1;
         await page.click('#camera-roll-button');
-        await page.selectOption('#photo-month-filter', '');
+        await selectAlbumMonth(page, '');
         await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid button').length === 1);
         await clickPhoto(0);
         await displayed(1);
@@ -561,10 +569,39 @@ export async function runDialogs(service) {
         await page.keyboard.press('Escape');
         await closed('entry-dialog');
         await back('settlements-dialog');
-        await page.click('#logs-button');
-        await opened('logs-dialog');
-        await page.locator('[data-close-dialog="logs-dialog"]').click();
-        await closed('logs-dialog');
+        for (const close of ['button', 'escape', 'back', 'backdrop']) {
+          await page.click('#logs-button'); await opened('logs-dialog');
+          await page.selectOption('#logs-account-filter', account.id);
+          await page.waitForFunction(() => document.getElementById('logs-body').textContent.includes('filtered-audit'));
+          await page.locator('#logs-dialog .logs-wrap').evaluate(node => { node.scrollTop = 200; });
+          if (close === 'button') await page.locator('[data-close-dialog="logs-dialog"]').click();
+          else if (close === 'escape') await page.keyboard.press('Escape');
+          else if (close === 'back') await back('logs-dialog');
+          else await background('logs-dialog');
+          await closed('logs-dialog');
+          assert.equal(await page.locator('#logs-account-filter').inputValue(), '');
+          assert.equal(await page.locator('#logs-body tr').count(), 0);
+          if (close === 'back') await page.evaluate(() => history.forward());
+          else await page.click('#logs-button');
+          await opened('logs-dialog');
+          await page.waitForFunction(() => document.getElementById('logs-body').textContent.includes('all-audit'));
+          assert.equal(auditRequests.at(-1), null);
+          assert.equal(await page.locator('#logs-dialog .logs-wrap').evaluate(node => node.scrollTop), 0);
+          await page.locator('[data-close-dialog="logs-dialog"]').click(); await closed('logs-dialog');
+        }
+        await page.click('#logs-button'); await opened('logs-dialog');
+        holdAudit = true; releaseAudit = null;
+        await page.selectOption('#logs-account-filter', account.id);
+        while (!releaseAudit) await new Promise(resolve => setTimeout(resolve, 10));
+        await page.keyboard.press('Escape'); await closed('logs-dialog');
+        await page.click('#logs-button'); await opened('logs-dialog');
+        await page.waitForFunction(() => document.getElementById('logs-body').textContent.includes('all-audit'));
+        const staleAudit = page.waitForResponse(response => response.url().includes('/audit-logs?') && response.url().includes('accountId='));
+        releaseAudit(); await staleAudit;
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+        assert.equal(await page.locator('#logs-account-filter').inputValue(), '');
+        assert.doesNotMatch(await page.locator('#logs-body').textContent(), /filtered-audit/);
+        await page.locator('[data-close-dialog="logs-dialog"]').click(); await closed('logs-dialog');
         await page.click('#new-entry-button');
         await opened('entry-dialog');
         await page.fill('#entry-description', 'fixture');

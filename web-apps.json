@@ -43,6 +43,7 @@
       "publicUrls": ["https://tanaka-note.com/apps/calculator/"],
       "entrypoints": ["apps/calculator/index.html"],
       "buildRoots": ["apps/calculator"],
+      "assetCopies": [{ "source": "tools/shared/pwa-install.js", "copy": "apps/calculator/pwa-install.js" }],
       "buildMode": "content-hash",
       "serviceWorker": "apps/calculator/sw.js",
       "serviceWorkerUrl": "./sw.js",
@@ -133,32 +134,16 @@
       "deployCommand": "pnpm run site:deploy"
     },
     {
-      "id": "asset-report",
-      "name": "資産運用報告ページ",
-      "publicUrls": ["https://tanaka-note.com/asset-report-k7m4q9x2/"],
-      "entrypoints": ["asset-report-k7m4q9x2/index.html"],
-      "buildRoots": ["asset-report-k7m4q9x2"],
-      "buildMode": "content-hash",
-      "serviceWorker": "asset-report-k7m4q9x2/service-worker.js",
-      "serviceWorkerUrl": "./service-worker.js",
-      "cachePrefix": "asset-report-shell-",
-      "cacheNameConstant": "CACHE_NAME",
-      "precacheConstant": "APP_SHELL",
-      "precacheMode": "html",
-      "manifest": "asset-report-k7m4q9x2/manifest.webmanifest",
-      "twa": null,
-      "deployTarget": "t-room-site",
-      "deployCwd": ".",
-      "deployCommand": "pnpm run site:deploy"
-    },
-    {
       "id": "diary",
       "name": "日記",
       "publicUrls": ["https://tanaka-note.com/diary/", "https://tanaka-note.com/diary/investment/", "https://tanaka-note.com/diary/favorites/"],
       "entrypoints": ["diary-worker/public/index.html", "diary-worker/public/investment.html"],
       "buildRoots": ["diary-worker/public"],
-      "buildFiles": ["assets/session-secret.mjs", "assets/session-policy.mjs", "diary-worker/src/index.js", "diary-worker/src/entry-domain.js", "assets/password-auth-policy.mjs", "diary-worker/src/backup.js", "diary-worker/src/photo-backup.js",
-        "backup-worker/src/backup.js", "backup-worker/src/monitor.js", "backup-worker/src/registry.js", "backup-worker/src/integrity.js", "backup-worker/src/snapshot.js", "backup-worker/src/schema-guard.js", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js", "assets/passkey-rolling.mjs"],
+      "buildFiles": ["assets/session-secret.mjs", "assets/session-policy.mjs", "diary-worker/src/index.js", "diary-worker/src/entry-domain.js", "diary-worker/src/photo-save.js", "assets/password-auth-policy.mjs", "diary-worker/src/backup.js", "diary-worker/src/photo-backup.js", "backup-worker/src/dispatch.js",
+        "backup-worker/src/backup.js", "backup-worker/src/monitor.js", "backup-worker/src/registry.js", "backup-worker/src/integrity.js", "backup-worker/src/snapshot.js", "backup-worker/src/schema-guard.js", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js", "assets/passkey-rolling.mjs",
+        "tools/shared/tlain-login.css",
+        "tools/shared/tlain-login.js"
+      ],
       "buildMode": "content-hash",
       "serviceWorker": "diary-worker/public/service-worker.js",
       "serviceWorkerUrl": "/diary/service-worker.js",
@@ -170,7 +155,17 @@
       "twa": "android-diary-twa",
       "deployTarget": "t-room-diary",
       "deployCwd": "diary-worker",
-      "deployCommand": "pnpm run deploy"
+      "deployCommand": "pnpm run deploy",
+      "assetCopies": [
+        {
+          "source": "tools/shared/tlain-login.css",
+          "copy": "diary-worker/public/tlain-login.css"
+        },
+        {
+          "source": "tools/shared/tlain-login.js",
+          "copy": "diary-worker/public/tlain-login.js"
+        }
+      ]
     },
     {
       "id": "billing",
@@ -178,14 +173,31 @@
       "publicUrls": ["https://tanaka-note.com/billing/"],
       "entrypoints": ["billing-worker/public/index.html"],
       "buildRoots": ["billing-worker/public"],
-      "buildFiles": ["diary-worker/public/dialog-navigation.js", "assets/session-secret.mjs", "assets/session-policy.mjs", "billing-worker/src/index.js", "assets/password-auth-policy.mjs", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js", "assets/passkey-rolling.mjs"],
+      "buildFiles": ["diary-worker/public/dialog-navigation.js", "assets/session-secret.mjs", "assets/session-policy.mjs", "billing-worker/src/index.js", "assets/password-auth-policy.mjs", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js", "assets/passkey-rolling.mjs",
+        "tools/shared/tlain-login.css",
+        "tools/shared/tlain-login.js"
+      ],
       "buildMode": "content-hash",
       "serviceWorker": null,
       "manifest": "billing-worker/public/manifest.webmanifest",
       "twa": null,
       "deployTarget": "t-room-billing",
       "deployCwd": "billing-worker",
-      "deployCommand": "pnpm run deploy"
+      "deployCommand": "pnpm run deploy",
+      "assetCopies": [
+        {
+          "source": "tools/shared/tlain-login.css",
+          "copy": "billing-worker/public/tlain-login.css"
+        },
+        {
+          "source": "tools/shared/tlain-login.js",
+          "copy": "billing-worker/public/tlain-login.js"
+        },
+        {
+          "source": "tools/shared/pwa-install.js",
+          "copy": "billing-worker/public/pwa-install.js"
+        }
+      ]
     },
     {
       "id": "security",
@@ -208,14 +220,24 @@
         "security-worker/src/definition-status.js",
         "security-worker/src/identity-cleanup.js",
         "security-worker/src/audit-archive.js",
-        "backup-worker/src/backup.js", "backup-worker/src/monitor.js", "backup-worker/src/registry.js", "backup-worker/src/integrity.js", "backup-worker/src/snapshot.js", "backup-worker/src/schema-guard.js",
+        "backup-worker/src/backup.js",
+        "backup-worker/src/monitor.js",
+        "backup-worker/src/registry.js",
+        "backup-worker/src/integrity.js",
+        "backup-worker/src/snapshot.js",
+        "backup-worker/src/schema-guard.js",
         "assets/account-display.mjs",
         "assets/passkey-rolling.mjs",
         "assets/session-policy.mjs",
         "security-worker/src/rolling-sessions.js",
         "security-worker/wrangler.jsonc",
         "security-worker/src/health-keys.js",
-        "health-worker/public/health-crypto.mjs"
+        "security-worker/src/household-keys.js",
+        "security-worker/src/household-automatic.js",
+        "health-worker/public/health-crypto.mjs",
+        "tools/shared/tlain-login.css",
+        "tools/shared/tlain-login.js",
+        "household-worker/public/household-crypto.mjs"
       ],
       "buildMode": "content-hash",
       "serviceWorker": null,
@@ -223,7 +245,17 @@
       "twa": null,
       "deployTarget": "t-room-security",
       "deployCwd": "security-worker",
-      "deployCommand": "pnpm run deploy"
+      "deployCommand": "pnpm run deploy",
+      "assetCopies": [
+        {
+          "source": "tools/shared/tlain-login.css",
+          "copy": "security-worker/public/tlain-login.css"
+        },
+        {
+          "source": "tools/shared/tlain-login.js",
+          "copy": "security-worker/public/tlain-login.js"
+        }
+      ]
     },
     {
       "id": "cloud",
@@ -255,13 +287,24 @@
         {
           "source": "cloud-worker/public/media-client.js",
           "copy": "cloud-worker/public/media-client-20260811-12.js"
+        },
+        {
+          "source": "tools/shared/tlain-login.css",
+          "copy": "cloud-worker/public/tlain-login.css"
+        },
+        {
+          "source": "tools/shared/tlain-login.js",
+          "copy": "cloud-worker/public/tlain-login.js"
         }
       ],
       "name": "T-Cloud Web",
       "publicUrls": ["https://tanaka-note.com/cloud/", "https://tanaka-note.com/cloud/share/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"],
       "entrypoints": ["cloud-worker/public/index.html", "cloud-worker/public/share.html"],
       "buildRoots": ["cloud-worker/public"],
-      "buildFiles": ["assets/session-secret.mjs", "assets/session-policy.mjs", "cloud-worker/src/index.js", "cloud-worker/src/youtube-search.js", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js"],
+      "buildFiles": ["assets/session-secret.mjs", "assets/session-policy.mjs", "cloud-worker/src/index.js", "cloud-worker/src/youtube-search.js", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js",
+        "tools/shared/tlain-login.css",
+        "tools/shared/tlain-login.js"
+      ],
       "buildConstants": [
         "cloud-worker/public/cloud.js",
         "cloud-worker/public/cloud-runtime-20260816-1.js",
@@ -307,7 +350,9 @@
         "downloader-worker/container/media_pipeline.py",
         "downloader-worker/container/adapters/__init__.py",
         "security-worker/public/passkey-client.js",
-        "assets/passkey-rolling.mjs"
+        "assets/passkey-rolling.mjs",
+        "tools/shared/tlain-login.css",
+        "tools/shared/tlain-login.js"
       ],
       "buildMode": "content-hash",
       "serviceWorker": null,
@@ -315,7 +360,17 @@
       "twa": null,
       "deployTarget": "t-room-downloader",
       "deployCwd": "downloader-worker",
-      "deployCommand": "pnpm run deploy"
+      "deployCommand": "pnpm run deploy",
+      "assetCopies": [
+        {
+          "source": "tools/shared/tlain-login.css",
+          "copy": "downloader-worker/public/tlain-login.css"
+        },
+        {
+          "source": "tools/shared/tlain-login.js",
+          "copy": "downloader-worker/public/tlain-login.js"
+        }
+      ]
     },
     {
       "id": "downloader2",
@@ -327,7 +382,9 @@
         "assets/session-secret.mjs",
         "assets/session-policy.mjs",
         "downloader2-worker/src/index.js",
-        "assets/passkey-rolling.mjs"
+        "assets/passkey-rolling.mjs",
+        "tools/shared/tlain-login.css",
+        "tools/shared/tlain-login.js"
       ],
       "buildMode": "content-hash",
       "serviceWorker": null,
@@ -335,7 +392,17 @@
       "twa": null,
       "deployTarget": "t-room-downloader2",
       "deployCwd": "downloader2-worker",
-      "deployCommand": "pnpm run deploy"
+      "deployCommand": "pnpm run deploy",
+      "assetCopies": [
+        {
+          "source": "tools/shared/tlain-login.css",
+          "copy": "downloader2-worker/public/tlain-login.css"
+        },
+        {
+          "source": "tools/shared/tlain-login.js",
+          "copy": "downloader2-worker/public/tlain-login.js"
+        }
+      ]
     },
     {
       "id": "inventory",
@@ -343,8 +410,20 @@
       "publicUrls": ["https://tanaka-note.com/inventory/"],
       "entrypoints": ["inventory-worker/public/index.html"],
       "buildRoots": ["inventory-worker/public"],
-      "buildFiles": ["inventory-worker/src/index.js", "inventory-worker/src/domain.js", "assets/session-secret.mjs", "assets/session-policy.mjs", "assets/passkey-rolling.mjs", "assets/security-audit-worker.js", "security-worker/public/passkey-client.js"],
-      "assetCopies": [{ "source": "security-worker/public/passkey-client.js", "copy": "inventory-worker/public/passkey-client.js" }],
+      "buildFiles": ["inventory-worker/src/index.js", "inventory-worker/src/domain.js", "assets/session-secret.mjs", "assets/session-policy.mjs", "assets/passkey-rolling.mjs", "assets/security-audit-worker.js", "security-worker/public/passkey-client.js",
+        "tools/shared/tlain-login.css",
+        "tools/shared/tlain-login.js"
+      ],
+      "assetCopies": [{ "source": "security-worker/public/passkey-client.js", "copy": "inventory-worker/public/passkey-client.js" },
+        {
+          "source": "tools/shared/tlain-login.css",
+          "copy": "inventory-worker/public/tlain-login.css"
+        },
+        {
+          "source": "tools/shared/tlain-login.js",
+          "copy": "inventory-worker/public/tlain-login.js"
+        }
+      ],
       "buildMode": "content-hash",
       "serviceWorker": null,
       "manifest": null,
@@ -375,7 +454,9 @@
         "assets/session-secret.mjs",
         "assets/session-policy.mjs",
         "security-worker/public/passkey-client.js",
-        "diary-worker/public/dialog-navigation.js"
+        "diary-worker/public/dialog-navigation.js",
+        "tools/shared/tlain-login.css",
+        "tools/shared/tlain-login.js"
       ],
       "buildMode": "content-hash",
       "serviceWorker": null,
@@ -383,11 +464,30 @@
       "twa": null,
       "deployTarget": "t-room-health",
       "deployCwd": "health-worker",
-      "deployCommand": "pnpm run deploy"
+      "deployCommand": "pnpm run deploy",
+      "assetCopies": [
+        {
+          "source": "tools/shared/tlain-login.css",
+          "copy": "health-worker/public/tlain-login.css"
+        },
+        {
+          "source": "tools/shared/tlain-login.js",
+          "copy": "health-worker/public/tlain-login.js"
+        }
+      ]
     },
     {
       "id": "payments",
-      "assetCopies": [{ "source": "diary-worker/public/dialog-navigation.js", "copy": "payments-worker/public/dialog-navigation.js" }],
+      "assetCopies": [{ "source": "diary-worker/public/dialog-navigation.js", "copy": "payments-worker/public/dialog-navigation.js" },
+        {
+          "source": "tools/shared/tlain-login.css",
+          "copy": "payments-worker/public/tlain-login.css"
+        },
+        {
+          "source": "tools/shared/tlain-login.js",
+          "copy": "payments-worker/public/tlain-login.js"
+        }
+      ],
       "name": "支払明細",
       "publicUrls": [
         "https://tanaka-note.com/payments/"
@@ -406,7 +506,9 @@
         "assets/passkey-rolling.mjs",
         "assets/security-audit-worker.js",
         "security-worker/public/passkey-client.js",
-        "diary-worker/public/dialog-navigation.js"
+        "diary-worker/public/dialog-navigation.js",
+        "tools/shared/tlain-login.css",
+        "tools/shared/tlain-login.js"
       ],
       "buildMode": "content-hash",
       "serviceWorker": null,
@@ -442,7 +544,13 @@
         "payments-worker/public/troom-date-picker.js",
         "payments-worker/public/troom-date-picker.css",
         "payments-worker/public/date-wheel.js",
-        "payments-worker/public/date-wheel.css"
+        "payments-worker/public/date-wheel.css",
+        "tools/shared/tlain-login.css",
+        "tools/shared/tlain-login.js",
+        "household-worker/src/keys.js",
+        "household-worker/src/automatic-keys.js",
+        "household-worker/src/encrypted-api.js",
+        "cloud-worker/public/crypto-vault.js"
       ],
       "assetCopies": [
         {
@@ -464,6 +572,18 @@
         {
           "source": "payments-worker/public/date-wheel.css",
           "copy": "household-worker/public/date-wheel.css"
+        },
+        {
+          "source": "tools/shared/tlain-login.css",
+          "copy": "household-worker/public/tlain-login.css"
+        },
+        {
+          "source": "tools/shared/tlain-login.js",
+          "copy": "household-worker/public/tlain-login.js"
+        },
+        {
+          "source": "household-worker/src/domain.js",
+          "copy": "household-worker/public/household-domain.mjs"
         }
       ],
       "buildMode": "content-hash",
@@ -473,9 +593,75 @@
       "deployTarget": "t-room-household",
       "deployCwd": "household-worker",
       "deployCommand": "pnpm run deploy"
+    },
+    {
+      "id": "portfolio",
+      "name": "資産運用報告（編集対応）",
+      "publicUrls": [
+        "https://tanaka-note.com/asset-report/"
+      ],
+      "entrypoints": [
+        "portfolio-worker/public/index.html"
+      ],
+      "buildRoots": [
+        "portfolio-worker/public"
+      ],
+      "buildFiles": [
+        "security-worker/public/passkey-client.js",
+        "diary-worker/public/dialog-navigation.js",
+        "payments-worker/public/troom-date-picker.js",
+        "payments-worker/public/troom-date-picker.css",
+        "payments-worker/public/date-wheel.js",
+        "payments-worker/public/date-wheel.css",
+        "tools/shared/tlain-login.css",
+        "tools/shared/tlain-login.js"
+      ],
+      "buildMode": "content-hash",
+      "serviceWorker": null,
+      "serviceWorkerUrl": null,
+      "manifest": "portfolio-worker/public/manifest.webmanifest",
+      "twa": null,
+      "deployTarget": "t-room-portfolio",
+      "deployCwd": "portfolio-worker",
+      "deployCommand": "pnpm run deploy",
+      "assetCopies": [
+        {
+          "source": "tools/shared/pwa-install.js",
+          "copy": "portfolio-worker/public/pwa-install.js"
+        },
+        {
+          "source": "diary-worker/public/dialog-navigation.js",
+          "copy": "portfolio-worker/public/dialog-navigation.js"
+        },
+        {
+          "source": "payments-worker/public/troom-date-picker.js",
+          "copy": "portfolio-worker/public/troom-date-picker.js"
+        },
+        {
+          "source": "payments-worker/public/troom-date-picker.css",
+          "copy": "portfolio-worker/public/troom-date-picker.css"
+        },
+        {
+          "source": "payments-worker/public/date-wheel.js",
+          "copy": "portfolio-worker/public/date-wheel.js"
+        },
+        {
+          "source": "payments-worker/public/date-wheel.css",
+          "copy": "portfolio-worker/public/date-wheel.css"
+        },
+        {
+          "source": "tools/shared/tlain-login.css",
+          "copy": "portfolio-worker/public/tlain-login.css"
+        },
+        {
+          "source": "tools/shared/tlain-login.js",
+          "copy": "portfolio-worker/public/tlain-login.js"
+        }
+      ]
     }
   ],
   "excludedHtml": [
+    { "path": "asset-report-k7m4q9x2/index.html", "reason": "公開停止済みの移行検証用ソース。公開assetsに含めず終了用Workerだけを配信" },
     { "path": "learning/sharoushi/logs/template.html", "reason": "記事生成用テンプレート" },
     { "path": "cloud-worker/public/offline.html", "reason": "Service Workerオフラインfallback" }
   ]

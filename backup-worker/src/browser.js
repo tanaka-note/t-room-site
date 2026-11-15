@@ -2,7 +2,7 @@ import { SERVICES } from './registry.js';
 import { listObjects } from './backup.js';
 import { runState } from './monitor.js';
 
-const CACHE_KEY = 'https://backups.internal/storage-v2';
+const CACHE_KEY = 'https://backups.internal/storage-v3';
 export async function serviceStatus(env, service) {
   const result = await env.SECURITY_DB.prepare(`SELECT event_id, occurred_at, event_type, details_json
     FROM security_audit_events WHERE target_type = 'backup' AND target_id = ?
@@ -11,7 +11,17 @@ export async function serviceStatus(env, service) {
   return runState(result.results || [], { minute: service === 'security-audit' ? 41 : 40 });
 }
 function metadata(o) {
-  return { name: o.key.split('/').at(-1), sizeBytes: o.size, updatedAt: o.uploaded.toISOString(), sha256: o.customMetadata?.sha256 || null };
+  return { name: o.key.split('/').at(-1), sizeBytes: o.size + Number(o.customMetadata?.dataBytes || 0), updatedAt: o.uploaded.toISOString(), sha256: o.customMetadata?.sha256 || null };
+}
+async function dataBytes(bucket, prefix) {
+  let cursor, total = 0;
+  do {
+    const page = await bucket.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}) });
+    total += page.objects.reduce((n,o) => n+o.size,0);
+    if (page.truncated && (!page.cursor || page.cursor === cursor)) throw new Error('IncompleteListing');
+    cursor = page.truncated ? page.cursor : null;
+  } while (cursor);
+  return total;
 }
 export async function storageSnapshot(env, refresh = false, cache = globalThis.caches?.default) {
   const cached = await cache?.match(CACHE_KEY).catch(() => null);
@@ -25,10 +35,14 @@ export async function storageSnapshot(env, refresh = false, cache = globalThis.c
   const services = [];
   for (const [id, spec] of Object.entries(SERVICES)) {
     try {
-      const [daily, monthly, legacyDaily, legacyMonthly] = await Promise.all([listObjects(env.BACKUP, `d1/${id}/v2/daily/`), listObjects(env.BACKUP, `d1/${id}/v2/monthly/`), listObjects(env.BACKUP, `d1/${id}/daily/`), listObjects(env.BACKUP, `d1/${id}/monthly/`)]);
+      const [v3Daily, v3Monthly, v2Daily, v2Monthly, legacyDaily, legacyMonthly, storedDataBytes] = await Promise.all([
+        listObjects(env.BACKUP, `d1/${id}/v3/daily/`), listObjects(env.BACKUP, `d1/${id}/v3/monthly/`),
+        listObjects(env.BACKUP, `d1/${id}/v2/daily/`), listObjects(env.BACKUP, `d1/${id}/v2/monthly/`),
+        listObjects(env.BACKUP, `d1/${id}/daily/`), listObjects(env.BACKUP, `d1/${id}/monthly/`), dataBytes(env.BACKUP, `d1/${id}/v3/data/`)]);
+      const daily = [...v3Daily,...v2Daily], monthly = [...v3Monthly,...v2Monthly];
       services.push({ id, label: spec.label, storageAvailable: true,
         legacy: [...legacyDaily,...legacyMonthly].map(metadata),
-        bytes: [...daily, ...monthly, ...legacyDaily, ...legacyMonthly].reduce((n, o) => n + o.size, 0),
+        bytes: storedDataBytes + [...daily, ...monthly, ...legacyDaily, ...legacyMonthly].reduce((n, o) => n + o.size, 0),
         daily: daily.map(metadata).sort((a, b) => b.name.localeCompare(a.name)),
         monthly: monthly.map(metadata).sort((a, b) => b.name.localeCompare(a.name)) });
     } catch { services.push({ id, label: spec.label, storageAvailable: false }); }

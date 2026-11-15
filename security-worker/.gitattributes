@@ -1,0 +1,2 @@
+# Keep byte-hashed asset redirects identical on Windows and CI.
+public/_redirects text eol=lf

@@ -11,6 +11,8 @@ import {
   workspace
 } from "./web-app-registry.mjs";
 
+import { assertLoginContract } from "./login-contract.mjs";
+
 const registry = await loadWebAppRegistry();
 assert.equal(registry.schemaVersion, 1);
 assert.equal(registry.contract.autoUpdateValue, "enabled");
@@ -31,6 +33,7 @@ for (const app of registry.apps) {
     assert(!registeredHtml.has(entrypoint), `entrypointが重複しています: ${entrypoint}`);
     registeredHtml.add(entrypoint);
     const source = await readFile(resolve(workspace, entrypoint), "utf8");
+    await assertLoginContract(source, app, workspace);
     if (/\/security\/passkey-client\.js\?v=/.test(source)) usesSharedPasskeyClient = true;
     const contracted = app.buildMode === "prepared-commit"
       ? ensureHtmlContract(source, app, registry.contract, build)
@@ -139,3 +142,4 @@ const staticAssetsBuilder = await readFile(resolve(workspace, "tools/prepare-sta
 assert.match(staticAssetsBuilder, /publicRootFiles\s*=\s*new Set\(\["robots\.txt"\]\)/, "robots.txtを静的公開成果物へ含めてください");
 
 process.stdout.write(`Web自動更新contract: ${registry.apps.length}アプリ・${registeredHtml.size} HTMLを確認しました。\n`);
+await import('./test-pwa-install.mjs');

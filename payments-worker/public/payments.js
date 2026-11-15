@@ -28,7 +28,7 @@
     entries=[];summary={};currentMonth='';editing=detail=detailEntry=confirmAction=null;initial='';requestId=confirmRequestId=null;monthPage=0;pendingMarks.clear();needsRefresh=false;
     form.reset();for(const input of document.querySelectorAll('dialog input,dialog textarea'))input.value='';form.dataset.troomDirty='false';render();
     for(const id of ['months-title','month-items','month-pagination','operation-history','months-error','confirm-title','confirm-copy','confirm-error','calculation','form-error','message','account-name'])$(id)?.replaceChildren();
-    $('app-view').hidden=true;$('login-view').hidden=false;$('login').hidden=false;$('boot-message').textContent='パスキーでログインしてください。';setBusy(false);
+    $('app-view').hidden=true;$('login-view').hidden=false;$('login').hidden=false;$('boot-message').textContent='パスキーを使ってログインしてください。';setBusy(false);
     if(broadcast)channel?.postMessage('session-changed');
   }
   async function api(path,body,method='POST'){
@@ -258,6 +258,6 @@
   document.addEventListener('troom:before-auto-update', event => { if (busy || ($('entry-dialog').open && dirty()) || $('confirm-dialog').open || $('date-wheel-dialog').open || $('troom-calendar-dialog').open) event.preventDefault(); });
   (async () => {
     try { const session = await api('/session'); showApp(session); await load(); }
-    catch (error) { if ($('app-view').hidden) { $('boot-message').textContent = 'パスキーでログインしてください。'; $('login').hidden = false; if (!error.message.includes('ログインしてください')) $('login-error').textContent = error.message; } else $('message').textContent = error.message; }
+    catch (error) { if ($('app-view').hidden) { $('boot-message').textContent = 'パスキーを使ってログインしてください。'; $('login').hidden = false; if (!error.message.includes('ログインしてください')) $('login-error').textContent = error.message; } else $('message').textContent = error.message; }
   })();
 })();

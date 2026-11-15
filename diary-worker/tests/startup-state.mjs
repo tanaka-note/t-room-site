@@ -4,6 +4,32 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 const source = readFileSync(new URL('../public/diary.js', import.meta.url), 'utf8');
 
+test('album month filter retains selection and the total/monthly photo counts', async () => {
+  for (const [months, labels] of [
+    [[], ['すべて（0枚）']],
+    [[{ value: '2026-10', count: 0 }], ['すべて（0枚）', '2026年10月（0枚）']],
+    [[{ value: '2026-10', count: 999 }], ['すべて（999枚）', '2026年10月（999枚）']],
+    [[{ value: '2026-10', count: 1000 }], ['すべて（1,000枚）', '2026年10月（1,000枚）']],
+    [[{ value: '2026-10', count: '1234' }, { value: '2026-09', count: 423 }],
+      ['すべて（1,657枚）', '2026年10月（1,234枚）', '2026年9月（423枚）']]
+  ]) {
+    const state = { photoMonth: months[0]?.value || '', photoOrder: 'oldest' };
+    const elements = {
+      photoMonthFilter: {}, dateWheelDialog: { open: false },
+      photoSortButton: { setAttribute() {} }
+    };
+    const api = async path => { assert.equal(path, '/photos/meta'); return { months }; };
+    const load = new Function('state', 'elements', 'api', 'document', 'sessionGeneration',
+      ['loadPhotoMeta', 'renderPhotoMonthFilter', 'photoCountLabel', 'formatMonth', 'updatePhotoSortButton'].map(body).join('\n')
+        + '\nreturn loadPhotoMeta;')(state, elements, api, { createElement: () => ({}) }, 0);
+    await load();
+    assert.equal(elements.photoMonthFilter.textContent, labels[months.length ? 1 : 0]);
+    assert.deepEqual([...state.photoMonthCounts], months.map(item => [item.value, Number(item.count)]));
+    assert.equal(elements.photoMonthFilter.value, state.photoMonth);
+    assert.equal(elements.photoSortButton.hidden, !state.photoMonth);
+  }
+});
+
 function albumFixture({ total = 5001, pageMs = 0, overReturn = 0, emptyPage = false } = {}) {
   const state = { photos: [], photoOffset: 0, photoHasMore: false, photoLoading: false, photoRequestId: 0 };
   const node = () => ({ children: [], dataset: {}, setAttribute() {},
@@ -24,7 +50,7 @@ function albumFixture({ total = 5001, pageMs = 0, overReturn = 0, emptyPage = fa
     return { photos, hasMore: emptyPage || offset + photos.length < total };
   };
   const constants = [...source.matchAll(/  const CAMERA_ROLL_\w+ = \d+;/g)].map(match => match[0]).join('\n');
-  const functions = ['cancelCameraRollLoad', 'loadPhotos', 'renderCameraRoll'].map(body).join('\n');
+  const functions = ['cancelCameraRollLoad', 'loadPhotos', 'renderCameraRoll', 'renderCameraRollStatus'].map(body).join('\n');
   const loaded = new Function('state', 'elements', 'api', 'performance', 'document', 'window', `
     ${constants}
     const createEmpty = () => ({}), formatDate = value => value, formatShortDate = value => value;
@@ -57,11 +83,11 @@ test('album opens with 48 photos, expands to the total cap and cannot grow on re
 
 test('album month and search results share the cap, and reset frees the old list', async () => {
   const f = albumFixture();
-  f.state.photoMonth = '2026-10'; f.state.photoEntryQuery = 'tag'; f.state.photoFileNameQuery = 'file';
+  f.state.photoMonth = '2026-10'; f.state.photoEntryQuery = 'tag';
   await f.loadPhotos(true); await f.loadPhotos(false);
   assert.equal(f.state.photos.length, f.max);
   assert.ok(f.requests.every(r => r.url.searchParams.get('month') === '2026-10'
-    && r.url.searchParams.get('entryQuery') === 'tag' && r.url.searchParams.get('fileName') === 'file'));
+    && r.url.searchParams.get('entryQuery') === 'tag' && !r.url.searchParams.has('fileName')));
   const oldPhotos = f.state.photos;
   await f.loadPhotos(true);
   assert.notEqual(f.state.photos, oldPhotos);
@@ -306,6 +332,7 @@ function returnViewFixture() {
     ${body('hasDiaryReturnNavigation')}
     ${body('isOwnedDiaryReturnView')}
     ${body('updateDiaryReturnNavigation')}
+    ${body('diaryListHref')}
     ${body('configureDiaryReturnNavigation')}
     ${body('isDiaryListPath')}
     let hide;

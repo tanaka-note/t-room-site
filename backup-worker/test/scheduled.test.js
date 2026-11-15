@@ -6,6 +6,7 @@ import {SERVICES} from '../src/registry.js';
 import {backupService,capture,compress,digest} from '../src/backup.js';
 import {getBackupSnapshot} from '../src/browser.js';
 import {database,d1,Bucket} from './fixtures.mjs';
+import {dispatchServices} from '../src/dispatch.js';
 
 const ids=Object.keys(SERVICES);
 const scheduledTime=Date.now();
@@ -13,11 +14,12 @@ const scheduledTime=Date.now();
 // imports are supplied by the fixture. The scheduled handler is never replaced.
 const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8')
  .replace(/^import .*;\r?\n/gm,'')
+ .replace(/^export \{.*;\r?\n/gm,'')
  .replace('export class BackupBrowserIntegration','class BackupBrowserIntegration')
  .replace('export default {','globalThis.worker = {');
 function harness(backup) {
  const info=[],errors=[],calls=[];
- const context={WorkerEntrypoint:class{},SERVICES,crypto,getBackupSnapshot,
+ const context={WorkerEntrypoint:class{},SERVICES,crypto,getBackupSnapshot,dispatchServices,
   console:{log:value=>info.push(value),error:value=>errors.push(value)},
   backupService:async(env,id,now)=>{calls.push(id);return backup(env,id,now);}};
  vm.runInNewContext(source,context);
@@ -25,6 +27,12 @@ function harness(backup) {
   summary:()=>[...info,...errors].map(line=>JSON.parse(line)).find(event=>event.event==='backup_run_finished')};
 }
 const incomplete=error=>error.name==='BackupRunError'&&error.message==='Backup run incomplete';
+test('actual Cron uses Workflow dispatch without running legacy captures when the binding exists',async t=>{
+ t.mock.method(console,'log',()=>{});
+ const h=harness(async()=>{throw new Error('legacy path');}),created=[];
+ await h.run({D1_BACKUPS:{async create(job){created.push(job.params.service);}}});
+ assert.deepEqual(created,ids);assert.deepEqual(h.calls,[]);assert.equal(h.summary(),undefined);
+});
 function checkSummary(h,expected) {
  assert.deepEqual(h.calls,ids,'every service must be attempted before the invocation finishes');
  const summary=h.summary();

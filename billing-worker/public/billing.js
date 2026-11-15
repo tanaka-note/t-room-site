@@ -48,7 +48,20 @@
       capture: () => ({ account: state.summary?.account.id, month: state.summary?.month }),
       restore: saved => !!state.session && saved.account === state.summary?.account.id && saved.month === state.summary?.month
     });
-    dialogs.register("logs-dialog", { restore: () => !!state.session });
+    dialogs.register("logs-dialog", {
+      restore: () => {
+        if (!state.session) return false;
+        void loadLogs();
+        requestAnimationFrame(resetLogsPosition);
+        return true;
+      },
+      onClose: () => {
+        logsRequest++;
+        el["logs-account-filter"].value = "";
+        el["logs-body"].replaceChildren();
+        resetLogsPosition();
+      }
+    });
     dialogs.register("date-wheel-dialog", { backdrop: applyDateWheel, onClose: () => { state.dateWheelTarget = null; state.dateWheelMode = "date"; } });
     document.addEventListener("troom:before-auto-update", (event) => {
       if (document.querySelector("dialog[open]")) event.preventDefault();
@@ -445,20 +458,30 @@
     }
   }
 
+  let logsRequest = 0;
+  function resetLogsPosition() {
+    el["logs-dialog"].scrollTop = 0;
+    el["logs-dialog"].scrollLeft = 0;
+    el["logs-dialog"].querySelector(".logs-wrap").scrollTop = 0;
+    el["logs-dialog"].querySelector(".logs-wrap").scrollLeft = 0;
+  }
+
   async function openLogs() {
     dialogs.open("logs-dialog");
+    resetLogsPosition();
     await loadLogs();
   }
 
   async function loadLogs() {
     const session = state.session;
+    const request = ++logsRequest;
     el["logs-body"].innerHTML = `<tr><td colspan="4">読み込み中…</td></tr>`;
     const accountId = el["logs-account-filter"].value;
     try {
       const query = new URLSearchParams({ limit: "100" });
       if (accountId) query.set("accountId", accountId);
       const result = await api(`/audit-logs?${query}`);
-      if (state.session !== session) return;
+      if (state.session !== session || request !== logsRequest || !el["logs-dialog"].open) return;
       el["logs-body"].innerHTML = result.logs.map((log) => `<tr>
         <td>${escapeHtml(formatTimestampJp(log.occurredAt))}</td>
         <td>${escapeHtml(eventLabel(log.eventType))}</td>
@@ -466,7 +489,7 @@
         <td>${escapeHtml(auditTargetLabel(log))}</td>
       </tr>`).join("") || `<tr><td colspan="4">履歴はありません。</td></tr>`;
     } catch (error) {
-      if (state.session !== session) return;
+      if (state.session !== session || request !== logsRequest || !el["logs-dialog"].open) return;
       el["logs-body"].innerHTML = `<tr><td colspan="4">${escapeHtml(error.message)}</td></tr>`;
     }
   }
