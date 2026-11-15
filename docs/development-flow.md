@@ -203,7 +203,7 @@ HouseholdとCalendarも変更対象だけを自動公開し、手動 production_
 
 初回だけ旧Workerにdeployment-statusがないため自動preflightは停止する。専用手順として、対象CI成功・最新main・clean checkoutを確認し、既存Wrangler認証でSecret名/bindingとD1のd1_migrationsを読み取る。Household 0005は追加DDL/indexのみで既存レコードを削除しないことをレビューして適用する。該当target全体のbuild freshness検査後に通常のWrangler公開を行い、公開build、active version、deployment-statusを読み戻す。Calendarの初回公開でもBUILD_IDを最新main SHAに設定する。その後、同一mainの失敗したActions公開jobを再実行し、通常のversion upload→100% promotion→公開後照合を確認する。検査を無効化したりActions環境変数を偽装しない。
 
-Weekly cross-service regressionは月曜06:20 JSTと手動実行で、auth/backup/household/calendar/security、DiaryとCloudの限定smokeを実行する。共通認証、実Security連携、バックアップの隔離復元、主要画面、家計簿の4規模fixtureを変更の有無によらず確認する。production Environment・Secrets・公開jobは使わず、Container/Androidビルド/全CloudメディアE2Eは含めない。結果と失敗traceを14日保管する。通常の変更対象CIは継続する。
+Weekly cross-service regressionは月曜06:20 JSTと手動実行、週次構成を変更するPRで、auth/backup/household/calendar/security/payments/site、DiaryとCloudの限定smokeの9区分を実行する。共通認証、実Security連携、バックアップの隔離復元、主要画面、家計簿の4規模fixtureを変更の有無によらず確認する。Payments・サイト本体とSecurityにはブラウザとWorker dry-run build、Diaryには401認証失効時の編集内容・セッション消去を含める。production Environment・Secrets・公開jobは使わず、Container/Androidビルド/全CloudメディアE2Eは含めない。結果と失敗traceを14日保管する。通常の変更対象CIは継続する。
 
 ### 共通ログイン画面
 
