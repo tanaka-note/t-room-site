@@ -354,7 +354,7 @@ test('new navigation starts at zero before any wait; reload/history leave positi
     if (type === 'navigate') assert.equal(calls[0].behavior, 'instant');
     else assert.equal(window.history.scrollRestoration, 'manual');
   }
-  assert.match(bootstrap, /},\s*initialScrollIntent,\s*encryptionRuntime\);/);
+  assert.match(bootstrap, /},\s*initialScrollIntent,\s*encryptionRuntime,\s*preparationMessage\);/);
   assert.match(body('enterDiary'), /initialScrollIntent\.interrupted\s*&&\s*!encryptedNavigationType\s*\? -1 : positionVersion/);
   const style = readFileSync(new URL('../public/diary.css', import.meta.url), 'utf8');
   assert.match(style, /html \{[^}]*scroll-behavior: auto/);

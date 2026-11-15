@@ -50,7 +50,7 @@
       ...(body ? { body: JSON.stringify(body) } : {})
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "日記を読み込めませんでした。");
+    if (!response.ok) throw Object.assign(new Error(result.error || "日記を読み込めませんでした。"),{status:response.status});
     return result;
   }
 
@@ -69,6 +69,13 @@
 
   async function enterDiary(session,authentication=null) {
     let encryptionRuntime=null;
+    let preparationMessage;
+    if(authentication&&session.encryption) {
+      try {
+        const preparation=await import(new URL(`diary-key-preparation.js${scriptUrl.search}`,scriptUrl).href);
+        await preparation.prepareDiaryKeys((path,options={})=>api(path,options.body),session,authentication);
+      }catch(error){if(session.encryption.enabled||error.sessionChanged||[401,403].includes(error.status))throw error;preparationMessage='日記は利用できますが、暗号化の利用準備を完了できませんでした。対応するパスキーで次回ログイン時に再試行します。';}
+    }
     if(session.encryption?.enabled){const encryption=await import(new URL(`diary-encryption.js${scriptUrl.search}`,scriptUrl).href);encryptionRuntime=await encryption.startEncryptedDiary(session,authentication);}
     // A rejected load can be retried, without fetching the runtime before authentication.
     if (!runtimePromise) {
@@ -85,7 +92,7 @@
       button.querySelector(".passkey-login-label").textContent = "パスキーでログイン";
       events.abort();
       return deferredInstallPrompt;
-    },initialScrollIntent,encryptionRuntime);
+    },initialScrollIntent,encryptionRuntime,preparationMessage);
   }
 
   let trust;
@@ -101,8 +108,9 @@
     button.setAttribute("aria-busy", "true");
     button.querySelector(".passkey-login-label").textContent = "確認中…";
     message.textContent = "";
+    let authentication;
     try {
-      const authentication = await TRoomPasskeys.authenticate("diary", links => TRoomPasskeys.chooseLinkDialog(links, "diary"));
+      authentication = await TRoomPasskeys.authenticate("diary", links => TRoomPasskeys.chooseLinkDialog(links, "diary"));
       const session = await api("/passkey/handoff", { handoffToken: authentication.handoff.handoffToken });
       await enterDiary(session,authentication);
     } catch (error) {
@@ -112,6 +120,7 @@
         ? "パスキーを利用できるブラウザで開いてください。復旧が必要な場合は管理者へご相談ください。"
         : error.message);
     } finally {
+      authentication?.prfOutput?.fill(0);
       if (!events.signal.aborted) {
         button.disabled = false;
         button.removeAttribute("aria-busy");
@@ -146,6 +155,6 @@
       const session = await api("/session");
       if (session.authenticated) await enterDiary(session);
       else showLogin();
-    } catch (error) { if(error.trustRequired)trust.hidden=false;showLogin(error.message); }
+    } catch (error) { if(error.trustRequired)showTrustImport();showLogin(error.message); }
   })();
 })();

@@ -1,4 +1,4 @@
-import { diaryKeyBundle,handleDiaryKeys,diaryKeysEnabled,diaryAuthenticationOrigins } from "./diary-keys.js";
+import { diaryAutomaticVault,diaryKeyBundle,handleDiaryKeys,diaryKeysEnabled,diaryAuthenticationOrigins } from "./diary-keys.js";
 import { runState } from '../../backup-worker/src/monitor.js';
 import { archiveAuditEvents, archiveIfPending } from './audit-archive.js';
 import { healthKeyBundle, handleHealthKeys, healthMembershipStatement, assertHealthMemberAvailable } from './health-keys.js';
@@ -171,6 +171,10 @@ export default class SecurityWorker extends WorkerEntrypoint {
   }
 
   async getDiaryKeyBundle(input) { return diaryKeyBundle(this.env,input); }
+
+  async prepareDiaryVault(input) {
+    return diaryAutomaticVault(this.env,input,validatePasskeySession,(eventType,identityId)=>storeAuditEvent(this.env,{service:'diary',eventType,outcome:'success',identityId,credentialId:input.credentialId,serviceLinkId:input.serviceLinkId,serviceAccountId:input.serviceAccountId,authMethod:'passkey',sessionId:input.sessionId}));
+  }
 
   async getHealthKeyBundle(input) {
     return healthKeyBundle(this.env, input);

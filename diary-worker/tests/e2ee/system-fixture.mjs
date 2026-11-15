@@ -4,7 +4,7 @@ import { registerHooks } from 'node:module';
 import { randomBytes,createHmac } from 'node:crypto';
 import { createVault } from '../../e2ee/crypto.mjs';
 import { prepareKeyConfiguration } from '../../e2ee/setup.mjs';
-import { diaryRecipientId,handleDiaryKeys,diaryKeyBundle } from '../../../security-worker/src/diary-keys.js';
+import { diaryRecipientId,handleDiaryKeys,diaryKeyBundle,diaryAutomaticVault } from '../../../security-worker/src/diary-keys.js';
 registerHooks({resolve(specifier,context,next){if(specifier==='cloudflare:workers')return {url:'data:text/javascript,export class WorkerEntrypoint {}',shortCircuit:true};return next(specifier,context);}});
 const {default:worker,SecurityIntegration}=await import('../../src/index.js');
 function database(service) {
@@ -46,6 +46,7 @@ export async function systemFixture({recoveryBits=3072,recoveryExtractable=false
   db.sqlite.prepare("UPDATE diary_e2ee_control SET phase=?,generation=?,ever_encrypted=?").run(phase,phase==="encrypted"?1:0,phase==="encrypted"?1:0);
   env.MEDIA={put:async(key,body,metadata)=>{r2.set(key,{bytes:new Uint8Array(await new Response(body).arrayBuffer()),metadata});},get:async key=>{const value=r2.get(key);return value?{body:new Blob([value.bytes]).stream()}:null;},delete:async key=>{r2.delete(key);}};
   env.SECURITY={getDiaryKeyBundle:input=>diaryKeyBundle(centralEnv,input),validatePasskeySession:async input=>({valid:users[input.serviceAccountId]?.active===true}),passkeyRollingSession:async input=>({valid:users[input.serviceAccountId]?.active!==false,expiresAt:Math.floor(Date.now()/1000)+43200}),recordAuditEvent:async()=>({stored:true}),redeemHandoff:async token=>{const user=users[token];return user?{identityId:user.identityId,credentialId:user.credentialId,serviceLinkId:user.serviceLinkId,serviceAccountId:user.serviceAccountId,sessionEpoch:1}:null;}};
+  env.SECURITY.prepareDiaryVault=input=>diaryAutomaticVault(centralEnv,input,async(_env,claims)=>({valid:users[claims.serviceAccountId]?.active===true&&claims.sessionEpoch===1&&claims.identityId===users[claims.serviceAccountId]?.identityId&&claims.credentialId===users[claims.serviceAccountId]?.credentialId}));
   function cookie(accountId='main-admin',user=users[accountId]) {
     const payload={accountId,role:user.claims.isGlobalOwner||accountId!=='main-user'?'admin':'user',version:'3',accountVersion:db.sqlite.prepare('SELECT session_version FROM diary_accounts WHERE id=?').get(accountId)?.session_version||1,authMethod:'passkey',exp:Math.floor(Date.now()/1000)+3600,startedAt:new Date().toISOString(),identityId:user.identityId,credentialId:user.credentialId,serviceLinkId:user.serviceLinkId,serviceAccountId:accountId,passkeySessionEpoch:1};
     const encoded=Buffer.from(JSON.stringify(payload)).toString('base64url');return `troom_diary_session=${encoded}.${createHmac('sha256',env.SESSION_SECRET).update(encoded).digest('base64url')}`;
