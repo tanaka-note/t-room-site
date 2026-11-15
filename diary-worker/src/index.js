@@ -176,15 +176,6 @@ export default {
     let timing;
     try {
       const url = new URL(request.url);
-      if(encryptionEnabled(env)&&env.DIARY_ENCRYPTION_ORIGIN&&url.origin!==diaryEncryptionOrigin(env)&&request.method==='GET'&&url.pathname.startsWith('/diary')&&!url.pathname.startsWith('/diary/api/')&&String(request.headers.get('Accept')||'').includes('text/html')) {
-        const control=await readRollout(env.DB);
-        if(control.everEncrypted) {
-          // Legacy search/tag URLs can contain plaintext. Do not copy them to
-          // the dedicated origin or forward POST bodies across that boundary.
-          const path=url.pathname.startsWith('/diary/tag/')?'/diary/':url.pathname;
-          return secureResponse(Response.redirect(new URL(path,diaryEncryptionOrigin(env)),308));
-        }
-      }
       const authentication=await proxyDiaryAuthentication(request,env);if(authentication)return secureResponse(authentication);
       if(url.pathname==="/assets/pwa-auto-update.js"&&encryptionEnabled(env))return env.ASSETS.fetch(new Request(new URL("/origin-assets/pwa-auto-update.js",url),request));
       if (url.pathname === `${BASE_PATH}.html`) {
@@ -209,6 +200,16 @@ export default {
         return secureResponse(timing.append(await withRollingSession(request, response, env, url, path, getSession)));
       }
 
+      const isDiaryNavigation=path==='/'||path==='/tags'||path==='/tags/'||path.startsWith('/entry/')||path.startsWith('/tag/')||path==='/trash'||path==='/favorites'||path==='/favorites/'||path==='/investment'||path==='/investment/';
+      if(isDiaryNavigation&&request.method==='GET'&&encryptionEnabled(env)&&env.DIARY_ENCRYPTION_ORIGIN&&url.origin!==diaryEncryptionOrigin(env)) {
+        const control=await readRollout(env.DB);
+        if(control.everEncrypted) {
+          // Legacy search/tag URLs can contain plaintext. Do not copy them to
+          // the dedicated origin or forward POST bodies across that boundary.
+          const path=url.pathname.startsWith('/diary/tag/')?'/diary/':url.pathname;
+          return secureResponse(Response.redirect(new URL(path,diaryEncryptionOrigin(env)),308));
+        }
+      }
       if (request.method !== "GET" && request.method !== "HEAD") {
         return secureResponse(json({ error: "Method not allowed" }, 405));
       }
