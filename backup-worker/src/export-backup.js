@@ -1,6 +1,8 @@
+import {verifyLegacyCoverage,requireFrozenMigration} from '../../diary-worker/e2ee/migration-store.mjs';
+import {DIARY_ENCRYPTED_MIGRATION,SECURITY_DIARY_MIGRATION,ENCRYPTED_DIARY_TABLES,SECURITY_DIARY_TABLES,readDiaryKeyMetadata,sameKeyMetadata,verifyEncryptedDiaryRow} from './diary-encrypted.js';
 import { SERVICES,archiveSpec } from './registry.js';
 import { BACKUP_TABLES } from '../../diary-worker/src/backup.js';
-import { assertSchema,assertArchiveSchema } from './schema-guard.js';
+import { assertSchema,assertArchiveSchema,assertEncryptedSchema } from './schema-guard.js';
 import { compress, decode, digest, verifiedPut, verifiedGeneration } from './integrity.js';
 import { sqlStatements, exportedRows } from './export-sql.js';
 import { listObjects } from './backup.js';
@@ -18,14 +20,16 @@ export const DATABASES = {
   diary: 'e4677259-db4b-4562-ad82-fe542a1edb75', portfolio: '8fd0d41b-8ce2-42b8-a2e8-8c4461d08b32'
 };
 
-export function exportSpec(service) {
+export function exportSpec(service,migration) {
+  if(service==='diary'&&migration===DIARY_ENCRYPTED_MIGRATION)return {database:'diary-db',binding:'DIARY_DB',migration,tables:[...BACKUP_TABLES.filter(t=>['diary_accounts','investment_history'].includes(t.name)).map(t=>({...t,sourceColumns:t.columns.join(',')})),...ENCRYPTED_DIARY_TABLES]};
+  if(service==='security'&&migration===SECURITY_DIARY_MIGRATION)return {...SERVICES.security,migration,tables:[...SERVICES.security.tables,...SECURITY_DIARY_TABLES]};
   if (service === 'diary') return { database: 'diary-db', binding: 'DIARY_DB', migration: '0022_photo_backup_identity.sql',
     tables: BACKUP_TABLES.map(t => ({ ...t, sourceColumns: t.columns.join(',') })) };
   if (!Object.hasOwn(SERVICES, service)) throw new Error('SourceUnavailable');
   return SERVICES[service];
 }
 export const exportBucket = (env, service) => service === 'diary' ? env.DIARY_BACKUP : env.BACKUP;
-export const exportPrefix = service => service === 'diary' ? 'v9/' : `d1/${service}/v3/`;
+export const exportPrefix = (service,migration) => service === 'diary' ? (migration===DIARY_ENCRYPTED_MIGRATION?'v10/':'v9/') : service==='security'&&migration===SECURITY_DIARY_MIGRATION?'d1/security/v4/':`d1/${service}/v3/`;
 export const exportDay = now => new Date(now + 9 * 3600000).toISOString().slice(0, 10);
 
 async function schemaMetadata(db, service, spec) {
@@ -42,7 +46,8 @@ async function schemaMetadata(db, service, spec) {
     return { name: t.name, columns: t.columns, sourceColumns: actual.join(',') };
   });
   const schema = results.at(-1).results;
-  await assertSchema(service, schema);
+  if([DIARY_ENCRYPTED_MIGRATION,SECURITY_DIARY_MIGRATION].includes(spec.migration)||service==='diary'&&schema.some(row=>row.name==='diary_e2ee_control'))await assertEncryptedSchema(service,schema);
+  else await assertSchema(service, schema);
   return { tables, schema };
 }
 
@@ -83,13 +88,14 @@ async function openExport(env, service, tables, fetcher, sleep) {
 }
 
 export function validateExportManifest(manifest, service) {
-  const spec = service==='household'?archiveSpec(service,manifest?.expectedMigration):exportSpec(service), prefix = exportPrefix(service);
+  const spec = service==='household'?archiveSpec(service,manifest?.expectedMigration):exportSpec(service,manifest?.expectedMigration), prefix = exportPrefix(service,manifest?.expectedMigration);
   if (manifest?.format !== FORMAT || manifest.service !== service || manifest.database !== spec.database || manifest.expectedMigration !== spec.migration
     || manifest.consistency !== 'single-database-export' || !Number.isFinite(Date.parse(manifest.scheduledFor))
     || !Number.isFinite(Date.parse(manifest.createdAt)) || !Number.isFinite(Date.parse(manifest.completedAt))
     || typeof manifest.bookmark !== 'string' || !manifest.bookmark || manifest.bookmark.length > 256
     || !Array.isArray(manifest.schema) || !Array.isArray(manifest.parts) || manifest.parts.length > MAX_PARTS
     || Object.keys(manifest.tables || {}).sort().join(',') !== spec.tables.map(t => t.name).sort().join(',')) throw new Error('SnapshotInvalid');
+  if(spec.migration===DIARY_ENCRYPTED_MIGRATION&&(!manifest.keyMetadata?.directory||!manifest.keyMetadata?.anchor||!manifest.keyMetadata?.recoveryEnvelope))throw new Error('SnapshotInvalid');
   const counts = Object.fromEntries(spec.tables.map(t => [t.name, 0]));
   const keys = new Set(); let bytes = 0;
   for (const part of manifest.parts) {
@@ -123,8 +129,8 @@ export async function* readExportParts(bucket, manifest, service) {
 export async function readExportManifest(bucket, key, service, deep = true) {
   const verified = await verifiedGeneration(bucket, key, p => validateExportManifest(p, service));
   if (!verified) return null;
-  const day = exportDay(Date.parse(verified.payload.scheduledFor)), prefix = exportPrefix(service);
-  if (key !== `${prefix}daily/${day}.json.gz` && key !== `${prefix}monthly/${day.slice(0,7)}.json.gz`) throw new Error('SnapshotInvalid');
+  const day = exportDay(Date.parse(verified.payload.scheduledFor)), prefix = exportPrefix(service,verified.payload.expectedMigration);
+  if (key !== `${prefix}daily/${day}.json.gz` && key !== `${prefix}monthly/${day.slice(0,7)}.json.gz` && !(verified.payload.expectedMigration===DIARY_ENCRYPTED_MIGRATION&&key.startsWith(prefix+'checkpoints/')&&key.endsWith('.json.gz')&&UUID.test(key.slice((prefix+'checkpoints/').length,-8)))) throw new Error('SnapshotInvalid');
   await assertArchiveSchema(service,verified.payload.expectedMigration,verified.payload.schema);
   if (deep) for await (const _part of readExportParts(bucket, verified.payload, service)) { /* verifies one bounded part at a time */ }
   return verified;
@@ -132,10 +138,27 @@ export async function readExportManifest(bucket, key, service, deep = true) {
 
 // One fixed D1 export, streamed into bounded, projected parts. Total DB size is
 // never accumulated as Worker JSON and live-table paging is never used.
-export async function saveExport(env, service, now, { fetcher = fetch, sleep = ms => new Promise(r => setTimeout(r, ms)), guard = async () => {} } = {}) {
-  const spec = exportSpec(service), bucket = exportBucket(env, service), prefix = exportPrefix(service), day = exportDay(now);
+export async function saveExport(env, service, now, { fetcher = fetch, sleep = ms => new Promise(r => setTimeout(r, ms)), guard = async () => {},checkpoint = null } = {}) {
+  let migration;
+  if(['diary','security'].includes(service)) {
+    const db=env[exportSpec(service).binding],table=service==='diary'?'diary_e2ee_control':'security_diary_key_config';
+    if(db&&await db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name=?").bind(table).first()) {
+      const legacy=service==='diary'&&(await db.prepare('SELECT phase FROM diary_e2ee_control WHERE id=1').first())?.phase==='legacy';
+      if(!legacy)migration=service==='diary'?DIARY_ENCRYPTED_MIGRATION:SECURITY_DIARY_MIGRATION;
+    }
+  }
+  const spec = exportSpec(service,migration), bucket = exportBucket(env, service), prefix = exportPrefix(service,migration), day = exportDay(now);
+  const keyMetadata=migration===DIARY_ENCRYPTED_MIGRATION?await readDiaryKeyMetadata(env.SECURITY_DB):null;
+  if(keyMetadata) {
+    const rotation=await env.DIARY_DB.prepare('SELECT status,configuration FROM diary_e2ee_rotation WHERE id=1').first();
+    if(rotation?.status==='committed'&&JSON.parse(rotation.configuration).directory.value.generation>keyMetadata.directory.value.generation)throw new Error('DiaryKeyGenerationConflict');
+    const control=await env.DIARY_DB.prepare('SELECT phase,ever_encrypted FROM diary_e2ee_control WHERE id=1').first();
+    if(control?.phase==='migrating'&&!control.ever_encrypted){await requireFrozenMigration(env.DIARY_DB);await verifyLegacyCoverage(env.DIARY_DB);}
+    else if(!control?.ever_encrypted||!['encrypted','paused'].includes(control.phase))throw new Error('DiaryBackupRequiresEncryptedSnapshot');
+  }
   if (!bucket || !env[spec.binding]) throw new Error('SourceUnavailable');
-  const daily = `${prefix}daily/${day}.json.gz`, monthly = `${prefix}monthly/${day.slice(0,7)}.json.gz`;
+  if(checkpoint&&(migration!==DIARY_ENCRYPTED_MIGRATION||!UUID.test(checkpoint)))throw new Error('InvalidDiaryCheckpoint');
+  const daily = checkpoint?`${prefix}checkpoints/${checkpoint}.json.gz`:`${prefix}daily/${day}.json.gz`, monthly = `${prefix}monthly/${day.slice(0,7)}.json.gz`;
   let saved = await readExportManifest(bucket, daily, service);
   if (!saved) {
     const meta = await schemaMetadata(env[spec.binding], service, spec);
@@ -157,6 +180,7 @@ export async function saveExport(env, service, now, { fetcher = fetch, sleep = m
     };
     try {
       for await (const sql of sqlStatements(body)) for (const { table, row } of exportedRows(sql, meta.tables)) {
+        if(keyMetadata)await verifyEncryptedDiaryRow(table,row,keyMetadata.directory.value);
         const size = new TextEncoder().encode(JSON.stringify(row)).length;
         if (size > 8 * 1024 * 1024) throw new Error('SnapshotTooLarge');
         if (pendingTable !== table || pendingBytes + size > PART_BYTES || pending.length >= 1000) await flush();
@@ -165,7 +189,8 @@ export async function saveExport(env, service, now, { fetcher = fetch, sleep = m
       await flush();
       const after = await schemaMetadata(env[spec.binding], service, spec);
       if (JSON.stringify(after) !== JSON.stringify(meta)) throw new Error('SchemaReviewRequired');
-      const manifest = { format: FORMAT, service, database: spec.database, expectedMigration: spec.migration, schema: meta.schema,
+      if(keyMetadata&&!sameKeyMetadata(keyMetadata,await readDiaryKeyMetadata(env.SECURITY_DB)))throw new Error('DiaryKeyGenerationConflict');
+      const manifest = { ...(keyMetadata?{keyMetadata}:{}),format: FORMAT, service, database: spec.database, expectedMigration: spec.migration, schema: meta.schema,
         scheduledFor: new Date(now).toISOString(), createdAt, completedAt: new Date().toISOString(), consistency: 'single-database-export', bookmark,
         tables: tableInfo, parts, bytes: parts.reduce((n,p) => n+p.bytes,0), rowCount: Object.values(tableInfo).reduce((n,t) => n+t.rowCount,0) };
       validateExportManifest(manifest, service);
@@ -186,22 +211,23 @@ export async function saveExport(env, service, now, { fetcher = fetch, sleep = m
       if (!published && !publishAttempted) for (const key of ownedKeys) await bucket.delete(key).catch(() => {});
     }
   }
-  const priorMonthly = await readExportManifest(bucket, monthly, service);
+  const priorMonthly = checkpoint?true:await readExportManifest(bucket, monthly, service);
   if (!priorMonthly) {
     await guard();
     await verifiedPut(bucket, monthly, saved.bytes, { format: FORMAT, service, backupScope: 'd1-only', dataBytes: String(saved.payload.bytes) }, { etagDoesNotMatch: '*' });
     if (!await readExportManifest(bucket, monthly, service)) throw new Error('VerificationFailed');
   }
-  return { daily, monthly, bytes: saved.payload.bytes, rowCount: saved.payload.rowCount };
+  return { daily, monthly:checkpoint?null:monthly, bytes: saved.payload.bytes, rowCount: saved.payload.rowCount, ...(migration?{expectedMigration:migration}:{}) };
 }
 
-export async function pruneExports(bucket, service, guard = async () => {}) {
-  const prefix = exportPrefix(service), keep = [], obsolete = [];
+export async function pruneExports(bucket, service, guard = async () => {}, migration) {
+  const prefix = exportPrefix(service,migration), keep = [], obsolete = [];
   for (const [kind, limit] of [['daily',30],['monthly',12]]) {
     const pattern = kind === 'daily' ? /^\d{4}-\d{2}-\d{2}\.json\.gz$/ : /^\d{4}-\d{2}\.json\.gz$/;
     const list = (await listObjects(bucket, prefix + kind + '/')).filter(o => pattern.test(o.key.split('/').at(-1))).sort((a,b) => b.key.localeCompare(a.key));
     keep.push(...list.slice(0,limit)); obsolete.push(...list.slice(limit));
   }
+  if(service==='diary'&&migration===DIARY_ENCRYPTED_MIGRATION)keep.push(...await listObjects(bucket,prefix+'checkpoints/'));
   const referenced = new Set(), removable = new Set();
   // Validate retained manifests and each part's immutable identity/size using
   // HEAD, avoiding 30 full DB downloads every night. Restores use full hashes.

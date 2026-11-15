@@ -146,6 +146,7 @@ try {
 // Audit every tracked/new text file, not just selected HTML pages. Keep narrow
 // exceptions for compatibility, migration history, and internal test diagnostics.
 const allowed = {
+  "diary-worker/tests/e2ee/recovery.browser.mjs": /additionalData:new TextEncoder\(\)\.encode\('T-ROOM Cloud Storage admin private key v1'\)/,
   "cloud-worker/public/crypto-vault.js": /const \w+_CONTEXT = "T-ROOM Cloud Storage [^"]+";/,
   "cloud-worker/src/index.js": /const context = "T-ROOM Cloud Storage account key v1\|tanaka-note\.com\|";/,
   "android-tcloud/app/src/main/java/jp/tanaka/tcloud/crypto/TCloudCrypto.kt": /private const val \w+_CONTEXT = "T-ROOM Cloud Storage [^"]+"/,

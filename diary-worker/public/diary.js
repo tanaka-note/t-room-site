@@ -1,4 +1,8 @@
-export async function startDiary(initialSession, deferredInstallPrompt = null, onReady = () => deferredInstallPrompt, initialScrollIntent = {}) {
+export async function startDiary(initialSession, deferredInstallPrompt = null, onReady = () => deferredInstallPrompt, initialScrollIntent = {}, encryptionRuntime = null) {
+  const diaryStorage={getItem:key=>encryptionRuntime?encryptionRuntime.storage.getItem(key):window.sessionStorage.getItem(key),setItem:(key,value)=>encryptionRuntime?encryptionRuntime.storage.setItem(key,value):window.sessionStorage.setItem(key,value),removeItem:key=>encryptionRuntime?encryptionRuntime.storage.removeItem(key):window.sessionStorage.removeItem(key)};
+  const diaryHistory=encryptionRuntime?{get state(){return encryptionRuntime.history.state;},get scrollRestoration(){return encryptionRuntime.history.scrollRestoration;},set scrollRestoration(value){encryptionRuntime.history.scrollRestoration=value;},replaceState:(...args)=>encryptionRuntime.history.replaceState(...args),back:()=>encryptionRuntime.history.back()}:window.history;
+  let encryptedNavigationType=null,encryptedReferrer='',lastEncryptedSession=initialSession;
+  let encryptedRoute=location.pathname;
   const migrationYear = new URL(location.href).searchParams.get("takeout-migration");
   if (["2023", "2024", "2025"].includes(migrationYear)) {
     if (!initialSession?.authenticated || !initialSession.canManageEntries) throw new Error("日記を作成できるアカウントでログインしてください。");
@@ -288,7 +292,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         import(new URL(`diary-photo-processing.js${scriptUrl.search}`, scriptUrl).href),
         import(new URL(`diary-photo-upload.js${scriptUrl.search}`, scriptUrl).href)
       ]).then(([processing, upload]) => {
-        photoUploadManager = upload.createPhotoUploadManager({ state, api, basePath: BASE_PATH, onSessionExpired:()=>{resetState();showLogin("ログインの有効期限が切れました。");},
+        photoUploadManager = upload.createPhotoUploadManager({ state, api,basePath:BASE_PATH,fetchPhoto:(...args)=>encryptionRuntime?encryptionRuntime.fetch(...args):globalThis.fetch(...args), onSessionExpired:()=>{resetState();showLogin("ログインの有効期限が切れました。");},
           getTargetEntryId: () => Number(elements.entryId.value || 0) || null });
         return processing;
       }).catch(error => { photoToolsPromise = null; throw error; });
@@ -381,7 +385,19 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     return photoViewerPromise;
   }
 
+  async function openEncryptedRoute() {
+    encryptedRoute=location.pathname;
+    Object.assign(state,{query:'',month:japanDateString().slice(0,7),monthExpanded:false,archiveYear:'',archiveMonth:'',dateFrom:'',dateTo:'',tagQuery:'',trash:false,drafts:false,entries:[],offset:0,hasMore:false});
+    elements.searchInput.value='';elements.tagSearchInput.value='';
+    applyRouteState();await enterDiary(lastEncryptedSession);
+  }
   function bindEvents() {
+    if(encryptionRuntime){
+      window.addEventListener('troom-session-expired',()=>{resetState();showLogin('ログイン状態が変わりました。パスキーでログインし直してください。');});
+      window.addEventListener('popstate',()=>{if(encryptedRoute===location.pathname||!isDiaryListPath(location.pathname))return;encryptedReferrer=encryptedRoute;encryptedNavigationType='back';void openEncryptedRoute().catch(error=>showToast(error.message));});
+      let snapshotTimer;
+      window.addEventListener('scroll',()=>{clearTimeout(snapshotTimer);snapshotTimer=setTimeout(()=>{if(!elements.appView.hidden&&!document.querySelector('dialog[open]'))storeDiaryReturnView('',{historyOnly:true});},150);},{passive:true});
+    }
     const compactArchive = window.matchMedia("(max-width: 860px)");
     const placeArchive = () => {
       const parent = compactArchive.matches ? elements.diaryMain : elements.tagPanel.parentElement;
@@ -406,7 +422,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         storeDiaryReturnView("", { historyOnly: true });
       }
       cancelPositionRestoration();
-      if ("scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
+      if ("scrollRestoration" in diaryHistory) diaryHistory.scrollRestoration = "auto";
     });
     document.querySelector("#passkey-login")?.addEventListener("click", handlePasskeyLogin);
     elements.householdSwitcher.addEventListener("change", changeActiveHousehold);
@@ -681,6 +697,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       if (attempt !== loginAttempt) return;
       const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
       if (attempt !== loginAttempt) return;
+      if(session.encryption?.enabled){encryptionRuntime?.lock();const encryption=await import(new URL(`diary-encryption.js${scriptUrl.search}`,scriptUrl).href);encryptionRuntime=await encryption.startEncryptedDiary(session,authentication);}
       await enterDiary(session);
     } catch (error) {
       if (attempt !== loginAttempt) return;
@@ -709,9 +726,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function enterDiary(session) {
+    if(encryptionRuntime)lastEncryptedSession=session;
     photoSaver?.suspend();
     cancelPositionRestoration();
-    const restoreVersion = initialScrollIntent.interrupted ? -1 : positionVersion;
+    const restoreVersion = initialScrollIntent.interrupted&&!encryptedNavigationType ? -1 : positionVersion;
     const generation = ++sessionGeneration;
     activeSessionContext = sessionContext(session);
     state.role = session.role;
@@ -725,10 +743,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.canPermanentlyDelete = Boolean(session.canPermanentlyDelete);
     state.canViewInvestment = Boolean(session.canViewInvestment);
     clearArchive();
-    const returnView = takeDiaryReturnView(state.activeHouseholdId);
-    if (!returnView && "scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
+    const returnView = takeDiaryReturnView(state.activeHouseholdId,encryptedNavigationType==='back');
+    if (!returnView && "scrollRestoration" in diaryHistory) diaryHistory.scrollRestoration = "auto";
     if (returnView) {
-      if ("scrollRestoration" in window.history) window.history.scrollRestoration = "manual";
+      if ("scrollRestoration" in diaryHistory) diaryHistory.scrollRestoration = "manual";
       await readingToolsReady;
       if (generation !== sessionGeneration) return;
       applyDiaryReturnView(returnView);
@@ -968,7 +986,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     resetHeaderVisibilityTracking();
   }
 
-  function rememberDiaryReturnViewFromNavigation(event) {
+  async function rememberDiaryReturnViewFromNavigation(event) {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     if (!isDiaryListRoute() || elements.appView.hidden) return;
     const link = event.target.closest("a[href]");
@@ -984,7 +1002,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     if ((link === elements.tagPageBack || (link === elements.favoritesLink && state.favoritePage))
       && hasDiaryReturnNavigation(destination.pathname)) {
       event.preventDefault();
-      window.history.back();
+      diaryHistory.back();
       return;
     }
     if (destination.pathname === window.location.pathname) return;
@@ -992,6 +1010,11 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     // need their source path to validate the one-shot return handoff.
     link.referrerPolicy = "same-origin";
     storeDiaryReturnView(destination.pathname);
+    if(encryptionRuntime){
+      event.preventDefault();await encryptionRuntime.flush();
+      if(isDiaryListPath(destination.pathname)){encryptedReferrer=location.pathname;encryptedNavigationType='forward';window.history.pushState({},'',destination.href);await openEncryptedRoute();}
+      else window.location.assign(destination.href);
+    }
   }
 
   function storeDiaryReturnView(destinationPath = "", { historyOnly = false } = {}) {
@@ -1018,8 +1041,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       tagListPosition: captureTagListPosition()
     };
     try {
-      window.history.replaceState({
-        ...(window.history.state || {}),
+      diaryHistory.replaceState({
+        ...(diaryHistory.state || {}),
         [RETURN_VIEW_HISTORY_KEY]: returnView
       }, "", window.location.href);
     } catch {
@@ -1029,8 +1052,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     // navigation may replace the shared source snapshot and navigation token.
     if (historyOnly) return;
     try {
-      window.sessionStorage.setItem(RETURN_VIEW_STORAGE_KEY, JSON.stringify(returnView));
-      window.sessionStorage.setItem(RETURN_NAVIGATION_KEY, JSON.stringify({
+      diaryStorage.setItem(RETURN_VIEW_STORAGE_KEY, JSON.stringify(returnView));
+      diaryStorage.setItem(RETURN_NAVIGATION_KEY, JSON.stringify({
         savedAt: returnView.savedAt, sourcePath: returnView.routePath, destinationPath
       }));
     } catch {
@@ -1039,6 +1062,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function isNewDiaryNavigation() {
+    if(encryptionRuntime&&encryptedNavigationType)return encryptedNavigationType==='forward';
     const navigationType = window.performance.getEntriesByType("navigation")[0]?.type;
     return navigationType !== "back_forward" && navigationType !== "reload";
   }
@@ -1048,26 +1072,26 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       // Reopening the same start URL can retain the previous history.state.
       // Discard only this page's return snapshot; child pages still need the source snapshot.
       try {
-        if (window.history.state?.[RETURN_VIEW_HISTORY_KEY]) {
-          const historyState = { ...window.history.state };
+        if (diaryHistory.state?.[RETURN_VIEW_HISTORY_KEY]) {
+          const historyState = { ...diaryHistory.state };
           delete historyState[RETURN_VIEW_HISTORY_KEY];
-          window.history.replaceState(historyState, "", window.location.href);
+          diaryHistory.replaceState(historyState, "", window.location.href);
         }
-        const storedView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+        const storedView = JSON.parse(diaryStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
         const routePath = storedView?.version === 1 ? `${BASE_PATH}/` : storedView?.routePath;
-        if (routePath === window.location.pathname) window.sessionStorage.removeItem(RETURN_VIEW_STORAGE_KEY);
+        if (routePath === window.location.pathname) diaryStorage.removeItem(RETURN_VIEW_STORAGE_KEY);
       } catch {
         // A fresh opening must not restore a position even when storage is unavailable.
       }
       return null;
     }
-    const historyView = window.history.state?.[RETURN_VIEW_HISTORY_KEY];
+    const historyView = diaryHistory.state?.[RETURN_VIEW_HISTORY_KEY];
     if (isUsableDiaryReturnView(historyView, householdId, window.location.pathname)) {
       return historyView;
     }
     let returnView = null;
     try {
-      returnView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+      returnView = JSON.parse(diaryStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
     } catch {
       return null;
     }
@@ -1075,7 +1099,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     if (!isUsableDiaryReturnView(returnView, householdId, expectedRoute)) return null;
     if (returnView.version === 2 && !isDiaryReturnReferrer(returnView.destinationPath)) return null;
     try {
-      window.sessionStorage.removeItem(RETURN_VIEW_STORAGE_KEY);
+      diaryStorage.removeItem(RETURN_VIEW_STORAGE_KEY);
     } catch {
       // 読み取り済み状態を消せなくても、期限とrouteで誤適用を防ぎます。
     }
@@ -1091,6 +1115,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function isDiaryReturnReferrer(destinationPath) {
+    if(encryptionRuntime&&encryptedReferrer)return encryptedReferrer===destinationPath;
     try {
       const referrer = new URL(document.referrer);
       return referrer.origin === window.location.origin && referrer.pathname === destinationPath;
@@ -1165,7 +1190,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     cancelPositionRestoration();
     // BFCache retains the complete DOM, filters and scroll position. Let the
     // browser restore that live page instead of replaying an older snapshot.
-    if ("scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
+    if ("scrollRestoration" in diaryHistory) diaryHistory.scrollRestoration = "auto";
     resetHeaderVisibilityTracking();
   }
 
@@ -1180,7 +1205,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function hasDiaryReturnNavigation(destinationPath) {
     let returnView = null;
     try {
-      returnView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+      returnView = JSON.parse(diaryStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
     } catch {
       return false;
     }
@@ -1189,7 +1214,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       && returnView.destinationPath === window.location.pathname
       && diaryListHref(returnView.routePath) === href
       && isOwnedDiaryReturnView(returnView)
-      && window.history.state?.[RETURN_NAVIGATION_KEY] === returnView.savedAt
+      && diaryHistory.state?.[RETURN_NAVIGATION_KEY] === returnView.savedAt
       && Date.now() - returnView.savedAt <= RETURN_VIEW_MAX_AGE_MS;
   }
 
@@ -1578,7 +1603,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.drafts = false;
     state.favoritePage = false;
     if (window.location.pathname !== `${BASE_PATH}/`) {
-      window.history.replaceState({}, "", `${BASE_PATH}/`);
+      diaryHistory.replaceState({}, "", `${BASE_PATH}/`);
       applyRouteState();
     }
     updateFilterControls();
@@ -3940,7 +3965,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     let response;
     try {
       try {
-        response = await fetch(`${BASE_PATH}/api${path}`, init);
+        response = await (encryptionRuntime?encryptionRuntime.api(path,init):fetch(`${BASE_PATH}/api${path}`,init));
       } catch (cause) {
         if (options.signal?.aborted) throw cause;
         const error = new Error("通信結果を確認できませんでした。通信状態を確認して、もう一度お試しください。");
@@ -4016,7 +4041,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     const link = document.createElement("a");
     link.className = "diary-tag";
     link.dataset.tag = tag;
-    link.href = `${BASE_PATH}/tag/${encodeURIComponent(tag)}/`;
+    link.href=encryptionRuntime?encryptionRuntime.tagRoute(tag):`${BASE_PATH}/tag/${encodeURIComponent(tag)}/`;
     link.textContent = label;
     return link;
   }
@@ -4028,7 +4053,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     let tag = "";
     if (match) {
       try {
-        tag = decodeURIComponent(match[1]).normalize("NFKC").trim().slice(0, 100);
+        tag=(encryptionRuntime?encryptionRuntime.tagValue(match[1]):decodeURIComponent(match[1])).normalize("NFKC").trim().slice(0,100);
       } catch {
         tag = "";
       }
@@ -4062,15 +4087,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     // Reload and history navigation keep the token owned by their current entry.
     try {
       const newNavigation = isNewDiaryNavigation();
-      if (newNavigation && window.history.state?.[RETURN_NAVIGATION_KEY] !== undefined) {
-        const historyState = { ...window.history.state };
+      if (newNavigation && diaryHistory.state?.[RETURN_NAVIGATION_KEY] !== undefined) {
+        const historyState = { ...diaryHistory.state };
         delete historyState[RETURN_NAVIGATION_KEY];
-        window.history.replaceState(historyState, "", window.location.href);
+        diaryHistory.replaceState(historyState, "", window.location.href);
       }
-      const storedNavigation = window.sessionStorage.getItem(RETURN_NAVIGATION_KEY);
-      window.sessionStorage.removeItem(RETURN_NAVIGATION_KEY);
+      const storedNavigation = diaryStorage.getItem(RETURN_NAVIGATION_KEY);
+      diaryStorage.removeItem(RETURN_NAVIGATION_KEY);
       const navigation = JSON.parse(storedNavigation || "null");
-      const returnView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+      const returnView = JSON.parse(diaryStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
       // Measure at navigation start so a slow bootstrap cannot expire a valid handoff.
       const navigationAge = window.performance.timeOrigin - navigation?.savedAt;
       if (newNavigation && navigation?.destinationPath === window.location.pathname
@@ -4078,8 +4103,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         && Number.isFinite(navigation.savedAt) && navigationAge >= 0 && navigationAge <= RETURN_NAVIGATION_MAX_AGE_MS
         && returnView?.version === 2 && returnView.savedAt === navigation.savedAt
         && returnView.routePath === navigation.sourcePath && returnView.destinationPath === navigation.destinationPath) {
-        window.history.replaceState({
-          ...(window.history.state || {}),
+        diaryHistory.replaceState({
+          ...(diaryHistory.state || {}),
           [RETURN_NAVIGATION_KEY]: navigation.savedAt
         }, "", window.location.href);
       }
@@ -4101,7 +4126,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     if (elements.tagPageBack.hidden) return;
     let returnView = null;
     try {
-      returnView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+      returnView = JSON.parse(diaryStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
     } catch {
       return;
     }
@@ -4109,7 +4134,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       || !isOwnedDiaryReturnView(returnView)) return;
     // Display a source only when this history entry owns the accepted navigation.
     if (!Number.isFinite(returnView.savedAt)
-      || window.history.state?.[RETURN_NAVIGATION_KEY] !== returnView.savedAt) return;
+      || diaryHistory.state?.[RETURN_NAVIGATION_KEY] !== returnView.savedAt) return;
     const href = diaryListHref(returnView.routePath);
     if (!href || Date.now() - returnView.savedAt > RETURN_VIEW_MAX_AGE_MS) return;
     elements.tagPageBack.href = href;
@@ -4253,26 +4278,27 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function resetState() {
+    encryptionRuntime?.lock();
     photoSaver?.suspend();
     cancelPositionRestoration();
     elements.tagPageBack.href = `${BASE_PATH}/`;
     elements.tagPageBack.textContent = "← 日記へ戻る";
     for (const key of [RETURN_VIEW_STORAGE_KEY, RETURN_NAVIGATION_KEY]) {
       try {
-        window.sessionStorage.removeItem(key);
+        diaryStorage.removeItem(key);
       } catch {
         // Storage may be unavailable; ownership checks still reject the old source.
       }
     }
     try {
-      const historyState = { ...(window.history.state || {}) };
+      const historyState = { ...(diaryHistory.state || {}) };
       delete historyState[RETURN_VIEW_HISTORY_KEY];
       delete historyState[RETURN_NAVIGATION_KEY];
-      window.history.replaceState(historyState, "", window.location.href);
+      diaryHistory.replaceState(historyState, "", window.location.href);
     } catch {
       // A retained history snapshot is still checked against the next session.
     }
-    if ("scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
+    if ("scrollRestoration" in diaryHistory) diaryHistory.scrollRestoration = "auto";
     loginAttempt += 1;
     setBusy(document.querySelector("#passkey-login"), false, "パスキーでログイン");
     sessionGeneration += 1;

@@ -11,7 +11,7 @@ assert.match(script, /const RETURN_VIEW_HISTORY_KEY = "troomDiaryReturnView"/);
 assert.match(script, /document\.addEventListener\("click", rememberDiaryReturnViewFromNavigation, true\)/);
 assert.match(script, /window\.addEventListener\("pageshow", restoreDiaryReturnViewFromPageCache\)/);
 assert.match(script, /function storeDiaryReturnView\(destinationPath = "", \{ historyOnly = false \} = \{\}\)[\s\S]*?routePath: window\.location\.pathname,[\s\S]*?query: state\.query,[\s\S]*?monthExpanded: state\.monthExpanded,[\s\S]*?tagQuery: state\.tagQuery,[\s\S]*?tagQueryInput: elements\.tagSearchInput\.value,[\s\S]*?entryCount: state\.entries\.length,[\s\S]*?tagListPosition: captureTagListPosition\(\)/s);
-assert.match(script, /window\.history\.replaceState\([\s\S]*?\[RETURN_VIEW_HISTORY_KEY\]: returnView/s);
+assert.match(script, /diaryHistory\.replaceState\([\s\S]*?\[RETURN_VIEW_HISTORY_KEY\]: returnView/s);
 assert.match(script, /function applyDiaryReturnView\(returnView\)[\s\S]*?elements\.searchInput\.value = state\.query;[\s\S]*?elements\.tagSearchInput\.value = String\(returnView\.tagQueryInput \|\| returnView\.tagQuery/s);
 assert.match(script, /elements\.appView\.hidden = false;[\s\S]*?await loadEntries\(true, true, returnView\?\.entryCount \|\| 0\);[\s\S]*?if \(loaded && returnView\) restoreDiaryReturnPosition\(returnView, restoreVersion\);/s);
 assert.match(script, /function restoreEntryListPosition\(position\)[\s\S]*?window\.scrollTo\(\{ top: position\.scrollY, left: 0, behavior: "instant" \}\);/s);
@@ -20,7 +20,7 @@ assert.match(script, /function restoreTagListPosition\(position\)[\s\S]*?element
 assert.match(script, /function restoreDiaryReturnPosition[\s\S]*?restoreEntryListPosition\(returnView\.position\);[\s\S]*?restoreTagListPosition\(returnView\.tagListPosition\);[\s\S]*?schedulePositionRestoration\(restore, version\);/s);
 assert.doesNotMatch(script, /setTimeout\(restore, (120|400)\)/);
 assert.doesNotMatch(script, /else if \(isNewDiaryNavigation\(\)\) restoreEntryListPosition/);
-assert.match(script, /link === elements\.tagPageBack \|\| \(link === elements\.favoritesLink && state\.favoritePage\)[\s\S]*?hasDiaryReturnNavigation\(destination\.pathname\)[\s\S]*?window\.history\.back\(\)/s);
+assert.match(script, /link === elements\.tagPageBack \|\| \(link === elements\.favoritesLink && state\.favoritePage\)[\s\S]*?hasDiaryReturnNavigation\(destination\.pathname\)[\s\S]*?diaryHistory\.back\(\)/s);
 
 // Execute the production helpers with browser state; these cases must exercise
 // acceptance and consumption, rather than merely assert the source's shape.
@@ -56,6 +56,7 @@ function configure({ sourcePath = "/diary/", referrer = "https://diary.test/diar
       }
     }
   };
+  Object.assign(context,{diaryHistory:history,diaryStorage:context.window.sessionStorage,encryptionRuntime:null,encryptedNavigationType:null,encryptedReferrer:''});
   runInNewContext(`${helpers}\nconfigureDiaryReturnNavigation();${repeat ? "configureDiaryReturnNavigation();" : ""}`, context);
   if (nextSession) {
     Object.assign(state, nextSession);

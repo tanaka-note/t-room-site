@@ -19,7 +19,7 @@ const response = (status, value, headers) => new Response(JSON.stringify(value),
 function fixture(handler) {
   waits = []; diagnostics = []; timers.clear();
   const state = { photoUploadActiveTasks: new Set(), photoUploadPendingCount: 0, editorPhotos: [] };
-  const manager = createPhotoUploadManager({ state, basePath: '/diary', getTargetEntryId: () => null,
+  const manager = createPhotoUploadManager({ state, basePath: '/diary', getTargetEntryId: () => null, fetchPhoto:(...args)=>globalThis.fetch(...args),
     api: async () => ({ uploadSession: { id: crypto.randomUUID() } }) });
   globalThis.fetch = handler;
   const photo = (bytes = 16) => ({ id: crypto.randomUUID(), fileName: 'private-name.jpg',

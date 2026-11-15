@@ -13,6 +13,7 @@ export function exportReason(error) {
 export async function executeExportWorkflow(env, payload, step) {
   const { service, scheduledTime } = payload || {};
   if (!Object.hasOwn(DATABASES, service) || !Number.isSafeInteger(scheduledTime) || scheduledTime <= 0) throw new Error('InvalidBackupJob');
+  if(payload.checkpoint&&(service!=='diary'||!/^[a-f0-9-]{36}$/.test(payload.checkpoint)))throw new Error('InvalidBackupJob');
   // Avoid starting all database exports at once. Each job has durable retries
   // and an independent outcome; no SQL/body/URL is returned to Workflow state.
   const offset = Object.keys(DATABASES).indexOf(service) * 30;
@@ -26,9 +27,9 @@ export async function executeExportWorkflow(env, payload, step) {
     await step.do('export-project-save-verify-retain', { retries: { limit: 2, delay: '5 minutes', backoff: 'exponential' }, timeout: '15 minutes' }, async () => {
       try {
         return await withExportLease(exportBucket(env, service), service, async guard => {
-          const saved = await saveExport(env, service, scheduledTime, { guard });
+          const saved = await saveExport(env, service, scheduledTime, { guard,checkpoint:payload.checkpoint||null });
           if (!await reportRun(env, service, runId, 'succeeded', { bytes: saved.bytes, rowCount: saved.rowCount })) throw new Error('AuditUnavailable');
-          try { await pruneExports(exportBucket(env, service), service, guard); }
+          try { await pruneExports(exportBucket(env, service), service, guard, saved.expectedMigration); }
           catch { throw new Error('RetentionFailed'); }
           return { bytes: saved.bytes, rowCount: saved.rowCount };
         });

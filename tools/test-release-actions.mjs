@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync,readdirSync } from 'node:fs';
+import {DatabaseSync} from 'node:sqlite';
+import {prepareDiaryEncryption} from './prepare-diary-encryption.mjs';
 import { productionPlan, manualVerification, assertActionsRelease, uploadedVersion, assertDeployedVersion, waitForProductionVerification, assertVersionSettings, assertDenied, checkTokenScope, assertD1ExportReadiness } from './release-actions.mjs';
 import { affected } from './verify-plan.mjs';
 
@@ -136,4 +138,42 @@ test('token preflight requires account subdomain access and checks only read ope
   }}), /HTTP 403/);
   assert.equal(deniedCalls.length, 1, 'fail before any other work when account read permission is absent');
   await assert.rejects(checkTokenScope({...options, request: async () => ({status:200,json:async()=>({success:true})})}), /denial not established/);
+});
+
+
+test('Diary preparation rejects unverified context, unknown schema and existing cutover before any mutation',async()=>{
+  const context={sha:'a'.repeat(40),ref:'refs/heads/main',event:'infrastructure',account:'277e86de986181599ce0db2b3ca1f186',clean:true};
+  const verification={sha:context.sha,conclusion:'success',event:'push',branch:'main'};
+  const calls=[];
+  const options={context,verification,loadSchema:async()=>{calls.push('read');return [];},deployBackup:async()=>{calls.push('deploy');},readControl:async()=>({phase:'encrypted',generation:1,ever_encrypted:1})};
+  for(const change of [{clean:false},{ref:'refs/heads/feature'},{event:'push'},{account:'0'.repeat(32)},{sha:'b'.repeat(40)}])await assert.rejects(prepareDiaryEncryption({...options,context:{...context,...change}}));
+  assert.equal(calls.length,0);
+  await assert.rejects(prepareDiaryEncryption({...options,verification:{...verification,conclusion:'failure'}}),/PassingCI/);assert.equal(calls.length,0);
+  await assert.rejects(prepareDiaryEncryption(options),/SchemaReviewRequired/);assert.deepEqual(calls,['read']);
+});
+
+test('Diary preparation deploys the verified Backup Worker before additive SQL and never changes source data or rollout',async()=>{
+  const databases={};
+  try {
+    for(const service of ['security','diary']) {
+      const db=databases[service]=new DatabaseSync(':memory:'),dir=new URL(`../${service}-worker/migrations/`,import.meta.url);
+      for(const file of readdirSync(dir).filter(name=>name.endsWith('.sql')).sort())db.exec(readFileSync(new URL(file,dir),'utf8'));
+    }
+    databases.diary.exec("INSERT INTO diary_entries(entry_date,title,content) VALUES('2026-11-15','Untouched title','Untouched private content')");
+    const events=[],version='12345678-1234-1234-1234-123456789abc';
+    const context={sha:'a'.repeat(40),ref:'refs/heads/main',event:'infrastructure',account:'277e86de986181599ce0db2b3ca1f186',clean:true};
+    const options={context,verification:{sha:context.sha,conclusion:'success',event:'push',branch:'main'},
+      loadSchema:async service=>databases[service].prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY type,name").all(),
+      readControl:async()=>databases.diary.prepare('SELECT * FROM diary_e2ee_control').get(),
+      deployBackup:async()=>{events.push('deploy');return version;},verifyBackup:async()=>{events.push('verify');},
+      applyCandidate:async service=>{events.push(service);for(const file of service==='security'?['e2ee/diary-keys.sql']:['e2ee/schema.sql','e2ee/legacy-fences.sql'])databases[service].exec(readFileSync(new URL(`../${service}-worker/${file}`,import.meta.url),'utf8'));}
+    };
+    const result=await prepareDiaryEncryption(options);
+    assert.deepEqual(events,['deploy','verify','security','diary']);assert.equal(result.dataMigration,false);assert.equal(result.encryptionEnabled,false);
+    assert.equal(databases.diary.prepare('SELECT content FROM diary_entries').get().content,'Untouched private content');
+    events.length=0;await prepareDiaryEncryption(options);assert.deepEqual(events,['deploy','verify']);
+    events.length=0;await assert.rejects(prepareDiaryEncryption({...options,guard:async()=>{throw new Error('MainAdvanced');}}),/MainAdvanced/);assert.deepEqual(events,[]);
+    databases.diary.exec("UPDATE diary_e2ee_control SET phase='migrating',generation=1");events.length=0;
+    await assert.rejects(prepareDiaryEncryption(options),/UntouchedLegacy/);assert.deepEqual(events,[]);
+  }finally{for(const db of Object.values(databases))db.close();}
 });

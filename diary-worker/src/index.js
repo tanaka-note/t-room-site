@@ -1,3 +1,10 @@
+import { migrationInventory,importMigration } from '../e2ee/migration-store.mjs';
+import { rotationStatus,rotationInventory,beginRotation,stageRotation,commitRotation,maintenanceInventory } from '../e2ee/rotation-store.mjs';
+import { proxyDiaryAuthentication,diaryEncryptionOrigin } from "../e2ee/origin.mjs";
+import { drainEncryptedMedia } from "../e2ee/media.mjs";
+import { parseRecord } from "../e2ee/store.mjs";
+import { encryptionEnabled,encryptionStatus,handleEncryptedApi } from "../e2ee/http.mjs";
+import { readRollout,transitionRollout } from "../e2ee/rollout.mjs";
 import { foregroundSessionActivity, serviceRollingSession, renewServiceSession, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
 import { createDiaryEntryDomain } from "./entry-domain.js";
 import { deleteAlbumPhoto } from "./photo-deletion.js";
@@ -74,6 +81,64 @@ export class SecurityIntegration extends WorkerEntrypoint {
     };
   }
 
+  async describeEncryptionAccount(input) {
+    const account=await findAccountById(String(input?.accountId||''),this.env);
+    return account?{accountId:account.id,households:account.isGlobalOwner?[TANAKA_HOUSEHOLD_ID,CHIHARU_HOUSEHOLD_ID]:[account.householdId],canManageEntries:Boolean(account.canManageEntries),canViewTrash:Boolean(account.canViewTrash),canPermanentlyDelete:Boolean(account.canPermanentlyDelete),isGlobalOwner:Boolean(account.isGlobalOwner),active:true,trashAliases:account.isGlobalOwner?{[CHIHARU_HOUSEHOLD_ID]:[CHIHARU_ADMIN_ACCOUNT_ID]}:{}}:null;
+  }
+  async encryptionRecoveryRecords({after="",limit=20}={}) {
+    if(!encryptionEnabled(this.env))return {records:[],nextCursor:null};
+    if(typeof after!=="string"||after.length>160||!Number.isInteger(limit)||limit<1||limit>20)throw new Error("InvalidPage");
+    const result=await this.env.DB.prepare("SELECT * FROM diary_e2ee_records WHERE key_box!='{}' AND id>? ORDER BY id LIMIT ?").bind(after,limit+1).all();const rows=result.results.slice(0,limit);return {records:rows.map(parseRecord),nextCursor:result.results.length>limit?rows.at(-1).id:null};
+  }
+  async encryptionMaintenanceInventory(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return maintenanceInventory(this.env.DB,input); }
+  async createEncryptionCheckpoint({directoryGeneration}) {
+    if(!encryptionEnabled(this.env))throw new Error('EncryptionDisabled');
+    const control=await readRollout(this.env.DB);
+    if(!['migrating','paused'].includes(control.phase)||!Number.isSafeInteger(directoryGeneration)||directoryGeneration<1)throw new Error('MaintenanceRequiresPausedDatabase');
+    const {sequence}=await this.env.DB.prepare('SELECT COALESCE(MAX(seq),0) sequence FROM diary_e2ee_changes').first();
+    const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify({protocol:'T-lain diary restore checkpoint',generation:control.generation,sequence,directoryGeneration}))));
+    bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
+    const hex=[...bytes.slice(0,16)].map(b=>b.toString(16).padStart(2,'0')).join('');
+    const checkpoint=`${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`,id='diary-checkpoint-'+checkpoint;
+    try{await this.env.D1_BACKUPS.create({id,params:{service:'diary',scheduledTime:Date.now(),checkpoint}});}
+    catch{const instance=await this.env.D1_BACKUPS.get(id);const {status}=await instance.status();if(!['queued','running','waiting','paused','complete'].includes(status))throw new Error('DiaryCheckpointFailed');}
+    return {checkpoint,instanceId:id,key:`v10/checkpoints/${checkpoint}.json.gz`};
+  }
+  async encryptionBuild() {
+    if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");
+    const html=await (await this.env.ASSETS.fetch(new Request('https://assets.internal/index.html'))).text();
+    const build=html.match(/<meta name="troom-app-build" content="(diary-[a-f0-9]{12})"/)?.[1];
+    if(!build)throw new Error('EncryptionBuildUnavailable');return {build,formats:[1,2]};
+  }
+  async encryptionMigrationInventory(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return migrationInventory(this.env.DB,input); }
+  async importEncryptionMigration(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return importMigration(this.env.DB,input); }
+  async encryptionRotationStatus() { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return rotationStatus(this.env.DB); }
+  async encryptionRotationInventory(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return rotationInventory(this.env.DB,input); }
+  async beginEncryptionRotation(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return beginRotation(this.env.DB,input); }
+  async stageEncryptionRotation(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return stageRotation(this.env.DB,input); }
+  async commitEncryptionRotation(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return commitRotation(this.env.DB,input); }
+  async encryptionRollout() { if(!encryptionEnabled(this.env))return {enabled:false};return readRollout(this.env.DB); }
+  async transitionEncryption(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return transitionRollout(this.env.DB,input); }
+  async encryptionRetainedScopes() {
+    const rows=(await this.env.DB.prepare('SELECT household_id, json_group_array(DISTINCT owner_account_id) retained_for FROM diary_trash_scopes GROUP BY household_id,entry_id').all()).results;
+    return rows.map(row=>({household:row.household_id,retainedFor:JSON.parse(row.retained_for)}));
+  }
+  async encryptionScopeAccounts() {
+    // Scope definitions preserve old personal data even if its author is no
+    // longer an active login. These rows never become credential recipients.
+    const rows=(await this.env.DB.prepare(`SELECT id account_id,household_id FROM diary_accounts
+      UNION SELECT author_id,household_id FROM diary_entries
+      UNION SELECT p.created_by_id,e.household_id FROM diary_photos p JOIN diary_entries e ON e.id=p.entry_id
+      UNION SELECT f.account_id,e.household_id FROM diary_favorites f JOIN diary_entries e ON e.id=f.entry_id
+      UNION SELECT owner_account_id,household_id FROM diary_trash_scopes`).all()).results;
+    const groups=new Map();
+    for(const row of rows){if(!row.account_id)continue;if(!groups.has(row.account_id))groups.set(row.account_id,new Set());groups.get(row.account_id).add(row.household_id);}
+    for(const account of DIARY_ACCOUNTS){if(!groups.has(account.id))groups.set(account.id,new Set());groups.get(account.id).add(account.householdId);}
+    return [...groups].map(([accountId,households])=>({accountId,households:[...households]}));
+  }
+  async encryptionHouseholds() {
+    return {[TANAKA_HOUSEHOLD_ID]:{owner:MAIN_ADMIN_ACCOUNT_ID,independent:false},[CHIHARU_HOUSEHOLD_ID]:{owner:CHIHARU_ADMIN_ACCOUNT_ID,independent:true}};
+  }
   async describeAccount(input) {
     const account = await findAccountById(String(input?.accountId || ""), this.env);
     return account ? { valid: true, ...securityLinkTarget(account) } : { valid: false };
@@ -111,6 +176,8 @@ export default {
     let timing;
     try {
       const url = new URL(request.url);
+      const authentication=await proxyDiaryAuthentication(request,env);if(authentication)return secureResponse(authentication);
+      if(url.pathname==="/assets/pwa-auto-update.js"&&encryptionEnabled(env))return env.ASSETS.fetch(new Request(new URL("/origin-assets/pwa-auto-update.js",url),request));
       if (url.pathname === `${BASE_PATH}.html`) {
         return secureResponse(Response.redirect(`${url.origin}${BASE_PATH}/`, 308));
       }
@@ -133,6 +200,16 @@ export default {
         return secureResponse(timing.append(await withRollingSession(request, response, env, url, path, getSession)));
       }
 
+      const isDiaryNavigation=path==='/'||path==='/tags'||path==='/tags/'||path.startsWith('/entry/')||path.startsWith('/tag/')||path==='/trash'||path==='/favorites'||path==='/favorites/'||path==='/investment'||path==='/investment/';
+      if(isDiaryNavigation&&request.method==='GET'&&encryptionEnabled(env)&&env.DIARY_ENCRYPTION_ORIGIN&&url.origin!==diaryEncryptionOrigin(env)) {
+        const control=await readRollout(env.DB);
+        if(control.everEncrypted) {
+          // Legacy search/tag URLs can contain plaintext. Do not copy them to
+          // the dedicated origin or forward POST bodies across that boundary.
+          const path=url.pathname.startsWith('/diary/tag/')?'/diary/':url.pathname;
+          return secureResponse(Response.redirect(new URL(path,diaryEncryptionOrigin(env)),308));
+        }
+      }
       if (request.method !== "GET" && request.method !== "HEAD") {
         return secureResponse(json({ error: "Method not allowed" }, 405));
       }
@@ -167,8 +244,8 @@ export default {
         const result = await runScheduledDiaryBackup(env, scheduledTime);
         if (!result.complete || result.retentionFailed) throw new Error('DiaryBackupRunIncomplete');
       },
-      () => runScheduledMediaDeletionCleanup(env),
-      () => runScheduledStagedPhotoCleanup(env)
+      () => encryptionEnabled(env)?drainEncryptedMedia(env):runScheduledMediaDeletionCleanup(env),
+      () => encryptionEnabled(env)?Promise.resolve():runScheduledStagedPhotoCleanup(env)
     ]);
   }
 };
@@ -206,7 +283,7 @@ async function handleApi(request, env, url, path, context, getSession, timing) {
       startedAt: session.startedAt,
       sessionVersion: diarySessionVersion(env, session.accountVersion), passkeySessionEpoch: session.passkeySessionEpoch
     });
-    return json(sessionSummary(session));
+    return json({...sessionSummary(session),...(encryptionEnabled(env)?{encryption:{...await encryptionStatus(env),accountId:session?.accountId||null,webAuthnCredentialId:session?.credentialId||null}}:{})});
   }
 
   if (path === "/api/login" && request.method === "POST") {
@@ -238,7 +315,7 @@ async function handleApi(request, env, url, path, context, getSession, timing) {
     });
     const headers = new Headers({ "Set-Cookie": sessionCookie(token, policy, url.protocol === "https:") });
     await recordSecurityAudit(env, request, { service: "diary", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: securityAuditRole(account), authMethod: "passkey", sessionId, credentialId: handoff.credentialId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt: new Date().toISOString(), sessionVersion: diarySessionVersion(env, account.sessionVersion), passkeySessionEpoch: handoff.sessionEpoch });
-    return json({ authenticated: true, role: account.role, accountName: account.name, accountDisplayName: accountDisplayName({ service: "diary", accountId: account.id, role: securityAuditRole(account) }, `${account.name}（${account.role === "admin" ? "管理者" : "一般ユーザー"}）`), loginId: accountLoginId(account, env), householdId: account.householdId, activeHouseholdId: account.householdId, isGlobalOwner: Boolean(account.isGlobalOwner), mustChangePassword: Boolean(account.mustChangePassword), canManageEntries: Boolean(account.canManageEntries), canViewTrash: account.canViewTrash, canPermanentlyDelete: account.canPermanentlyDelete, canViewInvestment: account.canViewInvestment, authMethod: "passkey" }, 200, headers);
+    return json({ authenticated: true, role: account.role, accountName: account.name, accountDisplayName: accountDisplayName({ service: "diary", accountId: account.id, role: securityAuditRole(account) }, `${account.name}（${account.role === "admin" ? "管理者" : "一般ユーザー"}）`), loginId: accountLoginId(account, env), householdId: account.householdId, activeHouseholdId: account.householdId, isGlobalOwner: Boolean(account.isGlobalOwner), mustChangePassword: Boolean(account.mustChangePassword), canManageEntries: Boolean(account.canManageEntries), canViewTrash: account.canViewTrash, canPermanentlyDelete: account.canPermanentlyDelete, canViewInvestment: account.canViewInvestment, authMethod:"passkey",...(encryptionEnabled(env)?{encryption:{...await encryptionStatus(env),accountId:account.id,webAuthnCredentialId:handoff.credentialId}}:{})},200,headers);
   }
 
   if (path === "/api/logout" && request.method === "POST") {
@@ -298,6 +375,16 @@ async function handleApi(request, env, url, path, context, getSession, timing) {
 
   if (request.method !== "GET" && !validMutationRequest(request, url)) {
     return json({ error: "不正なリクエストです。" }, 403);
+  }
+
+  if(encryptionEnabled(env)) {
+    try {
+      const encrypted=await handleEncryptedApi(request,env,url,path,session,{json,readJson,readMultipartForm});if(encrypted)return encrypted;
+      const policy=await encryptionStatus(env);
+      const dataPath=/^\/api\/(bootstrap|meta|entries|drafts|photos|photo-upload-sessions)(?:\/|$)/.test(path);
+      if(dataPath&&policy.enabled)throw new HttpError(426,'暗号化対応アプリで日記を開き直してください。');
+      if(dataPath&&request.method!=='GET'&&policy.phase!=='legacy')throw new HttpError(423,'日記の書き込みを一時停止しています。内容を保管してお待ちください。');
+    }catch(error){if(error instanceof HttpError)throw error;if(String(error.message).includes("DiaryWritesPaused"))throw new HttpError(423,"日記の書き込みを一時停止しています。");if([400,401,403,404,409,413,423,428,503].includes(error.status))throw new HttpError(error.status,'暗号化された日記を処理できません。ログイン・鍵の準備状態・書き込み停止状態を確認してください。');throw error;}
   }
 
   if (path === "/api/bootstrap" && request.method === "GET") {
@@ -502,6 +589,7 @@ async function serveAsset(request, env, url, path) {
   const assetPaths = new Map([
     ["/diary.css", "/diary.css"],
     ["/diary.js", "/diary.js"],
+    ["/diary-encryption.js","/diary-encryption.js"],
     ["/photo-migration.js", "/photo-migration.js"],
     ["/photo-migration-core.js", "/photo-migration-core.js"],
     ["/photo-migration.css", "/photo-migration.css"],
@@ -549,7 +637,8 @@ async function serveAsset(request, env, url, path) {
   ]);
   const isDiaryRoute = path === "/" || path === "/tags" || path === "/tags/" || path.startsWith("/entry/") || path.startsWith("/tag/") || path === "/trash" || path === "/favorites" || path === "/favorites/";
   const isInvestmentRoute = path === "/investment" || path === "/investment/";
-  const assetPath = assetPaths.get(path) || (isDiaryRoute ? "/" : (isInvestmentRoute ? "/investment.html" : null));
+  const encryptedAsset=/^\/crypto\/(?:e2ee\/[a-z-]+\.mjs|src\/entry-domain\.js|public\/diary-(?:rich-text|search)\.js)$/.test(path)?path:null;
+  const assetPath = assetPaths.get(path) || encryptedAsset || (isDiaryRoute ? "/" : (isInvestmentRoute ? "/investment.html" : null));
   if (!assetPath) return new Response("Not found", { status: 404 });
 
   const assetUrl = new URL(assetPath, url.origin);
@@ -563,7 +652,7 @@ async function serveAsset(request, env, url, path) {
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
   const immutable = response.ok && /^diary-[a-f0-9]{12}$/.test(url.searchParams.get("v") || "")
     && /\.(?:js|css|png)$/.test(assetPath) && !isInvestmentAssetPath(path);
-  headers.set("Cache-Control", assetPath === "/" || assetPath === "/investment.html"
+  headers.set("Cache-Control", encryptedAsset?"no-cache":assetPath === "/" || assetPath === "/investment.html"
     ? "no-store"
     : assetPath === "/service-worker.js" ? "no-cache"
       : immutable ? "public, max-age=31536000, immutable" : "public, max-age=3600");
@@ -2201,7 +2290,7 @@ function getSessionPolicy(env, authMethod) {
 async function withRollingSession(request, response, env, url, path, getSession) {
   if (["/api/login", "/api/password-login-audit", "/api/passkey/handoff", "/api/logout", "/api/password/initial", "/api/households/select"].includes(path) || response.status === 401) return response;
   // Bootstrap replaces the foreground entry read, so retain its renewal semantics.
-  const activityPath = path === "/api/bootstrap" ? "/api/entries" : path;
+  const activityPath = path === "/api/bootstrap" || /^\/api\/encryption\/(?:snapshot|mutation|remove|uploads|media)(?:\/|$)/.test(path) ? "/api/entries" : path;
   let session = await getSession();
   const willTouch = session?.rollingSessionVersion === ROLLING_SESSION_VERSION
     && foregroundSessionActivity(request, response, activityPath);
