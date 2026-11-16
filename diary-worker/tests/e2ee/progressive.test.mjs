@@ -5,6 +5,7 @@ import {EncryptedDiaryClient} from '../../e2ee/client.mjs';
 import {createEncryptedDiaryApi} from '../../e2ee/ui-api.mjs';
 import {signed,unb64} from '../../e2ee/crypto.mjs';
 import {proofOf} from '../../e2ee/record.mjs';
+import {createPrivateNavigation} from '../../e2ee/privacy.mjs';
 
 let prepared;before(async()=>{prepared=await provision();});
 async function setup(count=48) {
@@ -31,6 +32,17 @@ test('concurrent initial synchronization shares one verified snapshot',async()=>
     let count=0;const native=x.reader.transport.snapshot;x.reader.transport.snapshot=async(...args)=>{count++;return native(...args);};
     const first=x.reader.sync(),second=x.reader.sync();assert.equal(first,second);await Promise.all([first,second]);assert.equal(count,1);assert.equal(x.reader.records.size,3);
   }finally{x.close();}
+});
+test('a legacy bookmarked tag resolves before the index and becomes an encrypted route afterward',async()=>{
+  const x=await setup(3),savedLocation=globalThis.location,tag=entry().tags[0];let navigation;
+  try {
+    globalThis.location={pathname:'/diary/tag/'+encodeURIComponent(tag)+'/'};
+    const storage={length:0,getItem:()=>null,removeItem:()=>{}},history={state:{},replaceState:(_state,_title,url)=>{globalThis.location.pathname=url;}};
+    navigation=await createPrivateNavigation(x.reader,{storage,history});
+    assert.equal(x.reader.records.size,0);assert.equal(navigation.tagValue(encodeURIComponent(tag)),tag);
+    await x.reader.sync();await navigation.prepareTags();const segment=globalThis.location.pathname.split('/')[3];
+    assert.ok(segment.startsWith('e_'));assert.equal(navigation.tagValue(segment),tag);
+  }finally{navigation?.close();if(savedLocation===undefined)delete globalThis.location;else globalThis.location=savedLocation;x.close();}
 });
 test('full-text search waits for all relevant bodies and finds the oldest unprepared document',async()=>{
   const x=await setup();try {
