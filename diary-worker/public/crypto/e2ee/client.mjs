@@ -58,7 +58,7 @@ export class EncryptedDiaryClient {
     this.pendingDeletes = new Map();
     this.preparedBindings = new WeakMap();
   }
-  async unlock(prf) {
+  async unlock(prf,cachedPrivateKeys) {
     const generation = ++this.generation;
     this.closed = true;
     this.records.clear();
@@ -71,6 +71,7 @@ export class EncryptedDiaryClient {
     this.privateKeys = null;
     const state = await unlockSession({
       prf,
+      cachedPrivateKeys,
       profile: this.profile,
       anchor: this.anchor,
       minimumGeneration: this.minimumGeneration,

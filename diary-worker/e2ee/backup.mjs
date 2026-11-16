@@ -10,6 +10,7 @@ import {
   verifySigned,
 } from "./crypto.mjs";
 import { verifyRecord } from "./record.mjs";
+import {validateSealedTrust} from './trust.mjs';
 const digest = async (value) =>
   b64(await crypto.subtle.digest("SHA-256", encode(value)));
 const TABLES = [
@@ -28,7 +29,7 @@ const exact = (value, keys) =>
 export async function validateKeyMetadata({ vaults, grants, recordGrants = {}, recoveryEnvelope }, directory, anchor = null) {
   for (const vault of Object.values(vaults || {})) {
     if (
-      !exact(vault, ["publicKey", "signPublicKey", "privateEnvelope"]) ||
+      !exact(vault, ["publicKey", "signPublicKey", "privateEnvelope",...(Object.hasOwn(vault,'trust')?['trust']:[])]) ||
       [vault.publicKey, vault.signPublicKey].some(
         (key) =>
           !key ||
@@ -39,6 +40,7 @@ export async function validateKeyMetadata({ vaults, grants, recordGrants = {}, r
     )
       throw new Error("InvalidKeyMetadata");
     validateEnvelope(vault.privateEnvelope);
+    if(vault.trust){validateSealedTrust(vault.trust);if(vault.trust.generation>directory.generation)throw new Error('InvalidKeyMetadata');}
     validatePublicKey(vault.publicKey, "recipient");
     validatePublicKey(vault.signPublicKey, "signing");
   }

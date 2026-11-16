@@ -7,6 +7,7 @@ import {
   signed,
   verifySigned,
 } from "./crypto.mjs";
+import {validDeviceKeys} from './device.mjs';
 // Callers supply an externally pinned trust anchor and last known generation.
 // PRF material is consumed and erased, including on validation failures.
 export async function unlockSession({
@@ -15,8 +16,10 @@ export async function unlockSession({
   anchor,
   minimumGeneration,
   checkSession,
+  cachedPrivateKeys,
 }) {
   try {
+    if(cachedPrivateKeys&&!validDeviceKeys(cachedPrivateKeys))throw new Error('InvalidDeviceKey');
     if (!(await checkSession())) throw new Error("SessionExpired");
     const directory = await verifyDirectory(
       profile.directory,
@@ -32,7 +35,7 @@ export async function unlockSession({
     );
     if (!member || !member.households.includes(profile.household))
       throw new Error("GrantDenied");
-    const privateKeys = await unlockVault(
+    const privateKeys = cachedPrivateKeys || await unlockVault(
       prf,
       profile.actor.credentialId,
       profile.vault,

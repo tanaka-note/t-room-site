@@ -667,7 +667,7 @@
     const currentLinks = data.links.filter((item) => ["pending", "active"].includes(item.status));
     const linkHistory = data.links.filter((item) => !["pending", "active"].includes(item.status));
     const linkRow = (item, historical = false) => `<div class="link detail-item"><strong>${escapeHtml(item.account_display_name || item.display_label)}</strong>${item.service === "cloud" && item.service_account_id === "folder-member" && item.account_display_name ? `<small> / ${escapeHtml(item.display_label)}</small>` : ""}${item.folderUnavailable ? '<span class="warning-text">（連携先を取得できません）</span>' : ""}<br><small>${escapeHtml(display.serviceLabel(item.service))} / ${escapeHtml(item.role_label || display.roleLabel(item.role))} / ${escapeHtml(display.serviceLinkStatusLabel(item.status, { identityStatus: data.identity.status, service: item.service, hasCredential }))}</small>${historical ? "" : item.protected ? '<span class="protected-link">基幹連携</span>' : `<button class="danger" data-remove-link="${escapeHtml(item.id)}">連携解除</button>`}</div>`;
-    const diaryControl=data.diaryEncryptionEnabled?`<div class="detail-editor"><button type="button" class="secondary" id="diary-keys-manage">${data.identity.id==='primary-admin'?'日記の利用設定':'日記の利用を承認'}</button><p id="diary-keys-status" role="status" aria-live="polite"></p><details id="diary-trust-tools"><summary>別端末・復旧用の設定</summary><p class="hint">この端末の設定は自動で保持します。公開ファイルは、切替後の日記画面の初回解除や、別端末への引き継ぎ・復旧に使います。</p><label>信頼設定ファイルを読み込む<input id="diary-trust-import" type="file" accept="application/json"></label><button type="button" class="secondary" id="diary-trust-download" hidden>信頼設定ファイルを保存</button></details><details id="diary-data-maintenance"><summary>管理者用：データ移行・更新</summary><p>移行を開始すると、復元確認が終わるまで日記の投稿を一時停止します。写真の再アップロードは行いません。</p><button type="button" class="secondary" data-diary-maintenance="migration">日記の暗号化移行を準備・再開</button><button type="button" class="secondary" data-diary-maintenance="rotation">日記の鍵更新を準備・再開</button><label>復元確認ファイルを読み込んで切り替える<input type="file" id="diary-restore-report" accept="application/json"></label><label>投資履歴ファイルを暗号化して更新<input type="file" id="diary-investment-import" accept="application/json"></label></details></div>`:'';
+    const diaryControl=data.diaryEncryptionEnabled?`<div class="detail-editor"><button type="button" class="secondary" id="diary-keys-manage">日記の初期設定</button><p id="diary-keys-status" role="status" aria-live="polite"></p><details id="diary-data-maintenance"><summary>管理者用：データ移行・更新</summary><p>移行を開始すると、復元確認が終わるまで日記の投稿を一時停止します。写真の再アップロードは行いません。</p><button type="button" class="secondary" data-diary-maintenance="migration">日記の暗号化移行を準備・再開</button><button type="button" class="secondary" data-diary-maintenance="rotation">日記の鍵更新を準備・再開</button><label>投資履歴ファイルを暗号化して更新<input type="file" id="diary-investment-import" accept="application/json"></label></details></div>`:'';
     const links = diaryControl+currentLinks.map((item) => linkRow(item) + (item.service === "household" && item.status === "active"
       ? `<div class="detail-editor"><button type="button" class="secondary" data-household-manage="${escapeHtml(item.id)}">家計簿の鍵の復旧・管理（通常は操作不要）</button><div role="status" aria-live="polite"></div></div>` : "") + (item.service === "health" && item.status === "active"
       ? `<div class="detail-editor"><button type="button" class="secondary" data-health-manage="${escapeHtml(item.id)}">体調管理の鍵の準備・承認</button><div data-health-members="${escapeHtml(item.id)}" role="status" aria-live="polite"></div></div>` : "")).join("");
@@ -707,18 +707,16 @@
       <section class="detail-section"><h3>管理操作</h3><div class="tabs"><button id="reinvite-button" type="button">再招待</button>${approvals}${data.identity.isSecurityAdmin ? "" : '<button id="disable-identity-button" type="button" class="danger">ユーザーを停止</button>'}</div><div id="reinvite-editor" class="detail-editor" hidden><label>有効期限<select id="reinvite-expiry"><option value="3600">1時間</option><option value="21600">6時間</option><option value="86400" selected>24時間</option><option value="259200">3日</option><option value="604800">7日</option><option value="custom">日時指定</option></select></label><label id="reinvite-custom-row" hidden>日時<input id="reinvite-expiry-custom" type="datetime-local"></label><div class="editor-actions"><button id="reinvite-submit" type="button">招待URLを再発行</button><button id="reinvite-cancel" type="button" class="secondary">キャンセル</button></div></div><output id="detail-result" class="invite-result" hidden></output></section>`;
     $("#identity-detail").hidden = false;
     if(data.diaryEncryptionEnabled){
-      let trust;
+      $("#diary-keys-manage").hidden=data.identity.id!=='primary-admin';
       $("#diary-keys-manage").onclick=async event=>{
         const button=event.currentTarget;button.disabled=true;$("#diary-keys-status").textContent="日記の利用設定を保存しています。";
         try{
-          const setup=await import("/security/diary-setup.mjs");trust=await setup.configureDiary({identityId:data.identity.id});
-          $("#diary-keys-status").textContent="鍵の設定を保存しました。日記画面への引き継ぎ用の公開設定ファイルを保存します。データの暗号化は全件移行の完了後に有効になります。";$("#diary-trust-download").hidden=false;
-          try{setup.downloadDiaryTrust(trust);}catch{$("#diary-keys-status").textContent="鍵の設定は保存済みです。公開設定ファイルは、必要なときに下の設定欄から保存できます。";}
+          const setup=await import("/security/diary-setup.mjs");await setup.configureDiary({identityId:data.identity.id});
+          $("#diary-keys-status").textContent="鍵の設定を保存しました。日記は通常のパスキーで利用できます。データの暗号化は全件移行の完了後に有効になります。";
         }
-        catch(error){$("#diary-keys-status").textContent=TRoomPasskeys.safeJapaneseMessage(error.message);if(error.trustRequired)$("#diary-trust-tools").open=true;}
+        catch(error){$("#diary-keys-status").textContent=TRoomPasskeys.safeJapaneseMessage(error.message);}
         finally{button.disabled=false;}
       };
-      $("#diary-trust-import").onchange=async event=>{try{const setup=await import("/security/diary-setup.mjs");trust=await setup.importDiaryTrust(event.target.files[0]);$("#diary-keys-status").textContent="信頼設定を保存しました。";}catch(error){$("#diary-keys-status").textContent=TRoomPasskeys.safeJapaneseMessage(error.message);}finally{event.target.value="";}};
       $("#diary-data-maintenance").hidden=data.identity.id!=='primary-admin';
       $("#diary-investment-import").onchange=async event=>{
         const input=event.target;input.disabled=true;
@@ -726,26 +724,16 @@
         catch(error){$("#diary-keys-status").textContent=TRoomPasskeys.safeJapaneseMessage(error.message);}
         finally{input.value='';input.disabled=false;}
       };
-      $("#diary-restore-report").onchange=async event=>{
-        const input=event.target;input.disabled=true;
-        try {
-          const setup=await import('/security/diary-setup.mjs');await setup.finishDiaryData(input.files[0]);
-          $("#diary-keys-status").textContent="日記の暗号化への切り替えが完了しました。パスキーで日記を開き直してください。写真本体と過去のバックアップ・履歴は別途移行します。";
-        }catch(error){$("#diary-keys-status").textContent=TRoomPasskeys.safeJapaneseMessage(error.message);}
-        finally{input.value='';input.disabled=false;}
-      };
       document.querySelectorAll('[data-diary-maintenance]').forEach(button=>button.addEventListener('click',async()=>{
         const controls=[...document.querySelectorAll('[data-diary-maintenance]')];controls.forEach(control=>control.disabled=true);
         const status=$("#diary-keys-status");status.textContent="本人確認の後、日記の移行を準備します。";
         try {
           const setup=await import('/security/diary-setup.mjs');
-          await setup.prepareDiaryData({kind:button.dataset.diaryMaintenance,onProgress:value=>{status.textContent=`日記の移行を準備しています（${value.completed}件）。`;}});
-          trust=await setup.currentDiaryTrust();$("#diary-trust-download").hidden=false;
-          status.textContent="暗号化した移行情報を保存しました。バックアップの復元確認と切り替えが完了するまで、日記の投稿は停止しています。";
+          await setup.migrateDiary({kind:button.dataset.diaryMaintenance,onProgress:value=>{status.textContent=value.phase==='backup'?'バックアップの作成を待っています。':value.phase==='restoring'?`端末内でバックアップを復元・検証しています（${value.completed}件）。`:`日記の移行を準備しています（${value.completed}件）。`;}});
+          status.textContent="日記の暗号化と復元検証が完了しました。パスキーで日記を開き直してください。写真本体と過去のバックアップ・履歴の暗号化は後続工程です。";
         }catch(error){status.textContent=TRoomPasskeys.safeJapaneseMessage(error.message);}
         finally{controls.forEach(control=>control.disabled=false);}
       }));
-      $("#diary-trust-download").onclick=async()=>{if(trust)(await import("/security/diary-setup.mjs")).downloadDiaryTrust(trust);};
     }
     $("#reinvite-button").onclick = () => toggleReinviteEditor(true);
     $("#reinvite-cancel").onclick = () => toggleReinviteEditor(false);

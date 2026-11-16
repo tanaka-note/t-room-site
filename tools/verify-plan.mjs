@@ -99,6 +99,7 @@ export function affected(paths) {
     const service = [...services, 'backup'].find(s => path.startsWith(`${s}-worker/`));
     if (service) add(service);
     if (/^backup-worker\/src\/(backup|monitor)\.js$/.test(path)) add('diary', 'security', 'backup');
+    if (/^diary-worker\/e2ee\/(backup|crypto|trust|record|policy|codec)\.mjs$/.test(path)) add('backup');
     if (/^downloader2-(?:extension|native|fixtures)\//.test(path)) { add('downloader2'); continue; }
     if (/^downloader-worker\/container\//.test(path)) add('container-unit');
     // The server is monolithic: any Security runtime edit can affect handoff.

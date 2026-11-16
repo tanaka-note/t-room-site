@@ -22,17 +22,21 @@
 - 日記用v10 exportは旧平文の日記tableを含めず、暗号文と同世代の署名済みdirectory・PRF封印vault・scope grants・追加record grants・中央復旧envelopeを同梱する。Securityはv4へ鍵tableも保存する。固定D1 exportを分割し、鍵世代が変われば公開を拒否して直前の正常世代を残す。移行／鍵更新の復元確認には同日の日次を上書きしない専用checkpointを作る。
 - 空の隔離DBへの復元はpausedのままとし、バックアップ内のアカウント／認証情報も従来どおり隔離する。元のパスキーと追加grantsによる再復号を試験する。既存の写真backup方式とスケジュールは維持する。
 
-### 通常の鍵準備と管理者操作
+### パスキー利用と鍵管理の統一（2026-11-16）
 
-家計簿と同様、本人のPRF対応パスキーによる日記ログインから、日記専用vaultを端末内で自動生成・解除する。初回の軽量bootstrapとログアウト後の再ログインの両方で実行し、PRFはログイン処理の終了時に消去する。Security基盤は裏側で連携・失効・epochを検証し、本人の封印済みvaultをimmutableに保存する。通常の利用者が鍵準備のためにSecurity Centerへ移動する手順は不要である。
+Security Centerは初期登録・招待・承認・連携・失効・復旧の入口とする。通常の利用者はT-Cloud／家計簿と同じ登録済みパスキーで日記へログインし、端末内で日記専用vaultと信頼設定を自動準備・解除する。公開JSONの保存・読み込みや、日記専用の鍵承認画面は通常利用の条件にしない。登録済みの鍵・管理者復旧envelopeを引き継ぎ、パスキーを再登録しない。
 
-初回vaultの登録には5分以内の認証を要求し、受取人IDを現在の日記セッションへ結び付ける。応答喪失・同時ログインでも既存vaultを置き換えず、本人のPRFで解除できることを確認する。この自動準備はgrant発行やデータ閲覧権限を追加しない。中央復旧・鍵承認・初回の全件移行と復元照合は、承認済みのSecurity Centerの管理経路を引き続き使う。
+初回の信頼設定は、Security Centerの本人認証済み応答／対象サービスhandoffから確立する。これは既存T-Cloudと同じくSecurity Centerの認証・初期配布を信頼する境界であり、サーバーから独立した外部ファイルで初期anchorを照合する方式ではない。Diary profileの公開anchorからは初期化しない。受け取った公開anchorと最小generationを、本人のPRFから用途分離したAES-GCM鍵で暗号化し、recipient ID・generationへ結び付けて既存vault行へ保存する。サーバーにはPRFも生の復号鍵も渡さない。以後は同じパスキーで封印済み設定を開き、端末内の既知anchor・generationと照合する。破損・別credential・別recipient・anchor変更・巻き戻しでは初期配布へfallbackしない。専用originや別端末でもファイルを引き継がず同じ経路を使う。
 
-移行前のlegacyでは準備できない場合に状態を通知して従来利用を継続し、次のパスキーログインで再試行する。暗号化切替後は準備や解除に失敗すると投稿画面を開かず、平文へ戻さない。既存セッションからの再訪で公開trustが未設定の場合も、通常のログインとtrust取込へ案内する。
+通常の管理者ログインは、既存の承認済みIdentity／credential／日記連携・scopeに限って準備済み利用者へ鍵を委譲する。初期化と新規委譲が必要なときだけ、既存T-Cloud管理者PRF envelopeを端末内で解除する。グローバル復旧鍵を利用できる自動管理経路は第一管理者Identityかつ日記のglobal ownerアカウントに限定し、一般利用用アカウントには合成しない。通常ログインごとにgenerationを増やさない。新しい受取人には完全な暗号文台帳から個別レコード鍵も再ラップする。失効・権限縮小では自動的に旧鍵を再配布せず、全件鍵更新を要求する。
 
-管理画面の通常操作は「日記の利用設定／日記の利用を承認」へまとめる。信頼設定はSecurityの端末内へ自動保持し、利用設定の成功時に公開ファイルの保存を開始する。公開ファイルの手動保存・読込は引き継ぎ・復旧用として折りたたむ。専用originの日記画面を初めて解除する際には公開trustの引き継ぎが必要であり、通常利用ごとにファイルを操作する必要はない。管理者用の移行・鍵更新・投資更新も別の折りたたみ領域へ置く。利用設定の保存と実データの暗号化切替を同じ完了状態と表示しない。
+vault／封印済み信頼設定の登録は5分以内の本人認証を要求する。Diaryは署名済みサービスsessionを確認し、SecurityはIdentity・credential・連携・epoch・accountを再確認する。封印済み設定はgenerationのCASで更新し、応答喪失・同時実行では保存済み設定を再解除して一致を確認する。vaultの公開鍵・署名鍵・privateEnvelopeは置換しない。一般利用者の初回準備後、管理者の次の通常利用までは鍵委譲待ちになることがある。暗号化後は未準備・PRF非対応でも平文へ戻さない。
 
-利用設定の予期しない失敗は、秘密情報や例外本文を出さず、本人確認・本人鍵登録・復旧鍵解除・信頼設定・鍵作成・保存の段階をDKEYコードで表示する。移行開始の公開entrypointは、設定と全利用者の準備を確認してから既存controllerへ接続し、import後に冪等な復元用checkpointを作成する。実HTTPのSecurity認証・mutation制限を通す合成ブラウザ試験で、未準備時には投稿停止しないことと、準備完了時には隔離復元待ちまで進むことを検証する。本番の実移行完了とは区別する。
+同じ有効なサービスsessionでは、端末のIndexedDBに保持した非抽出・decrypt専用RSA鍵と非抽出・sign専用署名鍵から再開する。bindingはsession ID・Identity・credential・link・account・version・epoch・directory generation・公開鍵を含む。毎回live sessionを照合し、署名・grantsの実解除でも鍵を検証する。期限・ログアウト・session切替・失効を越えて利用せず、端末内の生PRF／生scope鍵／平文データは永続化しない。対応しない保存環境は通常パスキーログインへ戻す。
+
+初回の全件移行と全件鍵更新は管理者の初期・保守操作とし、全員の準備を確認するまで投稿を停止しない。移行開始後は端末の暗号化planを保存して中断再開し、実際のv10 checkpointを取得する。端末内の新しいSQLite（sql.js 1.16.0）へGit由来のDDLで復元し、全partのSHA-256・schema・件数・各cell・integrity／foreign keysを検証する。復元された暗号文の全件比較・再復号後に既存の切替証明へ署名する。archive内のSQLは実行しない。公開trustや復元確認レポートのダウンロード／手動読み込みは不要である。checkpoint APIは現在の固定台帳に対応するmanifestとそのpart番号だけを公開し、任意R2キーや写真を読めない。
+
+利用設定の予期しない失敗は秘密情報を含まないDKEY段階コードで表示する。実HTTP／session／Originを通した合成ブラウザ試験は、別端末・応答喪失・session再開・失効拒否・実SQLite復元から切替までを確認するが、実機WebAuthn／本番移行を代替しない。
 
 ### 専用originの運用
 
@@ -44,9 +48,9 @@ Custom DomainはCloudflareのWorkers Domains APIで別管理する。通常のAc
 
 1. Backup Worker、Security、Diaryを検証した同一commitから準備公開する。候補SQLは通常migrationの外に置いたままとし、適用前にschema・対象DB・既存バックアップを照合する。`node --use-env-proxy tools/prepare-diary-encryption.mjs --infrastructure`は、既存のクラウド環境Network secretを使い、同じmain commitのCI成功と最新main・対象account/DB・既存DDLを確認してBackup Workerを先に公開し、追加schemaだけを適用する。通常のproduction tokenへD1/R2権限を追加しない。投稿停止・暗号化の有効化・平文削除は実行しない。専用HTTPS originと、そのoriginからの日記専用WebAuthn認証を準備する。
 2. 第一管理者と各利用者は日記の通常パスキーログインで鍵を自動準備する。管理者は準備済みの鍵を承認し、実PRF、予備パスキー、既存の第一管理者PWからの中央復旧を実端末で確認する。合成PRFやテスト用復旧RSA鍵で代替したとは扱わない。
-3. Security Centerの第一管理者から「日記の暗号化移行を準備・再開」を実行する。投稿が停止し、暗号化planが端末に保存され、全件importと復元用checkpointの作成へ進む。通信が切れた場合は同じ端末から再開する。
-4. checkpointを`backup-worker/tools/restore-isolated.mjs`の`restoreIsolated`で空のSQLiteへ復元し、別経路で保管した公開trustのanchorとminimumGenerationを渡す。`diaryRestoreReport`の結果だけをJSONへ保存する。鍵・PRF・本文の平文をこの処理へ渡さない。
-5. 同じ管理者端末で復元確認ファイルを読み込み、実再認証・再復号後に切り替える。通常編集者／一般roleの投稿、世帯境界、下書き、検索、お気に入り、写真表示・保存、再ログインを確認する。
+3. 第一管理者の初期移行操作で「日記の暗号化移行を準備・再開」を実行する。全員の準備確認後に投稿を停止し、暗号化plan・全件import・実checkpointの作成・端末内の隔離SQLite復元・全件再復号・切替証明を一連で実行する。通信が切れた場合は同じ端末から再開する。ファイルの保管・受け渡しはしない。
+4. `backup-worker/tools/restore-isolated.mjs`のNode版はオフライン監査用として残す。通常の切替では上記の端末内SQLite復元を使う。
+5. 実端末で通常編集者／一般roleの投稿、世帯境界、下書き、検索、お気に入り、写真表示・保存、別端末・再ログインを確認する。
 6. 過去のv2〜v9・旧月次backupとD1 Time Travelの平文履歴を棚卸しし、暗号化移し替え・検証・削除または保持期限を記録する。この実装の切替transactionはそれらを削除しない。画像本体も未暗号化であり、「全保管データのゼロ知識化完了」とは区別する。
 
 端末側のsource上限は50 MB、暗号化plan／復元確認ファイルは100 MB。現行snapshotの上限は5,000レコード、全件更新mediaの上限は100,000件。1回の転送は20件または1.8 MB以下。D1の1行へ保存する鍵設定と署名manifestの合計も1.8 MB以下。大容量manifestは件数と全体digestで表し、写真全件のhash一覧をD1の1行へ格納しない。実データが上限を超える場合は上限を黙って緩めず、移行単位を設計・検証する。

@@ -1,4 +1,4 @@
-import { diaryAutomaticVault,diaryKeyBundle,handleDiaryKeys,diaryKeysEnabled,diaryAuthenticationOrigins } from "./diary-keys.js";
+import { diaryAutomaticVault,diaryAutomaticManagement,diaryLoginTrust,diaryKeyBundle,handleDiaryKeys,diaryKeysEnabled,diaryAuthenticationOrigins } from "./diary-keys.js";
 import { runState } from '../../backup-worker/src/monitor.js';
 import { archiveAuditEvents, archiveIfPending } from './audit-archive.js';
 import { healthKeyBundle, handleHealthKeys, healthMembershipStatement, assertHealthMemberAvailable } from './health-keys.js';
@@ -176,6 +176,10 @@ export default class SecurityWorker extends WorkerEntrypoint {
     return diaryAutomaticVault(this.env,input,validatePasskeySession,(eventType,identityId)=>storeAuditEvent(this.env,{service:'diary',eventType,outcome:'success',identityId,credentialId:input.credentialId,serviceLinkId:input.serviceLinkId,serviceAccountId:input.serviceAccountId,authMethod:'passkey',sessionId:input.sessionId}));
   }
 
+  async manageDiaryKeys(input) {
+    return diaryAutomaticManagement(this.env,input,validatePasskeySession,(eventType,identityId)=>storeAuditEvent(this.env,{service:'diary',eventType,outcome:'success',identityId,credentialId:input.credentialId,serviceLinkId:input.serviceLinkId,serviceAccountId:input.serviceAccountId,authMethod:'passkey',sessionId:input.sessionId}));
+  }
+
   async getHealthKeyBundle(input) {
     return healthKeyBundle(this.env, input);
   }
@@ -280,7 +284,7 @@ async function handleApi(request, env, url, path, context = null) {
     if(!diaryKeysEnabled(env))throw new HttpError(404,'この機能はまだ有効になっていません。');
     if(request.method!=='GET')requireMutation(request,url);
     const actor=await requireActiveIdentitySession(request,env);
-    if(!['/api/diary/own','/api/diary/vault'].includes(path)) {
+    if(!['/api/diary/own','/api/diary/vault','/api/diary/trust'].includes(path)) {
       const admin=await requireSecurityAdmin(request,env);
       if(admin.identityId!==actor.identityId||admin.credentialId!==actor.credentialId)throw new HttpError(403,'管理者の本人確認が一致しません。');
       requireFreshSecurityAdmin(admin);
@@ -558,7 +562,7 @@ async function authenticationVerify(request, env, url) {
     outcome: "success", identityId: credential.identity_id, authMethod: "passkey", service
   }, request);
   const headers = await securitySessionHeaders(env, url, credential.identity_id, credentialId, Boolean(credential.is_security_admin));
-  return json({ authenticated: true, credentialId, prfSalt: credential.prf_salt, links: await Promise.all(links.map((link) => publicLink(env, link))) }, 200, headers);
+  return json({ authenticated: true, credentialId, prfSalt: credential.prf_salt, links: await Promise.all(links.map((link) => publicLink(env, link))),...(['security','diary'].includes(service)&&diaryKeysEnabled(env)?{diaryTrust:await diaryLoginTrust(env,credential.identity_id,credentialId)}:{}) }, 200, headers);
 }
 
 async function createHandoff(request, env) {
@@ -602,7 +606,7 @@ async function createHandoff(request, env) {
     (id, token_hash, identity_id, service_link_id, credential_id, session_epoch, expires_at, cloud_folder_scopes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(crypto.randomUUID(), await sha256(rawToken), identitySession.identityId, selected.id, identitySession.credentialId, runtime.epoch, nowSeconds() + HANDOFF_TTL_SECONDS, folderScopes ? JSON.stringify(folderScopes) : null).run();
-  return json({ handoffToken: rawToken, link: await publicLink(env, selected), tcloudKey: envelopes });
+  return json({ handoffToken: rawToken, link: await publicLink(env, selected), tcloudKey: envelopes,...(service==='diary'&&diaryKeysEnabled(env)?{diaryTrust:await diaryLoginTrust(env,identitySession.identityId,identitySession.credentialId)}:{}) });
 }
 
 async function setupStatus(request, env) {

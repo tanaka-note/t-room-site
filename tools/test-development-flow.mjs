@@ -13,6 +13,10 @@ import { normalizeTextForHash } from './web-app-registry.mjs';
 import { assertHealthProductionReady } from './health-production-preflight.mjs';
 import { runProductionDelivery } from './release.mjs';
 
+test('Diary sealed trust and backup protocol changes also verify their Backup Worker consumer',()=>{
+  for(const path of ['diary-worker/e2ee/trust.mjs','diary-worker/e2ee/backup.mjs'])assert.ok(affected([path]).includes('backup'),path);
+});
+
 test('Health production guard stops incomplete configuration before deploy without querying secret values', () => {
   assert.deepEqual(affected(['tools/health-production-preflight.mjs']),['tooling']);
   const valid = { d1_databases: [{binding:'DB',database_id:'11111111-2222-3333-4444-555555555555'}], vars:{PASSKEY_ENABLED:'true'},

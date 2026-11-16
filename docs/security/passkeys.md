@@ -155,3 +155,9 @@ Cloud専用rolling RPCを使う版はSecurity Workerの対応が必要で、将�
 家計簿の通常ログインでも既存credentialのPRFを要求する。既存のHousehold用鍵、または同じcredentialのT-Cloud用暗号化済み秘密鍵を端末内で解除し、いずれもなければHousehold用鍵を自動準備する。所有者は家計鍵の初期化・同じ家計の承認済み共有先への委譲・既存データの暗号化を通常ログインから自動実行する。別のSecurity Center準備・家計鍵承認は不要。既存の利用者鍵がない閲覧者への初回委譲だけは、本人の自動準備後に所有者の次の通常利用を必要とする。新規・追加パスキーの招待・承認、role、失効を維持する。他の家計には委譲せず、復号鍵の保有とAPIの編集権限は分ける。
 
 暗号化済み利用者秘密鍵・家計鍵の委譲envelope・T-Cloud管理者公開鍵で包んだ復旧用家計鍵の正本はHousehold D1。通常の自動準備は内部 `SECURITY.getHouseholdAutomaticContext` と `HOUSEHOLD_AUTH.describeKeyScope` で現在のsession・Identity／credential／連携と家計scopeを照合する。T-Cloudからは暗号化済みenvelopeと公開鍵だけを再利用し、Household D1に解除方式と共に保持する。既存の `HOUSEHOLD_AUTH.cryptoKeys` による第一管理者の復旧操作も維持する。公開API本文の家計ID・roleを採用しない。生のPRF・秘密鍵・家計鍵は渡さない。既存T-Cloud管理者鍵、登録・承認・失効の方式は変更しない。バックアップ・移行・PRF非対応と実端末確認の境界は[家計簿README](../../household-worker/README.md#cloudflareに内容を渡さない端末側暗号化)を正本とする。
+
+## 日記の端末側暗号化と通常利用
+
+日記も初期登録・連携・失効・復旧をSecurity Centerへ集約し、通常は同じ登録済みパスキーでサービス専用鍵と信頼設定を自動解除する。公開JSONの保管・読込は要求しない。初回信頼はSecurityの本人認証済み応答／handoffから確立し、以後はPRF封印済み設定と端末内pinを検証する。Diary profileからの再初期化や、破損・巻き戻し時の自動リセットはしない。
+
+第一管理者かつ日記global ownerの通常ログインでは、既存T-Cloud管理者envelopeを必要時だけ端末内で解除し、承認済みの連携・権限内で日記専用鍵を委譲する。一般利用用アカウントに管理者復旧鍵を合成しない。T-Cloudの鍵・復旧方式を変更せず、データ鍵・セッション・認可はサービスごとに分離する。同じlive sessionの再訪は非抽出CryptoKeyの端末cacheで再開する。詳細は[日記D1暗号化](diary-encryption.md)を正本とする。
