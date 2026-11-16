@@ -8,7 +8,7 @@ import {systemFixture} from './system-fixture.mjs';
 
 const f=await systemFixture({phase:'legacy'}),user=f.users['main-user'];
 f.central.sqlite.exec('DELETE FROM security_diary_key_grants; DELETE FROM security_diary_key_vaults; DELETE FROM security_diary_key_config;');
-const root=fileURLToPath(new URL('../../public/',import.meta.url)),wire=[],errors=[];
+const root=resolve(fileURLToPath(new URL('../../public/',import.meta.url))),wire=[],errors=[];
 let origin,lose=true;
 const server=createServer(async(req,res)=>{
   try {

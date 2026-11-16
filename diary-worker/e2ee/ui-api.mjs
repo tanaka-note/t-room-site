@@ -19,16 +19,20 @@ export function createEncryptedDiaryApi(client,{session,nativeApi,media,onHouseh
     if(url.pathname==='/households'||url.pathname==='/households/select') {
       const result=await nativeApi(path,options);if(method!=='GET'){await onHousehold(body.householdId);session.activeHouseholdId=body.householdId;initialized=false;}return result;
     }
+    if(url.pathname==='/bootstrap') {
+      const [,households]=await Promise.all([initialized?Promise.resolve():synchronize(),nativeApi('/households')]);
+      await client.ensureList(url.searchParams);const entries=client.list(url.searchParams);client.startBackground();
+      return {session,households,meta:client.meta(),entries};
+    }
     if(!initialized)await synchronize();
-    if(url.pathname==='/bootstrap')return {session,households:await nativeApi('/households'),meta:client.meta(),entries:client.list(url.searchParams)};
     if(url.pathname==='/meta'){await prepareNavigation();return client.meta();}
     if(url.pathname==='/entries') {
-      if(method==='GET')return client.list(url.searchParams);
+      if(method==='GET'){await client.ensureList(url.searchParams);const result=client.list(url.searchParams);client.startBackground();return result;}
       if(method!=='POST')fail(405,'MethodNotAllowed');const result=await client.saveEntry(body);await prepareNavigation();return result;
     }
     const entry=url.pathname.match(/^\/entries\/(\d+)$/);
     if(entry){
-      if(method==='GET')return {entry:client.entry(entry[1])};
+      if(method==='GET'){await client.hydrate(entry[1]);client.startBackground();return {entry:client.entry(entry[1])};}
       if(method==='DELETE')return client.transition(entry[1],'trash',body.revision);
       if(method==='PUT'){const result=await client.saveEntry(body,entry[1]);await prepareNavigation();return result;}
       fail(405,'MethodNotAllowed');
@@ -37,9 +41,11 @@ export function createEncryptedDiaryApi(client,{session,nativeApi,media,onHouseh
     if(action){if(action[2]==='favorite'&&['POST','DELETE'].includes(method))return client.setFavorite(action[1],method==='POST');if(action[2]==='restore'&&method==='POST')return client.transition(action[1],'restore');if(action[2]==='permanent'&&method==='DELETE')return client.transition(action[1],'purge',body.revision);fail(405,'MethodNotAllowed');}
     const draft=url.pathname.match(/^\/drafts\/(\d+)$/);if(draft&&method==='DELETE')return client.transition(draft[1],'discard',body.revision);
     if(url.pathname==='/photos/meta') {
+      await client.ensureAll();
       const counts=new Map();for(const photo of photos()){const month=photo.entryDate.slice(0,7);counts.set(month,(counts.get(month)||0)+1);}return {months:[...counts].sort((a,b)=>b[0].localeCompare(a[0])).map(([value,count])=>({value,count}))};
     }
     if(url.pathname==='/photos'||url.pathname==='/photos/save-list') {
+      await client.ensureAll();
       const p=url.searchParams,month=p.get('month'),entryQuery=p.get('entryQuery'),fileNameQuery=p.get('fileName'),from=p.get('dateFrom'),to=p.get('dateTo');
       const saving=url.pathname==='/photos/save-list';if(saving&&(!/^\d{4}-\d{2}-\d{2}$/.test(from||'')||!/^\d{4}-\d{2}-\d{2}$/.test(to||'')||from>to))fail(400,'InvalidDates');
       let result=photos().filter(photo=>(!month||photo.entryDate.startsWith(month))&&(!from||photo.entryDate>=from)&&(!to||photo.entryDate<=to)&&(!fileNameQuery||photo.fileName.includes(fileNameQuery))&&(!entryQuery||photo.entryTitle.includes(entryQuery)||photo._content.includes(entryQuery)||photo.fileName.includes(entryQuery)||photo._tags.some(t=>t.includes(entryQuery))));

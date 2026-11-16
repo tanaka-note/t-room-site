@@ -1,44 +1,93 @@
-import { validateSnapshot } from "./record.mjs";
-// This candidate persists ciphertext only, never PRF, CryptoKeys or plaintext.
-// It must run on the dedicated diary origin before production use.
-export async function openCipherCache(name = "tlain-diary-encrypted-v1") {
-  const request = indexedDB.open(name, 2);
+import { validateSnapshot } from './record.mjs';
+
+export const CIPHER_CACHE_LIMIT = 50_000_000;
+const bytes = value => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+const stableKey = key => typeof key === 'string' ? key.replace(/\/[0-9]+$/, '') : key;
+
+// One budget across all accounts, households and generations on this origin.
+// Eviction never removes the separate, monotonic rollback checkpoints.
+export async function openCipherCache(name = 'tlain-diary-encrypted-v1', {limitBytes = CIPHER_CACHE_LIMIT} = {}) {
+  if (!Number.isSafeInteger(limitBytes) || limitBytes < 1 || limitBytes > CIPHER_CACHE_LIMIT) throw new Error('InvalidCacheLimit');
+  const request = indexedDB.open(name, 3);
   request.onupgradeneeded = () => {
-    for (const store of ["snapshots", "checkpoints"])
-      if (!request.result.objectStoreNames.contains(store)) request.result.createObjectStore(store);
-    const tx=request.transaction,read=tx.objectStore("snapshots").openCursor();
-    read.onsuccess=()=>{const cursor=read.result;if(!cursor)return;
-      try{
+    const db = request.result, tx = request.transaction;
+    for (const store of ['snapshots', 'checkpoints', 'usage'])
+      if (!db.objectStoreNames.contains(store)) db.createObjectStore(store);
+    const entries = [], read = tx.objectStore('snapshots').openCursor();
+    read.onsuccess = () => {
+      const cursor = read.result;
+      if (!cursor) {
+        let total = entries.reduce((n, row) => n + row.bytes, 0);
+        for (const row of entries) if (total > limitBytes) {
+          tx.objectStore('snapshots').delete(row.key);tx.objectStore('usage').delete(row.key);total -= row.bytes;
+        }
+        return;
+      }
+      try {
         validateSnapshot(cursor.value);
-        const points=tx.objectStore("checkpoints"),stable=typeof cursor.key==='string'?cursor.key.replace(/\/[0-9]+$/,''):cursor.key;
-        const previous=points.get(stable);previous.onsuccess=()=>{points.put(Math.max(previous.result||0,cursor.value.sequence),stable);cursor.continue();};
-      }catch{/* Invalid old snapshots are never trusted. */cursor.continue();}};
+        if (cursor.value.delta || cursor.value.unchanged) throw new Error('IncompleteCacheSnapshot');
+        const row = {key:cursor.key,bytes:bytes(cursor.value),lastUsed:0}, sequence = cursor.value.sequence;entries.push(row);
+        tx.objectStore('usage').put(row, cursor.key);
+        const points = tx.objectStore('checkpoints'), key = stableKey(cursor.key), previous = points.get(key);
+        previous.onsuccess = () => points.put(Math.max(previous.result || 0, sequence), key);
+      } catch {cursor.delete();tx.objectStore('usage').delete(cursor.key);}
+      cursor.continue();
+    };
   };
+  let abandoned=false;
   const db = await new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(new Error("CacheUnavailable"));
+    // An older open tab may still hold the v2 database. Use the online path
+    // immediately instead of blocking login until that tab is closed.
+    request.onblocked = () => {abandoned=true;reject(new Error('CacheUnavailable'));};
+    request.onsuccess = () => {if(abandoned){request.result.close();return;}resolve(request.result);};
+    request.onerror = () => reject(new Error('CacheUnavailable'));
   });
-  const operation = (mode, callback, name = "snapshots") =>
-    new Promise((resolve, reject) => {
-      const tx = db.transaction(name, mode);
-      const req = callback(tx.objectStore(name));
-      tx.oncomplete = () => resolve(req.result);
-      tx.onerror = tx.onabort = () => reject(new Error("CacheUnavailable"));
-    });
+  db.onversionchange = () => db.close();
+  const transaction = (stores, mode, run) => new Promise((resolve, reject) => {
+    const tx = db.transaction(stores, mode);let result, stale = false;
+    const state = {set:value => {result = value;},rollback:() => {stale = true;tx.abort();}};
+    tx.oncomplete = () => resolve(result);
+    tx.onerror = tx.onabort = () => reject(new Error(stale ? 'CacheRollbackRejected' : 'CacheUnavailable'));
+    run(tx, state);
+  });
   return {
-    get: (key) => operation("readonly", (store) => store.get(key)),
-    checkpoint: (key) => operation("readonly", store => store.get(key), "checkpoints"),
-    put: async (key, snapshot, checkpointKey=key) => {
+    get:key => transaction(['snapshots','usage'], 'readwrite', (tx, state) => {
+      const read = tx.objectStore('snapshots').get(key);
+      read.onsuccess = () => {
+        state.set(read.result);
+        if (read.result) tx.objectStore('usage').put({key,bytes:bytes(read.result),lastUsed:Date.now()}, key);
+      };
+    }),
+    checkpoint:key => transaction(['checkpoints'], 'readonly', (tx, state) => {
+      const read = tx.objectStore('checkpoints').get(key);read.onsuccess = () => state.set(read.result);
+    }),
+    put:async(key, snapshot, checkpointKey = stableKey(key)) => {
       validateSnapshot(snapshot);
-      if (snapshot.delta || snapshot.unchanged)
-        throw new Error("IncompleteCacheSnapshot");
-      return new Promise((resolve,reject)=>{
-        const tx=db.transaction(['snapshots','checkpoints'],'readwrite'),store=tx.objectStore('snapshots'),points=tx.objectStore('checkpoints'),read=points.get(checkpointKey);let stale=false;
-        read.onsuccess=()=>{if(read.result>snapshot.sequence){stale=true;tx.abort();return;}store.put(snapshot,key);points.put(snapshot.sequence,checkpointKey);};
-        tx.oncomplete=()=>resolve();tx.onerror=tx.onabort=()=>reject(new Error(stale?'CacheRollbackRejected':'CacheUnavailable'));
+      if (snapshot.delta || snapshot.unchanged) throw new Error('IncompleteCacheSnapshot');
+      const size = bytes(snapshot);
+      return transaction(['snapshots','checkpoints','usage'], 'readwrite', (tx, state) => {
+        const snapshots = tx.objectStore('snapshots'), usage = tx.objectStore('usage'), points = tx.objectStore('checkpoints');
+        const read = points.get(checkpointKey);
+        read.onsuccess = () => {
+          if (read.result > snapshot.sequence) return state.rollback();
+          points.put(snapshot.sequence, checkpointKey);
+          const all = usage.getAll();
+          all.onsuccess = () => {
+            const others = all.result.filter(row => {
+              if (row.key === key || stableKey(row.key) === checkpointKey) {snapshots.delete(row.key);usage.delete(row.key);return false;}
+              return true;
+            }).sort((a,b) => a.lastUsed - b.lastUsed);
+            let total = others.reduce((n,row) => n + row.bytes, 0) + (size <= limitBytes ? size : 0);
+            for (const row of others) if (total > limitBytes) {snapshots.delete(row.key);usage.delete(row.key);total -= row.bytes;}
+            if (size <= limitBytes) {snapshots.put(snapshot, key);usage.put({key,bytes:size,lastUsed:Date.now()}, key);}
+          };
+        };
       });
     },
-    remove: (key) => operation("readwrite", (store) => store.delete(key)),
-    close: () => db.close(),
+    remove:key => transaction(['snapshots','usage'], 'readwrite', tx => {tx.objectStore('snapshots').delete(key);tx.objectStore('usage').delete(key);}),
+    usage:() => transaction(['usage'], 'readonly', (tx, state) => {
+      const read = tx.objectStore('usage').getAll();read.onsuccess = () => state.set({bytes:read.result.reduce((n,row) => n + row.bytes, 0),count:read.result.length,limitBytes});
+    }),
+    close:() => db.close(),
   };
 }

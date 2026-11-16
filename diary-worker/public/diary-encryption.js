@@ -47,15 +47,21 @@ async function createEncryptedDiary(session,authentication) {
     remove:proposal=>request('/remove',{method:'POST',body:proposal})
   };
   try{cache=await openCipherCache();}catch{/* A browser without IndexedDB can still decrypt online. */}
-  client=new EncryptedDiaryClient({transport,profile:initial.profile,anchor:pin.anchor,minimumGeneration:Math.max(pin.minimumGeneration,initial.minimumGeneration),documentFormat:typeof CompressionStream==='function'?2:1,cache});
-  try{await client.unlock(authentication?.prfOutput,cached?.privateKeys);await client.sync();}
+  client=new EncryptedDiaryClient({transport,profile:initial.profile,anchor:pin.anchor,minimumGeneration:Math.max(pin.minimumGeneration,initial.minimumGeneration),documentFormat:typeof CompressionStream==='function'?2:1,cache,lazy:true});
+  client.onProgress=progress=>{
+    const status=document.getElementById('diary-preparation-status');if(!status)return;
+    status.hidden=['locked','complete'].includes(progress.phase);
+    status.textContent=status.hidden?'':progress.phase==='index'?'日記の一覧を準備しています…':`残りのデータを準備しています（${progress.completed.toLocaleString()} / ${progress.total.toLocaleString()}件）… 日記は利用できます。`;
+  };
+  try{await client.unlock(authentication?.prfOutput,cached?.privateKeys);}
   catch(error){client.lock();cache?.close();throw error;}
+  cached=null;
   navigation=await createPrivateNavigation(client);
   media=createEncryptedMediaClient(client,request,nativeFetch);
   api=createEncryptedDiaryApi(client,{session,nativeApi,media,prepareNavigation:()=>navigation.prepareTags(),onHousehold:async household=>{
     const reply=await request('/profile');
     if(reply.profile.actor.accountId!==expectedAccount||reply.profile.webAuthnCredentialId!==expectedCredential||reply.profile.household!==household||reply.profile.directory.value.generation!==client.directory.generation){client.lock();throw new Error('パスキーでログインし直してください。');}
-    navigation.close();if(/^\/diary\/tag\//.test(location.pathname))window.history.replaceState({},'','/diary/');client.generation++;client.records.clear();client.revisionFloor.clear();client.sequence=undefined;client.profile={...client.profile,household};await client.sync();navigation=await createPrivateNavigation(client);
+    navigation.close();if(/^\/diary\/tag\//.test(location.pathname))window.history.replaceState({},'','/diary/');client.generation++;client.records.clear();client.revisionFloor.clear();client.sequence=undefined;client.profile={...client.profile,household};client.background=null;navigation=await createPrivateNavigation(client);
   }});
   await rememberTrustFloor({...pin,minimumGeneration:client.directory.generation},localStorage);
   let lastDeviceSave=0;
@@ -69,13 +75,30 @@ async function createEncryptedDiary(session,authentication) {
   const channel=typeof BroadcastChannel==='function'?new BroadcastChannel('tlain-diary-session-change'):null;
   let closed=false,external=false;
   const expire=()=>{if(closed)return;external=true;client.lock();void clearDevice(liveSession).catch(()=>{});window.dispatchEvent(new Event('troom-session-expired'));};
+  client.onBackgroundError=()=>expire();
   if(channel)channel.onmessage=expire;
-  const timer=setInterval(()=>{if(deadline&&Date.now()/1000>=deadline)return expire();if(document.visibilityState==='visible'&&performance.now()-lastActivity<60000)void client.sync().catch(error=>{if([401,403].includes(error.status)||/Session|Signature|Rollback|GrantDenied|UnknownWriter/.test(error.message))expire();});},30000);
+  const timer=setInterval(()=>{if(deadline&&Date.now()/1000>=deadline)return expire();if(client.sequence!==undefined&&document.visibilityState==='visible'&&performance.now()-lastActivity<60000)void client.sync().then(()=>client.startBackground()).catch(error=>{if([401,403].includes(error.status)||/Session|Signature|Rollback|GrantDenied|UnknownWriter/.test(error.message))expire();});},30000);
   window.addEventListener('troom-session-renewed',event=>{deadline=event.detail.expiresAt;},{signal:signals.signal});
   channel?.postMessage({type:'changed'});
+  let cleanup;
+  const lock=()=>{
+    if(cleanup)return cleanup;
+    closed=true;clearInterval(timer);signals.abort();if(!external)channel?.postMessage({type:'changed'});channel?.close();
+    client.lock();media.close();navigation.close();cache?.close();
+    cleanup=clearDevice(liveSession,{all:!external}).catch(()=>{});return cleanup;
+  };
   return {
-    api:async(path,init)=>{const value=await api(path,init);return Response.json(value);},fetch:media.fetch,
+    api:async(path,init)=>{
+      try{return Response.json(await api(path,init));}
+      catch(error){
+        if(error.name==='AbortError')throw error;
+        // The authorized shell is already visible. Preserve HTTP failures so
+        // the UI can close it immediately if the initial sync loses its session.
+        const status=Number.isInteger(error.status)&&error.status>=400&&error.status<=599?error.status:500;
+        return Response.json({error:status===500?'日記を準備できませんでした。もう一度お試しください。':error.message},{status});
+      }finally{if(path==='/logout')await lock();}
+    },fetch:media.fetch,
     get storage(){return navigation.storage;},get history(){return navigation.history;},tagRoute:tag=>navigation.tagRoute(tag),tagValue:segment=>navigation.tagValue(segment),flush:()=>navigation.flush(),
-    lock(){if(closed)return;closed=true;clearInterval(timer);signals.abort();if(!external)channel?.postMessage({type:'changed'});channel?.close();client.lock();void clearDevice(liveSession).catch(()=>{});media.close();navigation.close();cache?.close();}
+    lock
   };
 }
