@@ -27,11 +27,19 @@ export async function encryptedContext(env,session) {
   return {actor,bundle,directory,registry,store:createStore(env.DB,registry)};
 }
 export async function handleEncryptedApi(request,env,url,path,session,{json,readJson,readMultipartForm}) {
-  if(!path.startsWith('/api/encryption/')&&!/^\/api\/photos\/[0-9a-f-]{36}\/(original|display|thumbnail)$/.test(path))return null;
+  const photoAsset=/^\/api\/photos\/[0-9a-f-]{36}\/(original|display|thumbnail)$/.test(path);
+  if(!path.startsWith('/api/encryption/')&&!photoAsset)return null;
   if(!encryptionEnabled(env))fail(404,'EncryptionDisabled');
+  let control;
+  if(photoAsset) {
+    control=await readRollout(env.DB);
+    // Enabling key preparation does not switch the existing photo reader.
+    // Keep the authenticated legacy route until the actual encrypted cutover.
+    if(!control.everEncrypted&&control.phase!=='encrypted')return null;
+  }
   assertDiaryEncryptionOrigin(env,url);
   if(path==='/api/encryption/status'&&request.method==='GET')return json(await encryptionStatus(env));
-  const control=await readRollout(env.DB);
+  control??=await readRollout(env.DB);
   if(!control.everEncrypted&&!['encrypted','migrating'].includes(control.phase))fail(423,'EncryptionNotActive');
   const {actor,bundle,directory,registry,store}=await encryptedContext(env,session);
   actor.activeHouseholdId=session.activeHouseholdId;
