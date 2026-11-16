@@ -8,6 +8,7 @@ import {DIARY_ENCRYPTED_MIGRATION} from '../../../backup-worker/src/diary-encryp
 import {restoreIsolated,diaryRestoreReport} from '../../../backup-worker/tools/restore-isolated.mjs';
 import {Bucket} from '../../../backup-worker/test/fixtures.mjs';
 import {exportFetcher,exportEnv} from '../../../backup-worker/test/export-fixtures.mjs';
+import {prepareKeyConfiguration} from '../../e2ee/setup.mjs';
 
 test('trusted-device maintenance resumes an interrupted import and only cuts over after actual isolated restore and local decryption',async()=>{
   const f=await systemFixture({phase:'legacy'}),bucket=new Bucket(),owner=f.users['main-admin'];let restored;
@@ -30,7 +31,21 @@ test('trusted-device maintenance resumes an interrupted import and only cuts ove
     assert.equal(progress.records,20);
     assert.ok(pending);assert.equal(JSON.stringify(pending).includes('PRIVATE_MIGRATION_CONTENT'),false);
     assert.equal(f.db.sqlite.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'migrating');
+    const imported=f.db.sqlite.prepare('SELECT id,envelope FROM diary_e2ee_records ORDER BY id').all();
+    assert.equal(imported.length,40);
+    const oldPlan=structuredClone(pending);
+    // A new browser has neither the plan nor its upload checkpoint. The
+    // authenticated frozen inventory must recover both without rewriting it.
+    pending=null;progress=null;
     assert.equal((await prepareDiaryMaintenance(options)).requiresRestoreDrill,true);
+    assert.equal(importCalls,3,'only the eight missing records are imported after recovering the first forty');
+    for(const row of imported)assert.equal(f.db.sqlite.prepare('SELECT envelope FROM diary_e2ee_records WHERE id=?').get(row.id).envelope,row.envelope);
+    // A normal addition-only directory refresh must revalidate an old device's
+    // saved plan as well, with no ciphertext rewrite and no stale proof reuse.
+    const newConfiguration=await prepareKeyConfiguration({status:await central('/admin'),recoveryPrivateKey:f.recovery.privateKey,trustedAnchor:f.configuration.anchor});
+    await central('/config',newConfiguration);pending=oldPlan;progress=null;
+    const refreshed=await prepareDiaryMaintenance(options);
+    assert.equal(refreshed.directoryGeneration,2);assert.equal(importCalls,3);
     const vault=await unlockVault(new Uint8Array(owner.prf),owner.recipientId,owner.vault);
     const env={...exportEnv('diary',f.db,bucket),SECURITY_DB:f.central};
     const backup=async()=>{
@@ -73,10 +88,10 @@ test('trusted-device maintenance resumes an interrupted import and only cuts ove
     f.central.sqlite.prepare("UPDATE security_credentials SET status='revoked' WHERE credential_id=?").run(f.users['wife-admin'].credentialId);
     await prepareDiaryMaintenance({...options,kind:'rotation'});
     const before=f.db.sqlite.prepare('SELECT phase FROM diary_e2ee_control').get().phase;assert.equal(before,'paused');
-    assert.equal(f.central.sqlite.prepare('SELECT generation FROM security_diary_key_config').get().generation,2);
+    assert.equal(f.central.sqlite.prepare('SELECT generation FROM security_diary_key_config').get().generation,3);
     await prepareDiaryMaintenance({...options,kind:'rotation'});
     restored=await backup();const rotatedReport=diaryRestoreReport(restored);
-    assert.equal(rotatedReport.directoryGeneration,2);
+    assert.equal(rotatedReport.directoryGeneration,3);
     await finishDiaryMaintenance({...finish,report:rotatedReport});assert.equal(pending,null);
     assert.equal(f.db.sqlite.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'encrypted');
     f.central.sqlite.prepare('DELETE FROM security_diary_key_vaults WHERE recipient_id=?').run(f.users['main-user'].recipientId);

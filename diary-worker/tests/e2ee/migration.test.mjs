@@ -52,6 +52,8 @@ test('initial migration preserves existing D1 data and photo bytes, then every a
     await assert.rejects(central('/migration/inventory?table=diary_entries'),/MigrationRequiresFrozenLegacyDatabase/);
     await central('/control',{expectedGeneration:0,next:'migrating',evidence:null});
     await assert.rejects(central('/migration/inventory?table=security_credentials'),/InvalidMigrationPage/);
+    assert.equal((await (await central('/migration/inventory?table=diary_entries&limit=100')).json()).rows.length,4);
+    await assert.rejects(central('/migration/inventory?table=diary_entries&limit=101'),/InvalidMigrationPage/);
     const source={};
     for(const table of LEGACY_TABLES) {
       source[table]=[];let after=0;
@@ -67,8 +69,22 @@ test('initial migration preserves existing D1 data and photo bytes, then every a
       await central('/migration/import',{kind,rows:plan[kind],expectedGeneration:1});
     }
     await verifyLegacyCoverage(f.db);
+    assert.equal((await (await central('/maintenance/inventory?kind=media&limit=100')).json()).rows.length,2);
+    await assert.rejects(central('/maintenance/inventory?kind=media&limit=101'),/InvalidMaintenancePage/);
     const repeated=await prepareMigration({source,configuration:{...f.configuration,generation:1},recoveryPrivateKey:f.recovery.privateKey,trustedAnchor:f.configuration.anchor});
     await assert.rejects(central('/migration/import',{kind:'records',rows:repeated.records,expectedGeneration:1}),/MigrationRetryConflict/);
+    const resume={source,configuration:{...f.configuration,generation:1},recoveryPrivateKey:f.recovery.privateKey,trustedAnchor:f.configuration.anchor,existing:plan};
+    assert.deepEqual(await prepareMigration(resume),plan,'another device adopts identical ciphertext only after checking every plaintext and binding');
+    const partial=await prepareMigration({...resume,existing:{records:plan.records.slice(0,2),media:plan.media.slice(0,1)}});
+    assert.deepEqual(partial.records.slice(0,2),plan.records.slice(0,2));assert.deepEqual(partial.media[0],plan.media[0]);
+    const changedSource=structuredClone(source);changedSource.diary_entries[0].content+=' changed';
+    await assert.rejects(prepareMigration({...resume,source:changedSource}),/MigrationContentMismatch/);
+    const changedMedia=structuredClone(plan);changedMedia.media[0].original_key+='-different-object';
+    await assert.rejects(prepareMigration({...resume,existing:changedMedia}),/MigrationContentMismatch/);
+    const corrupted=structuredClone(plan);corrupted.media[0].metadata=corrupted.media[0].metadata.replace(/ciphertext":"./,'ciphertext":"!');
+    await assert.rejects(prepareMigration({...resume,existing:corrupted}));
+    await assert.rejects(prepareMigration({...resume,existing:{records:[...plan.records,plan.records[0]],media:plan.media}}),/InvalidMigrationInventory/);
+    await assert.rejects(prepareMigration({...resume,existing:{records:plan.records,media:[...plan.media,{...plan.media[0],id:'unexpected'}]}}),/UnexpectedMigrationCiphertext/);
     assert.deepEqual([...f.r2],oldR2);
     assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) count FROM diary_entries').get().count,4);
     assert.throws(()=>f.db.sqlite.exec("UPDATE diary_entries SET content='PLAINTEXT_AFTER_FREEZE' WHERE id=101"),/DiaryWritesPaused/);

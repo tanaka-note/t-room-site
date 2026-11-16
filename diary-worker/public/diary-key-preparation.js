@@ -34,8 +34,9 @@ async function approvePreparedRecipients(api,session,authentication,recipientId,
     await management('/vault',{serviceLinkId:link.id,vault});check();
   }
   const status=await management('/admin');check();
-  // A frozen migration must retain exactly its original directory generation.
-  if(status.rollout?.phase==='migrating')return trust;
+  // The ordinary addition-only configuration checks also apply on resume.
+  // A newer directory invalidates old continuations and forces the migration
+  // controller to recheck the frozen source/ciphertext and restore checkpoint.
   const old=status.config?.directory.value.members||[];
   if(status.config&&scopeDefinitions(status.households,[...status.members,...(status.scopeAccounts||[])],status.retainedScopes||[]).every(row=>status.config.directory.value.epochs[row.scope])&&status.members.length===old.length&&status.members.every(member=>old.some(previous=>previous.credentialId===member.credentialId&&previous.canManageEntries===member.canManageEntries&&JSON.stringify(previous.households)===JSON.stringify(member.households))))return trust;
   const privateKey=await unlockCentralRecovery(authentication.prfOutput,status.adminEnvelope);check();
@@ -60,7 +61,7 @@ export function diaryMigrationMessage(progress) {
   if(progress.phase==='complete')return '日記を開いています…';
   const subject=progress.kind==='media'?'写真情報':progress.kind==='records'?'日記・設定':'データ';
   const count=Number.isSafeInteger(progress.completed)&&Number.isSafeInteger(progress.total)?`（${subject} ${progress.completed.toLocaleString()} / ${progress.total.toLocaleString()}件）`:'';
-  const labels={reading:'移行する内容を確認しています',writing:'暗号化した内容を保存しています',backup:'復元確認用のバックアップを作成しています',restoring:'バックアップを端末内に復元しています',comparing:'保存内容を照合しています',decrypting:'復元した内容を検証しています'};
+  const labels={reading:'移行する内容を確認しています','reading-saved':'保存済みの暗号化データを取得しています','verifying-source':'保存済みデータを元の内容と照合しています',writing:'暗号化した内容を保存しています',backup:'復元確認用のバックアップを作成しています',restoring:'バックアップを端末内に復元しています',comparing:'保存内容を照合しています',decrypting:'復元した内容を検証しています'};
   return (labels[progress.phase]||'日記の暗号化を準備しています')+count+'… この画面を開いたままお待ちください。';
 }
 

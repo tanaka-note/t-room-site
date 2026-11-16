@@ -3,6 +3,7 @@ import { b64,encode,verifyDirectory,verifySigned } from './crypto.mjs';
 import { verifyRecord,bindingOf } from './record.mjs';
 import { parseRecord } from './store.mjs';
 import { readRollout } from './rollout.mjs';
+import { boundedInventoryPage } from './migration-store.mjs';
 const fail=message=>{throw Object.assign(new Error(message),{status:409});};
 const hash=async value=>b64(await crypto.subtle.digest('SHA-256',encode(value)));
 const equal=(a,b)=>b64(encode(a))===b64(encode(b));
@@ -113,11 +114,11 @@ export async function commitRotation(db,{manifestDigest}) {
 export async function maintenanceInventory(db,{kind='records',after='',limit=20}={}) {
   const control=await readRollout(db);
   if(!['migrating','paused'].includes(control.phase))fail('MaintenanceRequiresPausedDatabase');
-  if(!['records','media'].includes(kind)||typeof after!=='string'||after.length>160||!Number.isInteger(limit)||limit<1||limit>20)fail('InvalidMaintenancePage');
+  if(!['records','media'].includes(kind)||typeof after!=='string'||after.length>160||!Number.isInteger(limit)||limit<1||limit>100)fail('InvalidMaintenancePage');
   const [head,result]=await db.batch([
     db.prepare(`SELECT (SELECT COALESCE(MAX(seq),0) FROM diary_e2ee_changes) sequence,COUNT(*) total FROM diary_e2ee_${kind}`),
     db.prepare(`SELECT * FROM diary_e2ee_${kind} WHERE id>? ORDER BY id LIMIT ?`).bind(after,limit+1),
   ]);
-  const rows=result.results.slice(0,limit);
-  return {controlGeneration:control.generation,...head.results[0],rows:kind==='records'?rows.map(parseRecord):rows,nextCursor:result.results.length>limit?rows.at(-1).id:null};
+  const candidates=result.results.slice(0,limit),rows=boundedInventoryPage(kind==='records'?candidates.map(parseRecord):candidates);
+  return {controlGeneration:control.generation,...head.results[0],rows,nextCursor:result.results.length>rows.length?rows.at(-1).id:null};
 }

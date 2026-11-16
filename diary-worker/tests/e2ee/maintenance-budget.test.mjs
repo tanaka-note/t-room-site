@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {boundedMaintenanceInventory} from '../../e2ee/maintenance.mjs';
 import {encode} from '../../e2ee/crypto.mjs';
+import {boundedInventoryPage} from '../../e2ee/migration-store.mjs';
 
 test('maintenance budgets include both arrays, separators and UTF-8 bytes across arbitrary page boundaries',()=>{
   const rows={records:[{id:'本文',value:'写真📷'},{id:'2',value:'é'}],media:[{id:'写真',value:'合成データ'}]};
@@ -13,6 +14,15 @@ test('maintenance budgets include both arrays, separators and UTF-8 bytes across
   const tooSmall=boundedMaintenanceInventory(exact-1,'RotationSourceBudgetExceeded');
   tooSmall.append('records',rows.records);
   assert.throws(()=>tooSmall.append('media',rows.media),/RotationSourceBudgetExceeded/);
+});
+
+test('larger read pages stop at the byte boundary and do not omit the next row',()=>{
+  const rows=Array.from({length:100},(_,id)=>({id,metadata:'写真'.repeat(4000)}));
+  const page=boundedInventoryPage(rows);
+  assert.ok(page.length>20&&page.length<100);assert.ok(encode(page).length<=1_790_000);
+  assert.ok(encode([...page,rows[page.length]]).length>1_790_000);
+  assert.deepEqual([...page,...boundedInventoryPage(rows.slice(page.length))],rows);
+  assert.throws(()=>boundedInventoryPage([{id:0,metadata:'x'.repeat(1_790_000)}]),/MaintenanceRecordBudgetExceeded/);
 });
 
 test('22,000 media rows are budgeted with linear row visits instead of repeatedly traversing every earlier page',()=>{

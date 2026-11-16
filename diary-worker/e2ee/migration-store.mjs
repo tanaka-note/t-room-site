@@ -8,6 +8,16 @@ const fail=message=>{throw Object.assign(new Error(message),{status:409});};
 const equal=(a,b)=>b64(encode(a))===b64(encode(b));
 const hash=async value=>b64(await crypto.subtle.digest('SHA-256',encode(value)));
 const MEDIA_COLUMNS=['id','household','account_id','session_id','status','original_key','display_key','thumbnail_key','metadata','epoch','request_hash','expires_at','retired_at'];
+// Read pages have a row AND byte bound; writes remain capped at 20 rows.
+export function boundedInventoryPage(rows) {
+  const page=[];let bytes=2;
+  for(const row of rows) {
+    const next=bytes+encode(row).length+(page.length?1:0);
+    if(next>1_790_000){if(!page.length)fail('MaintenanceRecordBudgetExceeded');break;}
+    page.push(row);bytes=next;
+  }
+  return page;
+}
 export async function requireFrozenMigration(db) {
   const control=await readRollout(db);
   if(control.phase!=='migrating'||control.everEncrypted)fail('MigrationRequiresFrozenLegacyDatabase');
@@ -20,10 +30,10 @@ export async function requireFrozenMigration(db) {
 }
 export async function migrationInventory(db,{table,after=0,limit=20}={}) {
   const control=await requireFrozenMigration(db);
-  if(!LEGACY_TABLES.includes(table)||!Number.isSafeInteger(after)||after<0||!Number.isInteger(limit)||limit<1||limit>20)fail('InvalidMigrationPage');
+  if(!LEGACY_TABLES.includes(table)||!Number.isSafeInteger(after)||after<0||!Number.isInteger(limit)||limit<1||limit>100)fail('InvalidMigrationPage');
   const result=(await db.prepare(`SELECT rowid _cursor,* FROM ${table} WHERE rowid>? ORDER BY rowid LIMIT ?`).bind(after,limit+1).all()).results;
-  const page=result.slice(0,limit);
-  return {controlGeneration:control.generation,rows:page.map(({_cursor,...row})=>row),nextCursor:result.length>limit?page.at(-1)._cursor:null};
+  const page=boundedInventoryPage(result.slice(0,limit));
+  return {controlGeneration:control.generation,rows:page.map(({_cursor,...row})=>row),nextCursor:result.length>page.length?page.at(-1)._cursor:null};
 }
 async function sourceBinding(db,row,directory) {
   if(row.state==='investment') {

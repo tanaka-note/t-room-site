@@ -254,7 +254,7 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
   if(path==='/api/diary/maintenance/build'&&request.method==='GET')return json(await env.DIARY_AUTH.encryptionBuild());
   if(path==='/api/diary/maintenance/inventory'&&request.method==='GET') {
     const q=new URL(request.url).searchParams;
-    return json(await env.DIARY_AUTH.encryptionMaintenanceInventory({kind:q.get('kind')||'records',after:q.get('after')||'',limit:20}));
+    return json(await env.DIARY_AUTH.encryptionMaintenanceInventory({kind:q.get('kind')||'records',after:q.get('after')||'',limit:Number(q.get('limit')||20)}));
   }
   if(path==='/api/diary/maintenance/signing-vault'&&request.method==='POST') {
     const current=await config(env);if(!current)fail(409,'EncryptionPreparationRequired');
@@ -269,7 +269,7 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
   }
   if(path==='/api/diary/migration/inventory'&&request.method==='GET') {
     const q=new URL(request.url).searchParams;
-    return json(await env.DIARY_AUTH.encryptionMigrationInventory({table:q.get('table'),after:Number(q.get('after')||0),limit:20}));
+    return json(await env.DIARY_AUTH.encryptionMigrationInventory({table:q.get('table'),after:Number(q.get('after')||0),limit:Number(q.get('limit')||20)}));
   }
   if(path==='/api/diary/migration/import'&&request.method==='POST') {
     const current=await config(env);if(!current)fail(409,'EncryptionPreparationRequired');

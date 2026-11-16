@@ -7,7 +7,7 @@ import {chromium} from 'playwright';
 import {systemFixture} from './system-fixture.mjs';
 import {publicTrustPackage} from '../../e2ee/setup.mjs';
 
-const f=await systemFixture(),user=f.users['main-user'],root=fileURLToPath(new URL('../../public/',import.meta.url));
+const f=await systemFixture(),user=f.users[process.argv.includes('--independent-editor')?'chiharu-admin':'main-user'],root=resolve(fileURLToPath(new URL('../../public/',import.meta.url)));
 const wire=[],errors=[];let origin,authentications=0;
 const trust=await publicTrustPackage(f.configuration);
 const server=createServer(async(req,res)=>{
@@ -29,7 +29,7 @@ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin='http://
 const browser=await chromium.launch({headless:true});
 async function pageFor(context) {
   await context.exposeBinding('fixtureAuthentication',()=>{authentications++;});
-  await context.addInitScript(({prf,credentialId,trust})=>{window.TRoomPasskeys={authenticate:async()=>{await window.fixtureAuthentication();window.lastPRF=new Uint8Array(prf);return {credentialId,prfOutput:window.lastPRF,verified:{diaryTrust:trust},link:{accountId:'main-user'},handoff:{handoffToken:'main-user',diaryTrust:trust}};}};},{prf:[...user.prf],credentialId:user.credentialId,trust});
+  await context.addInitScript(({prf,credentialId,trust,accountId})=>{window.TRoomPasskeys={authenticate:async()=>{await window.fixtureAuthentication();window.lastPRF=new Uint8Array(prf);return {credentialId,prfOutput:window.lastPRF,verified:{diaryTrust:trust},link:{accountId},handoff:{handoffToken:accountId,diaryTrust:trust}};}};},{prf:[...user.prf],credentialId:user.credentialId,trust,accountId:user.serviceAccountId});
   const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));return page;
 }
 try {
@@ -39,16 +39,22 @@ try {
   assert.equal(await page.getByLabel('日記の信頼設定ファイル').count(),0);assert.equal(downloads,0);
   const vault=JSON.parse(f.central.sqlite.prepare('SELECT vault_json FROM security_diary_key_vaults WHERE recipient_id=?').get(user.recipientId).vault_json);
   assert.ok(vault.trust);assert.deepEqual(vault.publicKey,user.vault.publicKey);assert.deepEqual(vault.privateEnvelope,user.vault.privateEnvelope);
+  await page.click('#new-entry-button');await page.locator('#editor-dialog').waitFor({state:'visible'});
+  await page.fill('#entry-title','SYNTHETIC_PRIVATE_POST');await page.locator('#entry-content').fill('SYNTHETIC_PRIVATE_POST_BODY');
+  await page.click('#save-entry-button');await page.locator('#editor-dialog').waitFor({state:'hidden'});
+  const saved=f.db.sqlite.prepare("SELECT household,author,envelope FROM diary_e2ee_records WHERE state='published'").all();
+  assert.equal(saved.length,1);assert.equal(saved[0].author,user.serviceAccountId);assert.equal(saved[0].household,user.claims.households[0]);
+  assert.equal(JSON.stringify(saved).includes('SYNTHETIC_PRIVATE_POST'),false);assert.equal(JSON.stringify(wire).includes('SYNTHETIC_PRIVATE_POST_BODY'),false);
   await page.reload();await page.locator('#app-view').waitFor({state:'visible'});assert.equal(authentications,1,'same live session resumes without another WebAuthn operation');
   await page.click('#logout-button');await page.locator('#passkey-login').waitFor({state:'visible'});
   await page.click('#passkey-login');await page.locator('#app-view').waitFor({state:'visible'});assert.equal(authentications,2);
   // A different signed session cannot reuse the previous session's device key.
-  await context.addCookies([{name:'troom_diary_session',value:f.cookie('main-user').slice('troom_diary_session='.length),domain:'127.0.0.1',path:'/diary'}]);
+  await context.addCookies([{name:'troom_diary_session',value:f.cookie(user.serviceAccountId).slice('troom_diary_session='.length),domain:'127.0.0.1',path:'/diary'}]);
   await page.reload();await page.locator('#passkey-login').waitFor({state:'visible'});assert.equal(await page.locator('#app-view').isVisible(),false);
   const fresh=await browser.newContext(),freshPage=await pageFor(fresh);
   await freshPage.goto(origin+'/diary/');await freshPage.click('#passkey-login');await freshPage.locator('#app-view').waitFor({state:'visible'});assert.equal(authentications,3);
   assert.equal(await freshPage.getByLabel('日記の信頼設定ファイル').count(),0);
-  f.users['main-user'].active=false;
+  user.active=false;
   await freshPage.reload();await freshPage.locator('#passkey-login').waitFor({state:'visible'});assert.equal(await freshPage.locator('#app-view').isVisible(),false);
   assert.equal(JSON.stringify(wire).includes(Buffer.from(user.prf).toString('base64url')),false);
   assert.equal(wire.some(row=>row.path.startsWith('/security/')),false);assert.deepEqual(errors,[]);

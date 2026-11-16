@@ -60,13 +60,27 @@ async function compareMaintenanceInventory({api,status,sequence,expected,onProgr
   for(const kind of ['records','media']) {
     let after='';
     do {
-      const page=await api('/maintenance/inventory?'+new URLSearchParams({kind,after}));
+      const page=await api('/maintenance/inventory?'+new URLSearchParams({kind,after,limit:100}));
       if(page.controlGeneration!==status.rollout.generation||page.sequence!==sequence||page.total!==expected[kind].length||page.total>100000)throw message();
       inventory.append(kind,page.rows);after=page.nextCursor;
       onProgress({phase:'comparing',kind,completed:current[kind].length,total:expected[kind].length});
     }while(after);
     if(current[kind].length!==expected[kind].length||await inventoryDigest(current[kind])!==await inventoryDigest(expected[kind]))throw new Error('RestoreInventoryMismatch');
   }
+}
+async function readMigrationCiphertext(api,status,onProgress) {
+  const inventory=boundedMaintenanceInventory(100_000_000);let sequence;
+  for(const kind of ['records','media']) {
+    let after='',total;
+    do {
+      const page=await api('/maintenance/inventory?'+new URLSearchParams({kind,after,limit:100}));
+      if(page.controlGeneration!==status.rollout.generation||sequence!==undefined&&sequence!==page.sequence||total!==undefined&&total!==page.total||!Number.isSafeInteger(page.total)||page.total<0||page.total>(kind==='records'?5000:100000)||page.nextCursor&&page.nextCursor<=after)throw message();
+      sequence=page.sequence;total=page.total;inventory.append(kind,page.rows);after=page.nextCursor;
+      onProgress({phase:'reading-saved',kind,completed:inventory.rows[kind].length,total});
+    }while(after);
+    if(inventory.rows[kind].length!==total)throw message();
+  }
+  return inventory.rows;
 }
 async function signingMember(directory,signingKey) {
   const {signed}=await import('./crypto.mjs'),challenge=await signed({protocol:'T-lain diary maintenance signer',version:1},signingKey);
@@ -99,14 +113,22 @@ export async function prepareDiaryMaintenance({kind,api,recoveryPrivateKey,trust
   if(!['migration','rotation'].includes(kind))throw message();
   let status=await api('/admin');
   await verifyDirectory(status.config.directory,trust.anchor,trust.minimumGeneration);
-  let plan=await plans.get();
+  let plan=await plans.get(),recovered;
   if(plan&&plan.kind!==kind)throw message();
   if(plan) {
     const directory=kind==='rotation'?await verifyDirectory(plan.configuration.directory,trust.anchor):status.config.directory.value;
     await validatePlan(plan,trust.anchor,directory);
-    if(kind==='migration'&&(plan.directoryGeneration!==status.config.generation||plan.rolloutGeneration!==status.rollout.generation))throw message();
+    if(kind==='migration'&&(plan.directoryGeneration!==status.config.generation||plan.rolloutGeneration!==status.rollout.generation)) {
+      // Normal owner login may have granted newly prepared, already approved
+      // recipients. Keep every stored ciphertext, but rebuild the local plan
+      // against the current signed directory and frozen original. No proof or
+      // upload checkpoint from the earlier directory is carried forward.
+      if(plan.rolloutGeneration===status.rollout.generation&&plan.directoryGeneration<status.config.generation)plan=null;
+      else throw message();
+    }
     if(kind==='rotation'&&status.config.generation<plan.configuration.expectedGeneration)throw message();
-  } else {
+  }
+  if(!plan) {
     const target=kind==='migration'?'migrating':'paused';
     if(status.rollout.phase!==target) {
       if(kind==='migration'&&status.rollout.phase!=='legacy'||kind==='rotation'&&status.rollout.phase!=='encrypted')throw message();
@@ -119,14 +141,18 @@ export async function prepareDiaryMaintenance({kind,api,recoveryPrivateKey,trust
       for(const table of LEGACY_TABLES) {
         source[table]=[];let after=0;
         do {
-          const page=await api('/migration/inventory?'+new URLSearchParams({table,after}));
+          const page=await api('/migration/inventory?'+new URLSearchParams({table,after,limit:100}));
           if(page.controlGeneration!==status.rollout.generation)throw message();
           totalBytes+=encode(page.rows).length;if(totalBytes>50_000_000)throw new Error('MigrationSourceBudgetExceeded');
           source[table].push(...page.rows);after=page.nextCursor;
           onProgress({phase:'reading',completed:source[table].length});
         }while(after!==null);
       }
-      prepared=await prepareMigration({source,configuration:status.config,recoveryPrivateKey,trustedAnchor:trust.anchor});
+      // A different device has no local plan. Authenticate and compare every
+      // existing ciphertext against the frozen original before adopting it.
+      // Never re-encrypt/replace an already imported row or trust counts alone.
+      recovered=await readMigrationCiphertext(api,status,onProgress);
+      prepared=await prepareMigration({source,configuration:status.config,recoveryPrivateKey,trustedAnchor:trust.anchor,existing:recovered,onProgress});
     } else {
       const bounded=boundedMaintenanceInventory(50_000_000,'RotationSourceBudgetExceeded'),inventory=bounded.rows;let sequence;
       for(const type of ['records','media']) {
@@ -147,7 +173,12 @@ export async function prepareDiaryMaintenance({kind,api,recoveryPrivateKey,trust
   }
   const digest=await rotationDigest(plan),savedProgress=await plans.getProgress?.();
   const progress=savedProgress?.digest===digest?savedProgress:{digest,records:0,media:0};
+  if(recovered)for(const kind of ['records','media']) {
+    const ids=new Set(recovered[kind].map(row=>row.id));
+    while(progress[kind]<plan[kind].length&&ids.has(plan[kind][progress[kind]].id))progress[kind]++;
+  }
   for(const type of ['records','media'])if(!Number.isSafeInteger(progress[type])||progress[type]<0||progress[type]>plan[type].length)throw message();
+  if(recovered)await plans.putProgress?.(progress);
   if(kind==='rotation') {
     await verifySigned(plan.manifest,trust.anchor);
     const run=await api('/rotation/status');
