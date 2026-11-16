@@ -40,6 +40,8 @@ vault／封印済み信頼設定の登録は5分以内の本人認証を要求�
 
 ### 専用originの運用
 
+鍵準備のfeature flagだけでは既存写真の取得経路を切り替えない。rolloutが暗号化へ切り替わるまでは、従来originと専用originの両方で既存の認証・世帯確認を通して写真を配信する。`ever_encrypted`確定後は暗号化用経路と専用origin制限を維持し、旧写真tableへfallbackしない。この境界は、実際のstaging upload→commit→画像取得、および14枚のブラウザ描画で回帰確認する。
+
 Custom DomainはCloudflareのWorkers Domains APIで別管理する。通常のActions公開は既存の`versions upload`／`versions deploy`であり、domain・DNS・既存routeを変更しない。インフラ用の手動公開時は`diary.tanaka-note.com`のCustom Domainと従来の`tanaka-note.com/diary*` routeの両方を維持し、未指定domainの削除を承認しない。不要になった準備用domainのrollbackは、専用originへの切替・暗号化データ移行を開始していないことを確認してから、今回追加したdomainだけを外す。
 
 本番の内容を取得せずに件数・保存byteを確認した時点で、移行元は日記1,235件・写真metadata 21,845件・投資履歴1,523件を含む約20.4 MB。source上限50 MB以内であった。この数値は移行時の固定台帳ではなく、移行開始時には停止済みsourceを改めて照合する。
