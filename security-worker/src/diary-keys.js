@@ -2,6 +2,8 @@ import {diaryEncryptionOrigin} from '../../diary-worker/e2ee/origin.mjs';
 import { b64,encode,fingerprint,verifyDirectory,verifySigned,validateEnvelope,validatePublicKey,recoveryWrappedBytes,unb64 } from '../../diary-worker/e2ee/crypto.mjs';
 import { canRead } from '../../diary-worker/e2ee/policy.mjs';
 import { verifyRecord } from '../../diary-worker/e2ee/record.mjs';
+import {publicTrustPackage} from '../../diary-worker/e2ee/setup.mjs';
+import {validateSealedTrust} from '../../diary-worker/e2ee/trust.mjs';
 
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 const exact=(v,keys)=>v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).sort().join(',')===[...keys].sort().join(',');
@@ -38,6 +40,43 @@ async function accountClaims(env,accountId) {
 async function config(env) {
   const row=await env.DB.prepare('SELECT * FROM security_diary_key_config WHERE id=1').first();
   return row?{generation:row.generation,anchor:JSON.parse(row.anchor_json),directory:JSON.parse(row.directory_json),recoveryEnvelope:JSON.parse(row.recovery_json)}:null;
+}
+
+// Public trust is endorsed by the same Security Center authentication which
+// authorizes the service handoff. It is never bootstrapped from Diary data.
+export async function diaryLoginTrust(env,identityId,credentialId) {
+  if(!diaryKeysEnabled(env)||(await liveLinks(env,identityId,credentialId)).length===0)return null;
+  const current=await config(env);if(!current)return null;
+  await verifyDirectory(current.directory,current.anchor,current.generation);
+  return publicTrustPackage(current);
+}
+
+async function storeTrust(env,recipientId,packet) {
+  validateSealedTrust(packet);const current=await config(env);
+  if(packet.generation!==current?.generation)fail(409,'DiaryTrustGenerationConflict');
+  const saved=await env.DB.prepare('SELECT vault_json FROM security_diary_key_vaults WHERE recipient_id=?').bind(recipientId).first();
+  if(!saved)fail(409,'DiaryVaultRequired');
+  const vault=JSON.parse(saved.vault_json);
+  if(vault.trust?.generation>packet.generation)fail(409,'DiaryTrustGenerationConflict');
+  if(vault.trust?.generation!==packet.generation)await env.DB.prepare('UPDATE security_diary_key_vaults SET vault_json=? WHERE recipient_id=? AND vault_json=?').bind(JSON.stringify({...vault,trust:packet}),recipientId,saved.vault_json).run();
+  const result=await env.DB.prepare('SELECT vault_json FROM security_diary_key_vaults WHERE recipient_id=?').bind(recipientId).first();
+  const trust=JSON.parse(result.vault_json).trust;
+  if(trust?.generation!==packet.generation)fail(409,'DiaryTrustGenerationConflict');
+  return trust;
+}
+
+export async function diaryAutomaticManagement(env,input,validate,audit=async()=>{}) {
+  await diaryAutomaticVault(env,input,validate);
+  const claims=await accountClaims(env,input.serviceAccountId);
+  if(input.identityId!=='primary-admin'||!claims.isGlobalOwner)fail(403,'AccessDenied');
+  const path=input.path;
+  if(!['/own','/vault','/admin','/config','/recovery-records'].includes(path?.split('?')[0]))fail(404,'UnknownDiaryAutomaticRoute');
+  const method=input.value===undefined?'GET':'POST';
+  if(!((method==='GET'&&['/own','/admin','/recovery-records'].includes(path.split('?')[0]))||(method==='POST'&&['/vault','/config'].includes(path))))fail(405,'MethodDenied');
+  const response=await handleDiaryKeys('/api/diary'+path,new Request('https://security.internal/security/api/diary'+path,{method,...(method==='POST'?{body:JSON.stringify(input.value)}:{})}),env,
+    {identityId:input.identityId,credentialId:input.credentialId,authenticatedAt:Date.parse(input.startedAt)/1000},
+    {readJson:async(request,limit)=>{const text=await request.text();if(new TextEncoder().encode(text).length>limit)fail(413,'RequestTooLarge');return JSON.parse(text);},json:Response.json,audit});
+  return response.json();
 }
 
 export async function diaryKeyBundle(env,input) {
@@ -96,13 +135,19 @@ export async function diaryAutomaticVault(env,input,validate,audit=async()=>{}) 
   if(input.preparation!==undefined) {
     const age=Date.now()-Date.parse(input.startedAt);
     if(!Number.isFinite(age)||age<0||age>300000)fail(428,'RecentAuthenticationRequired');
-    if(!exact(input.preparation,['recipientId','vault'])||input.preparation.recipientId!==recipientId)fail(403,'DiaryAutomaticRecipientMismatch');
+    if(input.preparation.recipientId!==recipientId)fail(403,'DiaryAutomaticRecipientMismatch');
+    if(exact(input.preparation,['recipientId','trust'])) {
+      await storeTrust(env,recipientId,input.preparation.trust);
+      await audit('diary_trust_prepared',input.identityId);
+    }else {
+    if(!exact(input.preparation,['recipientId','vault']))fail(400,'InvalidDiaryVault');
     if(encode(input.preparation).length>20000)fail(413,'InvalidDiaryVault');
     const request=new Request('https://security.internal/security/api/diary/vault',{method:'POST',body:JSON.stringify({serviceLinkId:link.id,vault:input.preparation.vault})});
     try {
       await handleDiaryKeys('/api/diary/vault',request,env,{identityId:input.identityId,credentialId:input.credentialId,authenticatedAt:Date.parse(input.startedAt)/1000},
         {readJson:request=>request.json(),json:(value,status=200)=>Response.json(value,{status}),audit});
     }catch(error){if(error.status!==409||error.message!=='DiaryVaultImmutable')throw error;}
+    }
   }
   const row=await env.DB.prepare('SELECT vault_json FROM security_diary_key_vaults WHERE recipient_id=? AND identity_id=? AND credential_id=? AND service_link_id=? AND account_id=?').bind(recipientId,input.identityId,input.credentialId,link.id,link.accountId).first();
   return {recipientId,accountId:link.accountId,webAuthnCredentialId:input.credentialId,vault:row?JSON.parse(row.vault_json):null};
@@ -115,10 +160,16 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
   if(!links.length)fail(403,'DiaryLinkRequired');
   if(path==='/api/diary/own'&&request.method==='GET') {
     const entries=[];
-    for(const link of links){const recipientId=await diaryRecipientId(actor.credentialId,link.id);const vault=await env.DB.prepare('SELECT recipient_id FROM security_diary_key_vaults WHERE recipient_id=?').bind(recipientId).first();entries.push({...link,recipientId,prepared:Boolean(vault)});}
+    for(const link of links){const recipientId=await diaryRecipientId(actor.credentialId,link.id);const vault=await env.DB.prepare('SELECT recipient_id,vault_json FROM security_diary_key_vaults WHERE recipient_id=?').bind(recipientId).first();entries.push({...link,recipientId,prepared:Boolean(vault),...(vault?{trust:JSON.parse(vault.vault_json).trust}:{} )});}
     return json({links:entries});
   }
   if(!Number.isFinite(actor.authenticatedAt)||Date.now()/1000-actor.authenticatedAt>300)fail(428,'RecentAuthenticationRequired');
+  if(path==='/api/diary/trust'&&request.method==='POST') {
+    const body=await readJson(request,16000),link=links.find(link=>link.id===body.serviceLinkId);
+    if(!link||!exact(body,['serviceLinkId','trust']))fail(403,'DiaryAutomaticRecipientMismatch');
+    const trust=await storeTrust(env,await diaryRecipientId(actor.credentialId,link.id),body.trust);
+    await audit('diary_trust_prepared',actor.identityId);return json({trust});
+  }
   if(path==='/api/diary/vault'&&request.method==='POST') {
     const body=await readJson(request,20000),link=links.find(l=>l.id===body.serviceLinkId),vault=body.vault;
     if(!link||!exact(body,['serviceLinkId','vault'])||!exact(vault,['publicKey','signPublicKey','privateEnvelope']))fail(400,'InvalidDiaryVault');
@@ -170,6 +221,11 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
   if(path==='/api/diary/maintenance/backup'&&request.method==='POST') {
     const current=await config(env);if(!current)fail(409,'EncryptionPreparationRequired');
     return json(await env.DIARY_AUTH.createEncryptionCheckpoint({directoryGeneration:current.generation}));
+  }
+  if(path==='/api/diary/maintenance/checkpoint'&&request.method==='GET') {
+    const current=await config(env);if(!current)fail(409,'EncryptionPreparationRequired');
+    const query=new URL(request.url).searchParams;
+    return json(await env.DIARY_AUTH.readEncryptionCheckpoint({directoryGeneration:current.generation,checkpoint:query.get('checkpoint'),part:query.has('part')?Number(query.get('part')):undefined}));
   }
   if(path==='/api/diary/maintenance/build'&&request.method==='GET')return json(await env.DIARY_AUTH.encryptionBuild());
   if(path==='/api/diary/maintenance/inventory'&&request.method==='GET') {

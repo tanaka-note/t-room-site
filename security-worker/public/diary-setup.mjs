@@ -1,5 +1,6 @@
-import { createVault,validatePublicTrust } from '/security/diary-crypto/e2ee/crypto.mjs';
+import { createVault,validatePublicTrust,unlockVault,unb64 } from '/security/diary-crypto/e2ee/crypto.mjs';
 import { prepareKeyConfiguration,publicTrustPackage } from '/security/diary-crypto/e2ee/setup.mjs';
+import {resolveTrust,sealTrust,openTrust,sameTrust} from '/security/diary-crypto/e2ee/trust.mjs';
 const PIN='tlain-diary-authority-public-v1';
 async function api(path,value) {
   const response=await fetch(`/security/api/diary${path}`,{credentials:'same-origin',cache:'no-store',...(value?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)}:{})});
@@ -9,7 +10,21 @@ async function prepare(prf) {
   if(!prf)throw new Error('この端末では暗号鍵を解除できません。PRF対応のパスキーとブラウザを使用してください。');
   const status=await api('/own');
   for(const link of status.links.filter(l=>!l.prepared))await api('/vault',{serviceLinkId:link.id,vault:await createVault(prf,link.recipientId)});
-  return status;
+  return api('/own');
+}
+async function authenticationTrust(auth,own) {
+  const pinned=JSON.parse(localStorage.getItem(PIN)||'null'),link=own.links.find(link=>link.trust)||own.links[0];
+  const bootstrap=auth.verified?.diaryTrust;
+  if(!pinned&&!link?.trust&&!bootstrap)return null;
+  const trust=await resolveTrust({prf:auth.prfOutput,recipientId:link.recipientId,sealed:link.trust,bootstrap,pinned});
+  localStorage.setItem(PIN,JSON.stringify(trust));return trust;
+}
+async function saveAuthenticationTrust(auth,own,trust) {
+  for(const link of own.links) {
+    const {trust:saved}=await api('/trust',{serviceLinkId:link.id,trust:await sealTrust(auth.prfOutput,link.recipientId,trust)});
+    await sameTrust(trust,await openTrust(auth.prfOutput,link.recipientId,saved));
+  }
+  localStorage.setItem(PIN,JSON.stringify(trust));return trust;
 }
 export async function prepareDiary() {
   const auth=await TRoomPasskeys.authenticate('diary',undefined,{handoff:false});
@@ -24,14 +39,14 @@ export async function configureDiary({identityId}={}) {
   let auth,stage='AUTH';
   try {
     auth=await TRoomPasskeys.authenticate('security');
-    stage='VAULT';await prepare(auth.prfOutput);
+    stage='VAULT';const own=await prepare(auth.prfOutput);
     stage='STATUS';const status=await api('/admin');
     const existingIds=new Set(status.config?.directory.value.members.map(m=>m.credentialId)||[]);status.members=status.members.filter(m=>m.identityId==='primary-admin'||m.identityId===identityId||existingIds.has(m.credentialId));
     if(!status.adminEnvelope||!status.recoveryPublicKey)throw new Error('既存の管理者パスキーのT-Cloud利用準備・復旧登録を先に完了してください。');
     stage='RECOVERY';const privateKey=await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput,status.adminEnvelope);
-    stage='TRUST';const pin=JSON.parse(localStorage.getItem(PIN)||'null'),pending=JSON.parse(localStorage.getItem(PIN+'-pending')||'null');
+    stage='TRUST';const pin=await authenticationTrust(auth,own),pending=JSON.parse(localStorage.getItem(PIN+'-pending')||'null');
     if(pin)await validatePublicTrust(pin);
-    if(pending){if(status.config&&JSON.stringify(status.config.directory)===JSON.stringify(pending.directory)){localStorage.removeItem(PIN+'-pending');return publicTrustPackage(pending);}if((status.config?.generation||0)!==pending.expectedGeneration)throw new Error('鍵の更新結果を照合できません。元の信頼設定を保持して管理者に確認してください。');stage='SAVE';await api('/config',pending);localStorage.removeItem(PIN+'-pending');return publicTrustPackage(pending);}
+    if(pending){if(status.config&&JSON.stringify(status.config.directory)===JSON.stringify(pending.directory)){localStorage.removeItem(PIN+'-pending');return await saveAuthenticationTrust(auth,own,await publicTrustPackage(pending));}if((status.config?.generation||0)!==pending.expectedGeneration)throw new Error('鍵の更新結果を照合できません。元の信頼設定を保持して管理者に確認してください。');stage='SAVE';await api('/config',pending);localStorage.removeItem(PIN+'-pending');return await saveAuthenticationTrust(auth,own,await publicTrustPackage(pending));}
     stage='RECORDS';const recoveryRecords=[];let after=null;
     if(status.config)do {const page=await api(`/recovery-records${after?`?after=${encodeURIComponent(after)}`:''}`);recoveryRecords.push(...page.records);after=page.nextCursor;if(recoveryRecords.length>5000)throw new Error('復旧対象が上限を超えています。');}while(after);
     stage='KEYS';const configuration=await prepareKeyConfiguration({status,recoveryPrivateKey:privateKey,trustedAnchor:pin?.anchor,recoveryRecords});
@@ -40,9 +55,9 @@ export async function configureDiary({identityId}={}) {
     const trust=await publicTrustPackage(configuration);localStorage.setItem(PIN,JSON.stringify(trust));
     localStorage.setItem(PIN+'-pending',JSON.stringify(configuration));
     stage='SAVE';await api('/config',configuration);localStorage.removeItem(PIN+'-pending');
-    return trust;
+    return await saveAuthenticationTrust(auth,own,trust);
   }catch(error){
-    if(error.message==='TrustedAnchorRequired')throw Object.assign(new Error('以前設定した端末で開くか、保存済みの信頼設定ファイルを読み込んでください。'),{trustRequired:true});
+    if(error.message==='TrustedAnchorRequired')throw new Error('日記の信頼設定を確認できません。パスキーでログインし直してください。');
     if(error.message==='RekeyRequired')throw new Error('失効や権限変更があるため、通常の承認ではなく鍵更新が必要です。');
     if(!error.status&&/[\u3040-\u30ff\u3400-\u9fff]/.test(error.message||''))throw error;
     const labels={AUTH:'本人確認',VAULT:'本人の鍵の登録',STATUS:'管理者設定の確認',RECOVERY:'既存の管理者復旧鍵の解除',TRUST:'端末の信頼設定の確認',RECORDS:'既存の鍵情報の確認',KEYS:'日記の鍵設定の作成',SAVE:'鍵設定の保存'};
@@ -61,7 +76,7 @@ export async function prepareDiaryData({kind='migration',onProgress=()=>{}}={}) 
     const status=await api('/admin');
     if(!status.config)throw new Error('日記の管理者設定はまだ保存されていません。利用設定の状態を確認してください。');
     if(kind==='migration'&&status.writerReadiness?.ready===false)throw new Error('全利用者の鍵の準備・承認が完了していません。移行の開始状態は変更していません。');
-    const trust=await currentDiaryTrust();
+    const trust=await authenticationTrust(auth,await prepare(auth.prfOutput));
     if(!auth.prfOutput||!status.adminEnvelope)throw new Error('日記のログインで使った、管理者復旧に対応するパスキーを選んでください。');
     const privateKey=await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput,status.adminEnvelope);
     const maintenance=await import('/security/diary-crypto/e2ee/maintenance.mjs');plans=await maintenance.openMaintenancePlans();
@@ -71,11 +86,51 @@ export async function prepareDiaryData({kind='migration',onProgress=()=>{}}={}) 
   }finally{plans?.close();auth.prfOutput?.fill(0);}
 }
 
+// One admin operation prepares, restores an actual backup into isolated
+// SQLite on this device, compares/decrypts it, and signs the existing cutover.
+// Only ciphertext/public metadata cross the API; no downloadable report.
+export async function migrateDiary({kind='migration',onProgress=()=>{}}={}) {
+  const auth=await TRoomPasskeys.authenticate('security');let plans;
+  try {
+    const own=await prepare(auth.prfOutput),trust=await authenticationTrust(auth,own),status=await api('/admin');
+    if(!status.config||!trust)throw new Error('日記の鍵設定を先に完了してください。');
+    if(kind==='migration'&&status.writerReadiness?.ready===false)throw new Error('日記の利用者全員が通常のパスキーログインを行った後、管理者として日記を開いてください。投稿停止は開始していません。');
+    const privateKey=await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput,status.adminEnvelope);
+    const maintenance=await import('/security/diary-crypto/e2ee/maintenance.mjs');plans=await maintenance.openMaintenancePlans();
+    await maintenance.prepareDiaryMaintenance({kind,api,recoveryPrivateKey:privateKey,trust,plans,onProgress});
+    // A recovered/new admin credential joins the directory during rotation.
+    // Obtain its normal signing vault after that transaction, not beforehand.
+    const signing=await api('/maintenance/signing-vault',{}),vault=await unlockVault(auth.prfOutput,signing.recipientId,signing.vault);
+    auth.prfOutput.fill(0);
+    const checkpoint=await api('/maintenance/backup',{});
+    let manifest;
+    for(let attempt=0;attempt<120;attempt++) {
+      manifest=await api('/maintenance/checkpoint?'+new URLSearchParams({checkpoint:checkpoint.checkpoint}));
+      if(manifest.ready)break;
+      onProgress({phase:'backup',completed:attempt});
+      await new Promise(resolve=>setTimeout(resolve,2000));
+    }
+    if(!manifest?.ready)throw new Error('バックアップの準備中です。同じ端末から移行を再開してください。');
+    const {restoreDiaryCheckpoint}=await import('/security/diary-restore.mjs');
+    let parts;
+    const object=value=>({body:new Blob([unb64(value.bytes,24_000_000)]).stream(),customMetadata:{sha256:value.sha256}});
+    const bucket={get:async key=>{
+      if(key===checkpoint.key)return object(manifest);
+      if(!parts){const data=await new Response(object(manifest).body.pipeThrough(new DecompressionStream('gzip'))).json();parts=data.parts;}
+      const index=parts.findIndex(part=>part.key===key);if(index<0)throw new Error('InvalidCheckpointPart');
+      return object(await api('/maintenance/checkpoint?'+new URLSearchParams({checkpoint:checkpoint.checkpoint,part:index})));
+    }};
+    const report=await restoreDiaryCheckpoint({bucket,key:checkpoint.key,trust,onProgress});
+    const {build}=await api('/maintenance/build');
+    return await maintenance.finishDiaryMaintenance({api,recoveryPrivateKey:privateKey,signingKey:vault.sign,trust,plans,report,readerBuild:build,writerBuild:build});
+  }finally{plans?.close();auth.prfOutput?.fill(0);}
+}
+
 export async function finishDiaryData(file) {
   if(!file||file.size>100_000_000)throw new Error('復元確認ファイルを確認してください。');
   const report=JSON.parse(await file.text()),auth=await TRoomPasskeys.authenticate('security');let plans;
   try {
-    const trust=JSON.parse(localStorage.getItem(PIN)||'null');await validatePublicTrust(trust);
+    const trust=await authenticationTrust(auth,await prepare(auth.prfOutput));await validatePublicTrust(trust);
     const status=await api('/admin');
     const privateKey=await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput,status.adminEnvelope);
     const own=await api('/maintenance/signing-vault',{});

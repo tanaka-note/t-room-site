@@ -13,6 +13,8 @@ import {exportEnv,exportFetcher} from './export-fixtures.mjs';
 import {compress,verifiedPut} from '../src/integrity.js';
 import {scanBackupMetadata} from '../../diary-worker/src/backup-browser.js';
 import {storageSnapshot} from '../src/browser.js';
+import {sealTrust,openTrust} from '../../diary-worker/e2ee/trust.mjs';
+import {publicTrustPackage} from '../../diary-worker/e2ee/setup.mjs';
 const now=Date.UTC(2026,10,15,18,25),sleep=async()=>{};
 
 test('encrypted fixed exports include same-generation keys and restore over 10,000 rows without photo object writes',async()=>{
@@ -21,6 +23,8 @@ test('encrypted fixed exports include same-generation keys and restore over 10,0
     f.db.sqlite.exec(readFileSync(new URL('../../diary-worker/e2ee/legacy-fences.sql',import.meta.url),'utf8'));
     const user=f.users['main-user'],profile={actor:{...user.claims,credentialId:user.recipientId,active:true},household:'tanaka-household',vault:user.vault,
       directory:f.configuration.directory,epochs:f.configuration.directory.value.epochs,grants:f.configuration.grants[user.recipientId]};
+    const trust=await publicTrustPackage(f.configuration),sealed=await sealTrust(user.prf,user.recipientId,trust);
+    f.central.sqlite.prepare('UPDATE security_diary_key_vaults SET vault_json=? WHERE recipient_id=?').run(JSON.stringify({...user.vault,trust:sealed}),user.recipientId);
     const registry={directory:profile.directory.value,epochs:profile.epochs,households:profile.directory.value.households,photos:{}};
     const store=createStore(f.db,registry),c=new EncryptedDiaryClient({profile,anchor:f.configuration.anchor,transport:{valid:async()=>true,timestamp:async()=>new Date().toISOString(),snapshot:(h,since)=>store.snapshot(profile.actor,h,since),mutation:(proposal,operation)=>store.mutation(profile.actor,proposal,operation)}});
     await c.unlock(new Uint8Array(user.prf));const post=(await c.saveEntry({...entry(),title:'ENCRYPTED_EXPORT_PRIVATE_CANARY'})).entry;await c.setFavorite(post.id,true);
@@ -32,6 +36,7 @@ test('encrypted fixed exports include same-generation keys and restore over 10,0
     assert.equal(manifest.payload.tables.diary_e2ee_changes.rowCount,12002);
     assert.equal(Object.hasOwn(manifest.payload.tables,'diary_entries'),false);
     assert.ok(manifest.payload.keyMetadata.vaults[user.recipientId]);
+    assert.deepEqual(await openTrust(user.prf,user.recipientId,manifest.payload.keyMetadata.vaults[user.recipientId].trust),trust);
     for await(const part of readExportParts(bucket,manifest.payload,'diary'))assert.equal(JSON.stringify(part).includes('ENCRYPTED_EXPORT_PRIVATE_CANARY'),false);
     await assert.rejects(restoreIsolated(bucket,saved.daily,'diary'),/DiaryTrustedAnchorRequired/);
     restored=await restoreIsolated(bucket,saved.daily,'diary',{anchor:f.configuration.anchor,minimumGeneration:1});

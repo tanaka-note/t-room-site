@@ -42,7 +42,7 @@ try {
   assert.equal(wire.some(row=>row.path.startsWith('/security/')),false);assert.equal(JSON.stringify(wire).includes(Buffer.from(user.prf).toString('base64url')),false);
   f.db.sqlite.exec("UPDATE diary_e2ee_control SET phase='encrypted',ever_encrypted=1,generation=1");
   await page.reload();await page.locator('#passkey-login').waitFor({state:'visible'});
-  await page.getByLabel('日記の信頼設定ファイル').waitFor({state:'visible'});
+  assert.equal(await page.locator('input[type="file"]').filter({visible:true}).count(),0);
   assert.deepEqual(errors,[]);
   console.log('Diary normal login: automatic own-vault preparation, response-loss retry, PRF clearing and no Security Center navigation passed (synthetic authentication).');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));await f.close();}

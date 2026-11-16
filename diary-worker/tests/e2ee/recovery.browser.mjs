@@ -11,6 +11,9 @@ import { chromium } from 'playwright';
 import { systemFixture } from './system-fixture.mjs';
 import { publicTrustPackage } from '../../e2ee/setup.mjs';
 import { handleDiaryKeys } from '../../../security-worker/src/diary-keys.js';
+import {Bucket} from '../../../backup-worker/test/fixtures.mjs';
+import {exportFetcher,exportEnv} from '../../../backup-worker/test/export-fixtures.mjs';
+import {saveExport} from '../../../backup-worker/src/export-backup.js';
 import '../../../cloud-worker/public/crypto-vault.js';
 
 let f = await systemFixture({recoveryExtractable:true}), user = f.users['main-admin'];
@@ -39,8 +42,8 @@ try {
     adminPrivateCipher:Buffer.from(ciphertext).toString('base64url'), adminPrivateIv:Buffer.from(iv).toString('base64url'),
   }, user.prf);
 } finally { raw.fill(0); }
-f.central.sqlite.prepare("INSERT INTO security_service_links(id,identity_id,service,service_account_id,display_label,status) VALUES('fixture-existing-cloud','primary-admin','cloud','owner','Synthetic existing cloud','active')").run();
-f.central.sqlite.prepare("INSERT INTO security_tcloud_key_envelopes(id,identity_id,credential_id,service_link_id,envelope_type,encrypted_payload,payload_iv) VALUES('fixture-envelope','primary-admin',?,'fixture-existing-cloud','admin_private_prf',?,?)").run(user.credentialId, envelope.encryptedPayload, envelope.payloadIv);
+f.central.sqlite.prepare("INSERT INTO security_service_links(id,identity_id,service,service_account_id,display_label,status) VALUES('fixture-existing-cloud','primary-admin','cloud','owner','Synthetic existing cloud','active') ON CONFLICT DO NOTHING").run();
+f.central.sqlite.prepare("INSERT INTO security_tcloud_key_envelopes(id,identity_id,credential_id,service_link_id,envelope_type,encrypted_payload,payload_iv) VALUES(?,'primary-admin',?,'fixture-existing-cloud','admin_private_prf',?,?)").run('fixture-envelope-'+user.credentialId,user.credentialId, envelope.encryptedPayload, envelope.payloadIv);
 }
 await addAdminEnvelope(f,user);
 
@@ -74,7 +77,7 @@ const server = createServer(async (req,res) => {
     if (!mapping) {res.writeHead(404); res.end(); return;}
     const base = resolve(root,mapping[0]), file = resolve(base,mapping[1]);
     if (!file.startsWith(base+sep)) throw new Error('InvalidFixturePath');
-    res.setHeader('Content-Type', ['.js','.mjs'].includes(extname(file)) ? 'text/javascript' : extname(file)==='.html'?'text/html':extname(file)==='.css'?'text/css':'text/plain');
+    res.setHeader('Content-Type', ['.js','.mjs'].includes(extname(file)) ? 'text/javascript' : extname(file)==='.wasm'?'application/wasm':extname(file)==='.html'?'text/html':extname(file)==='.css'?'text/css':'text/plain');
     res.end(await readFile(file));
   } catch(error) {
     if (!error.status) errors.push(error.message);
@@ -86,7 +89,7 @@ origin = `http://127.0.0.1:${server.address().port}`; f.env.DIARY_ENCRYPTION_ORI
 const browser = await chromium.launch({headless:true});
 try {
   const context = await browser.newContext();
-  await context.addCookies([{name:'troom_diary_session', value:f.cookie().slice('troom_diary_session='.length), url:origin}]);
+  await context.addCookies([{name:'troom_diary_session', value:f.cookie().slice('troom_diary_session='.length), domain:'127.0.0.1',path:'/diary'}]);
   await context.addCookies(['identity','admin'].map(kind=>({name:'troom_security_'+kind,value:securityCookie(kind),url:origin})));
   const page = await context.newPage(); page.on('pageerror', e => errors.push(e.message));
   await page.goto(origin);
@@ -110,12 +113,7 @@ try {
   const recovered = await page.evaluate(async () => (await import('/security/diary-setup.mjs')).configureDiary());
   assert.equal(recovered.minimumGeneration,2);
   assert.equal(wire.filter(r => r.path === '/security/api/diary/config').length,1,'response-loss retry reads back the exact saved configuration');
-  const downloadPending=page.waitForEvent('download');
-  await page.evaluate(async () => {const setup=await import('/security/diary-setup.mjs');const trust=await setup.configureDiary();setup.downloadDiaryTrust(trust);});
-  const download=await downloadPending;
-  assert.equal(download.suggestedFilename(),'diary-public-trust.json');
-  const downloaded=JSON.parse(await readFile(await download.path(),'utf8'));
-  assert.equal(downloaded.minimumGeneration,3);assert.equal(JSON.stringify(downloaded).includes('privateEnvelope'),false);await download.delete();
+  await page.evaluate(async () => (await import('/security/diary-setup.mjs')).configureDiary());
   assert.equal(f.central.sqlite.prepare('SELECT generation FROM security_diary_key_config').get().generation,3);
   assert.equal(await page.evaluate(async () => {
     const {importDiaryTrust} = await import('/diary/diary-encryption.js');
@@ -147,8 +145,14 @@ try {
   await portfolio.addInitScript(({prf,credentialId})=>{window.TRoomPasskeys={authenticate:async()=>({credentialId,prfOutput:new Uint8Array(prf),link:{accountId:'main-admin'},handoff:{handoffToken:'main-admin'}})};},{prf:[...user.prf],credentialId:user.credentialId});
   await portfolio.goto(origin+'/diary/investment/');
   await portfolio.waitForSelector('#investment-passkey',{state:'visible'});await portfolio.click('#investment-passkey');
-  await portfolio.waitForSelector('#dashboard:not([hidden])');
+  await portfolio.waitForSelector('#dashboard:not([hidden])',{timeout:10000}).catch(async error=>{
+    const reason=await portfolio.evaluate(async()=>{try{await(await import('/diary/investment-encryption.js')).loadEncryptedInvestment(await(await fetch('/diary/api/session')).json(),await TRoomPasskeys.authenticate());return 'direct retry succeeded';}catch(error){return error.message;}});
+    throw new Error('Investment unlock: '+reason,{cause:error});
+  });
   assert.equal((await portfolio.locator('#current-total').innerText()).replace(/[^0-9]/g,''),'7812345671');
+  const investmentLogins=wire.filter(row=>row.path==='/diary/api/passkey/handoff').length;
+  await portfolio.reload();await portfolio.waitForSelector('#dashboard:not([hidden])');
+  assert.equal(wire.filter(row=>row.path==='/diary/api/passkey/handoff').length,investmentLogins,'investment reload reuses only its current live session device key');
   assert.equal(JSON.stringify(wire).includes('7812345670'),false);
   assert.equal(JSON.stringify(f.db.sqlite.prepare('SELECT * FROM diary_e2ee_records').all()).includes('7812345670'),false);
   const cache=await portfolio.evaluate(async()=>{const store=await (await import('/diary/crypto/e2ee/cache.mjs')).openCipherCache();const tx=JSON.stringify(await store.get('investment/main-admin/'+(await (await fetch('/diary/api/encryption/profile')).json()).profile.actor.credentialId));store.close();return tx;});
@@ -164,6 +168,8 @@ try {
   await context.addCookies(['identity','admin'].map(kind=>({name:'troom_security_'+kind,value:securityCookie(kind),url:origin})));
   await page.evaluate(({prf,credentialId,trust})=>{window.TRoomPasskeys={authenticate:async()=>{window.lastSetupPrf=new Uint8Array(prf);return {credentialId,prfOutput:window.lastSetupPrf};}};localStorage.setItem('tlain-diary-authority-public-v1',JSON.stringify(trust));},{prf:[...user.prf],credentialId:user.credentialId,trust:await publicTrustPackage(f.configuration)});
   f.db.sqlite.exec("INSERT INTO diary_entries(id,entry_date,title,content,author_id,author_name,household_id) VALUES(900,'2026-11-15','Setup migration title','SETUP_LEGACY_PRIVATE','main-admin','Synthetic owner','tanaka-household');");
+  const photoId=crypto.randomUUID();
+  f.db.sqlite.prepare("INSERT INTO diary_photos(id,entry_id,file_name,content_type,original_size,original_key,display_key,thumbnail_key,created_by_id,created_by_name,created_at) VALUES(?,900,'SETUP_PRIVATE_PHOTO.jpg','image/jpeg',3,?,?,?,'main-admin','Synthetic owner','2026-11-15')").run(photoId,'diary/staging/'+photoId+'/original','diary/staging/'+photoId+'/display','diary/staging/'+photoId+'/thumbnail');
   f.db.sqlite.exec(readFileSync(new URL('../../e2ee/legacy-fences.sql',import.meta.url),'utf8'));
   const pausedVault=f.central.sqlite.prepare('SELECT * FROM security_diary_key_vaults WHERE recipient_id=?').get(f.users['main-user'].recipientId);
   f.central.sqlite.prepare('DELETE FROM security_diary_key_vaults WHERE recipient_id=?').run(pausedVault.recipient_id);
@@ -176,9 +182,40 @@ try {
   assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) count FROM diary_entries').get().count,1,'the management entrypoint must not delete source data or cut over before restore verification');
   assert.equal(JSON.stringify(f.db.sqlite.prepare('SELECT * FROM diary_e2ee_records').all()).includes('SETUP_LEGACY_PRIVATE'),false);
   assert.equal(await page.evaluate(()=>window.lastSetupPrf.every(value=>value===0)),true);
+  const bucket=new Bucket();f.env.BACKUP=bucket;
+  f.env.ASSETS={fetch:async()=>new Response('<meta name="troom-app-build" content="diary-0123456789ab">')};
+  f.env.D1_BACKUPS={create:async value=>{
+    const mock=exportFetcher(f.db.sqlite,'diary',{migration:'diary-e2ee-v1'});
+    await saveExport({...exportEnv('diary',f.db,bucket),SECURITY_DB:f.central},'diary',Date.now(),{checkpoint:value.params.checkpoint,fetcher:mock.fetcher,sleep:async()=>{}});
+    return {id:value.id};
+  }};
+  let downloads=0;page.on('download',()=>downloads++);
+  assert.deepEqual(await page.evaluate(async()=>(await import('/security/diary-setup.mjs')).migrateDiary()),{completed:true});
+  assert.equal(downloads,0,'migration and actual SQLite restore require no downloaded/imported files');
+  assert.equal(f.db.sqlite.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'encrypted');
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) count FROM diary_entries').get().count,0);
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) count FROM diary_e2ee_media').get().count,1);
+  assert.equal(f.r2.size,0,'photo objects must not be rewritten or removed');
+  assert.equal(JSON.stringify(wire).includes('SETUP_LEGACY_PRIVATE'),false,'legacy plaintext must never be sent back in migration requests');
+  assert.equal(await page.evaluate(()=>window.lastSetupPrf.every(value=>value===0)),true);
+  // Password recovery/new admin passkey must rotate BEFORE asking for a grant
+  // signed by the new credential. The former admin credentials are revoked.
+  const previous=user.credentialId;
+  user={...user,credentialId:'fixture-recovered-admin',prf:crypto.getRandomValues(new Uint8Array(32))};
+  f.central.sqlite.prepare("INSERT INTO security_credentials(credential_id,identity_id,public_key,prf_salt,status,prf_enabled) VALUES(?,'primary-admin','synthetic','synthetic','active',1)").run(user.credentialId);
+  f.central.sqlite.prepare("UPDATE security_credentials SET status='revoked' WHERE credential_id=?").run(previous);
+  await addAdminEnvelope(f,user);
+  await context.addCookies(['identity','admin'].map(kind=>({name:'troom_security_'+kind,value:securityCookie(kind),url:origin})));
+  await page.evaluate(({prf,credentialId})=>{window.TRoomPasskeys={authenticate:async()=>{window.lastSetupPrf=new Uint8Array(prf);return {credentialId,prfOutput:window.lastSetupPrf};}};},{prf:[...user.prf],credentialId:user.credentialId});
+  assert.deepEqual(await page.evaluate(async()=>(await import('/security/diary-setup.mjs')).migrateDiary({kind:'rotation'})),{completed:true});
+  assert.equal(f.central.sqlite.prepare('SELECT generation FROM security_diary_key_config').get().generation,2);
+  assert.equal(f.db.sqlite.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'encrypted');
+  assert.equal(await page.evaluate(()=>window.lastSetupPrf.every(value=>value===0)),true);user.prf.fill(0);
   assert.deepEqual(errors,[]);
   await page.evaluate(() => window.fixtureBridge?.lock());
   console.log('Recovery browser: full Security HTTP/session gates, real T-Cloud PRF envelope, safe setup diagnostics, encrypted Diary/Investment, and the public migration entrypoint through checkpoint creation passed (synthetic authentication).');
 } finally {await browser.close(); await new Promise(r => server.close(r)); await f.close();}
 
 await import('./automatic-preparation.browser.mjs');
+await import('./unified-passkey.browser.mjs');
+await import('./real-passkey.browser.mjs');

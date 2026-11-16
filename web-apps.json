@@ -175,6 +175,9 @@
         "tools/shared/tlain-login.css",
         "tools/shared/tlain-login.js",
         "diary-worker/e2ee/crypto.mjs",
+        "diary-worker/e2ee/device.mjs",
+        "diary-worker/e2ee/tcloud-recovery.mjs",
+        "diary-worker/e2ee/trust.mjs",
         "diary-worker/e2ee/codec.mjs",
         "diary-worker/e2ee/client.mjs",
         "diary-worker/e2ee/investment.mjs",
@@ -225,6 +228,26 @@
         {
           "source": "diary-worker/e2ee/crypto.mjs",
           "copy": "diary-worker/public/crypto/e2ee/crypto.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/recovery.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/recovery.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/setup.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/setup.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/device.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/device.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/tcloud-recovery.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/tcloud-recovery.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/trust.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/trust.mjs"
         },
         {
           "source": "diary-worker/e2ee/codec.mjs",
@@ -358,7 +381,18 @@
         "health-worker/public/health-crypto.mjs",
         "tools/shared/tlain-login.css",
         "tools/shared/tlain-login.js",
+        "security-worker/diary-restore.mjs",
+        "backup-worker/src/integrity.js",
+        "backup-worker/src/registry.js",
+        "diary-worker/src/backup.js",
+        "diary-worker/e2ee/backup.mjs",
+        "diary-worker/e2ee/store.mjs",
+        "security-worker/tools/build-diary-restore.mjs",
+        "backup-worker/src/export-backup.js",
+        "backup-worker/src/diary-encrypted.js",
+        "backup-worker/src/schema-guard.js",
         "diary-worker/e2ee/crypto.mjs",
+        "diary-worker/e2ee/trust.mjs",
         "diary-worker/e2ee/codec.mjs",
         "diary-worker/e2ee/setup.mjs",
         "diary-worker/e2ee/record.mjs",
@@ -392,6 +426,10 @@
         {
           "source": "diary-worker/e2ee/crypto.mjs",
           "copy": "security-worker/public/diary-crypto/e2ee/crypto.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/trust.mjs",
+          "copy": "security-worker/public/diary-crypto/e2ee/trust.mjs"
         },
         {
           "source": "diary-worker/e2ee/codec.mjs",
