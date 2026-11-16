@@ -28,7 +28,7 @@ f.db.sqlite.exec("INSERT INTO diary_entries(id,entry_date,title,content,author_i
 f.db.sqlite.exec(readFileSync(new URL('../../e2ee/legacy-fences.sql',import.meta.url),'utf8'));
 security.env={...f.centralEnv,SESSION_SECRET:randomBytes(32).toString('base64url'),PASSKEY_ENABLED:'true',RP_ID:'localhost'};security.ctx=f.ctx;
 f.env.SECURITY=security;
-const root=fileURLToPath(new URL('../../public/',import.meta.url));let origin,failConfiguration=true,failImport=true,failCutover=true;
+const root=resolve(fileURLToPath(new URL('../../public/',import.meta.url)));let origin,failConfiguration=true,failImport=true,failCutover=true;
 const server=createServer(async(req,res)=>{
   try {
     const url=new URL(req.url,origin);

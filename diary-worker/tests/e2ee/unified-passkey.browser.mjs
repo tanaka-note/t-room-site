@@ -7,7 +7,7 @@ import {chromium} from 'playwright';
 import {systemFixture} from './system-fixture.mjs';
 import {publicTrustPackage} from '../../e2ee/setup.mjs';
 
-const f=await systemFixture(),user=f.users[process.argv.includes('--independent-editor')?'chiharu-admin':'main-user'],root=fileURLToPath(new URL('../../public/',import.meta.url));
+const f=await systemFixture(),user=f.users[process.argv.includes('--independent-editor')?'chiharu-admin':'main-user'],root=resolve(fileURLToPath(new URL('../../public/',import.meta.url)));
 const wire=[],errors=[];let origin,authentications=0;
 const trust=await publicTrustPackage(f.configuration);
 const server=createServer(async(req,res)=>{
