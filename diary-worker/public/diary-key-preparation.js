@@ -1,6 +1,6 @@
 import {createVault,unlockVault} from './crypto/e2ee/crypto.mjs';
 import {TRUST_PIN,resolveTrust,sealTrust,openTrust,sameTrust,sealPendingConfiguration,openPendingConfiguration,rememberTrustFloor,checkTrustFloor} from './crypto/e2ee/trust.mjs';
-import {prepareKeyConfiguration,publicTrustPackage} from './crypto/e2ee/setup.mjs';
+import {prepareKeyConfiguration,publicTrustPackage,scopeDefinitions} from './crypto/e2ee/setup.mjs';
 import {unlockCentralRecovery} from './crypto/e2ee/tcloud-recovery.mjs';
 
 function pinnedTrust() {
@@ -34,8 +34,10 @@ async function approvePreparedRecipients(api,session,authentication,recipientId,
     await management('/vault',{serviceLinkId:link.id,vault});check();
   }
   const status=await management('/admin');check();
+  // A frozen migration must retain exactly its original directory generation.
+  if(status.rollout?.phase==='migrating')return trust;
   const old=status.config?.directory.value.members||[];
-  if(status.config&&status.members.length===old.length&&status.members.every(member=>old.some(previous=>previous.credentialId===member.credentialId&&previous.canManageEntries===member.canManageEntries&&JSON.stringify(previous.households)===JSON.stringify(member.households))))return trust;
+  if(status.config&&scopeDefinitions(status.households,[...status.members,...(status.scopeAccounts||[])],status.retainedScopes||[]).every(row=>status.config.directory.value.epochs[row.scope])&&status.members.length===old.length&&status.members.every(member=>old.some(previous=>previous.credentialId===member.credentialId&&previous.canManageEntries===member.canManageEntries&&JSON.stringify(previous.households)===JSON.stringify(member.households))))return trust;
   const privateKey=await unlockCentralRecovery(authentication.prfOutput,status.adminEnvelope);check();
   const recoveryRecords=[];let after='';
   if(status.config)do {
@@ -57,14 +59,16 @@ async function approvePreparedRecipients(api,session,authentication,recipientId,
 // Called by the normal Diary passkey login. The caller owns and clears PRF;
 // only the sealed vault and public keys cross the service API.
 export async function prepareDiaryKeys(...args) {
-  try{return await prepareKeys(...args);}
+  const run=()=>prepareKeys(...args);
+  try{return args[1]?.isGlobalOwner&&globalThis.navigator?.locks?await navigator.locks.request('tlain-diary-owner-setup',run):await run();}
   catch(error) {
-    if(error.message==='RekeyRequired')throw Object.assign(new Error('パスキーの失効または権限変更に伴う鍵更新が必要です。管理者の復旧操作を行ってください。'),{code:'RekeyRequired'});
-    if(['DiaryTrustChanged','DiaryTrustRollback','InvalidPasskeyTrust','InvalidPublicTrust','InvalidEnvelope'].includes(error.message)||error.name==='OperationError')throw Object.assign(new Error('日記の鍵設定の一致を確認できません。管理者へ復旧を依頼してください。'),{code:'DiaryTrustInvalid'});
+    if(args[2]?.diaryMigrationStarted||args[1]?.encryption?.phase==='migrating')error.migrationPending=true;
+    if(error.message==='RekeyRequired')throw Object.assign(new Error('パスキーの失効または権限変更に伴う鍵更新が必要です。管理者の復旧操作を行ってください。'),{code:'RekeyRequired',migrationPending:error.migrationPending});
+    if(['DiaryTrustChanged','DiaryTrustRollback','InvalidPasskeyTrust','InvalidPublicTrust','InvalidEnvelope'].includes(error.message)||error.name==='OperationError')throw Object.assign(new Error('日記の鍵設定の一致を確認できません。管理者へ復旧を依頼してください。'),{code:'DiaryTrustInvalid',migrationPending:error.migrationPending});
     throw error;
   }
 }
-async function prepareKeys(api,session,authentication,check=()=>{}) {
+async function prepareKeys(api,session,authentication,check=()=>{},onProgress=()=>{}) {
   if(!(authentication?.prfOutput instanceof Uint8Array)||authentication.prfOutput.length!==32)throw new Error('暗号化の利用準備にはPRF対応のパスキーが必要です。');
   const assertOwn=value=>{
     check();
@@ -95,5 +99,12 @@ async function prepareKeys(api,session,authentication,check=()=>{}) {
     if(!info.vault.trust)throw new Error('DiaryTrustNotSaved');
     await sameTrust(trust,await openTrust(authentication.prfOutput,info.recipientId,info.vault.trust));check();await remember(trust);authentication.diaryTrust=trust;
   }else if(session.encryption.enabled)throw new Error('日記の鍵の準備を待っています。管理者の次の利用後にログインし直してください。');
+  if(session.isGlobalOwner&&trust&&session.keySession?.id) {
+    const {migrateDiaryOnLogin}=await import('./diary-automatic-migration.js');
+    await migrateDiaryOnLogin({api,session,authentication,trust,check,onProgress});
+    const fresh=await api('/session');check();
+    if(!fresh.authenticated||JSON.stringify(session.keySession)!==JSON.stringify(fresh.keySession))throw Object.assign(new Error('ログイン状態が変わりました。'),{sessionChanged:true});
+    Object.assign(session,fresh);
+  }
   return {prepared:true};
 }

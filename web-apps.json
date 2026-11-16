@@ -202,7 +202,12 @@
         "diary-worker/e2ee/rotation.mjs",
         "diary-worker/e2ee/rotation-store.mjs",
         "diary-worker/e2ee/migration.mjs",
-        "diary-worker/e2ee/migration-store.mjs"
+        "diary-worker/e2ee/migration-store.mjs",
+        "diary-worker/e2ee/maintenance.mjs",
+        "diary-worker/public/diary-automatic-migration.js",
+        "diary-worker/public/diary-restore.mjs",
+        "diary-worker/public/vendor/sql-wasm.wasm",
+        "diary-worker/public/vendor/sqlite-license.txt"
       ],
       "buildMode": "content-hash",
       "serviceWorker": "diary-worker/public/service-worker.js",
@@ -236,6 +241,18 @@
         {
           "source": "diary-worker/e2ee/setup.mjs",
           "copy": "diary-worker/public/crypto/e2ee/setup.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/maintenance.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/maintenance.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/rotation.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/rotation.mjs"
+        },
+        {
+          "source": "diary-worker/e2ee/migration.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/migration.mjs"
         },
         {
           "source": "diary-worker/e2ee/device.mjs",

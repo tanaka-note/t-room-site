@@ -1,3 +1,4 @@
+import {issueDiaryMaintenance,verifyDiaryMaintenance} from './diary-maintenance.js';
 import {diaryEncryptionOrigin} from '../../diary-worker/e2ee/origin.mjs';
 import { b64,encode,fingerprint,verifyDirectory,verifySigned,validateEnvelope,validatePublicKey,recoveryWrappedBytes,unb64 } from '../../diary-worker/e2ee/crypto.mjs';
 import { canRead } from '../../diary-worker/e2ee/policy.mjs';
@@ -69,12 +70,28 @@ export async function diaryAutomaticManagement(env,input,validate,audit=async()=
   await diaryAutomaticVault(env,input,validate);
   const claims=await accountClaims(env,input.serviceAccountId);
   if(input.identityId!=='primary-admin'||!claims.isGlobalOwner)fail(403,'AccessDenied');
-  const path=input.path;
-  if(!['/own','/vault','/admin','/config','/recovery-records'].includes(path?.split('?')[0]))fail(404,'UnknownDiaryAutomaticRoute');
-  const method=input.value===undefined?'GET':'POST';
-  if(!((method==='GET'&&['/own','/admin','/recovery-records'].includes(path.split('?')[0]))||(method==='POST'&&['/vault','/config'].includes(path))))fail(405,'MethodDenied');
-  const response=await handleDiaryKeys('/api/diary'+path,new Request('https://security.internal/security/api/diary'+path,{method,...(method==='POST'?{body:JSON.stringify(input.value)}:{})}),env,
-    {identityId:input.identityId,credentialId:input.credentialId,authenticatedAt:Date.parse(input.startedAt)/1000},
+  const path=input.path,route=path?.split('?')[0],method=input.value===undefined?'GET':'POST';
+  const get=['/own','/admin','/recovery-records','/migration/inventory','/maintenance/checkpoint','/maintenance/build','/maintenance/inventory'];
+  const post=['/vault','/config','/control','/migration/import','/maintenance/backup','/maintenance/signing-vault','/maintenance/authorize'];
+  if(!(method==='GET'?get:post).includes(route))fail(404,'UnknownDiaryAutomaticRoute');
+  let maintenanceUntil;
+  if(input.maintenanceAuthorization) {
+    // Every call above still checks the live session, credential, link and role.
+    // A continuation cannot change keys, start/undo migration, or rotate keys.
+    if(!['/admin','/migration/inventory','/migration/import','/maintenance/checkpoint','/maintenance/build','/maintenance/inventory','/maintenance/backup','/control'].includes(route)||route==='/control'&&(method!=='POST'||input.value?.next!=='encrypted'))fail(403,'DiaryMaintenanceRouteDenied');
+    const current=await config(env),rollout=await env.DIARY_AUTH.encryptionRollout();
+    maintenanceUntil=await verifyDiaryMaintenance(env,input,current?.generation,rollout);
+  }
+  const authenticatedAt=Date.parse(input.startedAt)/1000;
+  if(route==='/maintenance/authorize') {
+    if(!Number.isFinite(authenticatedAt)||Math.abs(Date.now()/1000-authenticatedAt)>300)fail(428,'RecentAuthenticationRequired');
+    const current=await config(env),rollout=await env.DIARY_AUTH.encryptionRollout();
+    if(!current)fail(409,'EncryptionPreparationRequired');
+    const result=await issueDiaryMaintenance(env,input,current.generation,rollout);
+    await audit('diary_migration_authorized',input.identityId);return result;
+  }
+  const response=await handleDiaryKeys('/api/diary'+route,new Request('https://security.internal/security/api/diary'+path,{method,...(method==='POST'?{body:JSON.stringify(input.value)}:{})}),env,
+    {identityId:input.identityId,credentialId:input.credentialId,authenticatedAt,maintenanceUntil},
     {readJson:async(request,limit)=>{const text=await request.text();if(new TextEncoder().encode(text).length>limit)fail(413,'RequestTooLarge');return JSON.parse(text);},json:Response.json,audit});
   return response.json();
 }
@@ -163,7 +180,8 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
     for(const link of links){const recipientId=await diaryRecipientId(actor.credentialId,link.id);const vault=await env.DB.prepare('SELECT recipient_id,vault_json FROM security_diary_key_vaults WHERE recipient_id=?').bind(recipientId).first();entries.push({...link,recipientId,prepared:Boolean(vault),...(vault?{trust:JSON.parse(vault.vault_json).trust}:{} )});}
     return json({links:entries});
   }
-  if(!Number.isFinite(actor.authenticatedAt)||Date.now()/1000-actor.authenticatedAt>300)fail(428,'RecentAuthenticationRequired');
+  const continuing=Number.isSafeInteger(actor.maintenanceUntil)&&actor.maintenanceUntil>Date.now()&&actor.maintenanceUntil<=Date.now()+3600000;
+  if(!continuing&&(!Number.isFinite(actor.authenticatedAt)||Math.abs(Date.now()/1000-actor.authenticatedAt)>300))fail(428,'RecentAuthenticationRequired');
   if(path==='/api/diary/trust'&&request.method==='POST') {
     const body=await readJson(request,16000),link=links.find(link=>link.id===body.serviceLinkId);
     if(!link||!exact(body,['serviceLinkId','trust']))fail(403,'DiaryAutomaticRecipientMismatch');
@@ -200,8 +218,14 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
     for(const candidate of links){const live=await activeAccountClaims(env,candidate.accountId);if(live?.isGlobalOwner){link=candidate;claims=live;break;}}
     if(!link)fail(403,'AccessDenied');
     const body=await readJson(request,20000);if(!exact(body,['expectedGeneration','next','evidence']))fail(400,'InvalidRolloutRequest');
-    if(body.next==='encrypted'&&!(await writerReadiness(env,current)).ready)fail(409,'DiaryWriterPreparationRequired');
-    const actorClaims={...claims,credentialId:await diaryRecipientId(actor.credentialId,link.id),reauthenticatedAt:actor.authenticatedAt};
+    if(body.next==='encrypted'&&(await env.DIARY_AUTH.encryptionRollout()).everEncrypted&&!(await writerReadiness(env,current)).ready)fail(409,'DiaryWriterPreparationRequired');
+    if(body.next==='encrypted'&&!(await env.DIARY_AUTH.encryptionRollout()).everEncrypted) {
+      // Unprepared people need not block initial migration. Existing recipients
+      // that were revoked or narrowed while it ran still require rekeying.
+      const bundle=await diaryKeyBundle(env,{identityId:actor.identityId,credentialId:actor.credentialId,serviceLinkId:link.id,serviceAccountId:link.accountId});
+      if(!bundle||bundle.rekeyRequired)fail(423,'RekeyRequired');
+    }
+    const actorClaims={...claims,credentialId:await diaryRecipientId(actor.credentialId,link.id),reauthenticatedAt:actor.authenticatedAt,maintenanceUntil:actor.maintenanceUntil};
     const directory=await verifyDirectory(current.directory,current.anchor,current.generation);
     const result=await env.DIARY_AUTH.transitionEncryption({...body,actor:actorClaims,directory});
     await audit('diary_rollout_changed',actor.identityId);return json(result);
@@ -209,7 +233,7 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
   if(path==='/api/diary/investment'&&['GET','POST'].includes(request.method)) {
     const current=await config(env);if(!current)fail(409,'EncryptionPreparationRequired');
     let operator;
-    for(const link of links){const claims=await activeAccountClaims(env,link.accountId);if(claims?.isGlobalOwner&&claims.canViewInvestment){operator={...claims,credentialId:await diaryRecipientId(actor.credentialId,link.id),reauthenticatedAt:actor.authenticatedAt};break;}}
+    for(const link of links){const claims=await activeAccountClaims(env,link.accountId);if(claims?.isGlobalOwner&&claims.canViewInvestment){operator={...claims,credentialId:await diaryRecipientId(actor.credentialId,link.id),reauthenticatedAt:actor.authenticatedAt,maintenanceUntil:actor.maintenanceUntil};break;}}
     if(!operator)fail(403,'AccessDenied');
     const directory=await verifyDirectory(current.directory,current.anchor,current.generation);
     if(request.method==='GET')return json(await env.DIARY_AUTH.encryptionInvestmentRecord({actor:operator,directory}));

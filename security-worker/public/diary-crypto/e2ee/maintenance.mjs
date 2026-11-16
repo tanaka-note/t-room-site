@@ -31,7 +31,6 @@ export function* maintenanceBatches(rows) {
 export async function prepareDiaryMaintenance({kind,api,recoveryPrivateKey,trust,plans,onProgress=()=>{}}) {
   if(!['migration','rotation'].includes(kind))throw message();
   let status=await api('/admin');
-  if(kind==='migration'&&status.writerReadiness?.ready===false)throw new Error('先に日記を利用する全員の鍵の準備と管理者承認を完了してください。');
   await verifyDirectory(status.config.directory,trust.anchor,trust.minimumGeneration);
   let plan=await plans.get();
   if(plan&&plan.kind!==kind)throw message();

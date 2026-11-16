@@ -22,7 +22,7 @@ export async function systemFixture({recoveryBits=3072,recoveryExtractable=false
   const integration=new SecurityIntegration();integration.env=env;
   const recovery=await crypto.subtle.generateKey({name:'RSA-OAEP',modulusLength:recoveryBits,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},recoveryExtractable,['encrypt','decrypt']);
   const recoveryPublicKey=await crypto.subtle.exportKey('jwk',recovery.publicKey);
-  const centralEnv={DB:central,DIARY_ENCRYPTION_ENABLED:'true',DIARY_AUTH:integration,CLOUD_AUTH:{getPrimaryAdminCryptoConfig:async()=>({initialized:true,publicKeyJwk:recoveryPublicKey})}};
+  const centralEnv={DB:central,SESSION_SECRET:randomBytes(32).toString('base64url'),DIARY_ENCRYPTION_ENABLED:'true',DIARY_AUTH:integration,CLOUD_AUTH:{getPrimaryAdminCryptoConfig:async()=>({initialized:true,publicKeyJwk:recoveryPublicKey})}};
   const people=[{identityId:'primary-admin',credentialId:'fixture-primary-credential',accounts:['main-admin','main-user']},{identityId:'fixture-editor',credentialId:'fixture-editor-credential',accounts:['wife-admin']},{identityId:'fixture-other-house',credentialId:'fixture-other-credential',accounts:['chiharu-admin']}];
   const users={},members=[];
   const json=(value,status=200)=>Response.json(value,{status});

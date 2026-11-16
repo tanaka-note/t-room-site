@@ -120,7 +120,7 @@ export class SecurityIntegration extends WorkerEntrypoint {
     const hex=[...bytes.slice(0,16)].map(b=>b.toString(16).padStart(2,'0')).join('');
     const checkpoint=`${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`,id='diary-checkpoint-'+checkpoint;
     try{await this.env.D1_BACKUPS.create({id,params:{service:'diary',scheduledTime:Date.now(),checkpoint}});}
-    catch{const instance=await this.env.D1_BACKUPS.get(id);const {status}=await instance.status();if(!['queued','running','waiting','paused','complete'].includes(status))throw new Error('DiaryCheckpointFailed');}
+    catch{const instance=await this.env.D1_BACKUPS.get(id);const {status}=await instance.status();if(status==='errored')await instance.restart();else if(!['queued','running','waiting','paused','complete'].includes(status))throw new Error('DiaryCheckpointFailed');}
     return {checkpoint,instanceId:id,key:`v10/checkpoints/${checkpoint}.json.gz`};
   }
   async readEncryptionCheckpoint({directoryGeneration,checkpoint,part}) {
@@ -244,7 +244,7 @@ export default {
       const isDiaryNavigation=path==='/'||path==='/tags'||path==='/tags/'||path.startsWith('/entry/')||path.startsWith('/tag/')||path==='/trash'||path==='/favorites'||path==='/favorites/'||path==='/investment'||path==='/investment/';
       if(isDiaryNavigation&&request.method==='GET'&&encryptionEnabled(env)&&env.DIARY_ENCRYPTION_ORIGIN&&url.origin!==diaryEncryptionOrigin(env)) {
         const control=await readRollout(env.DB);
-        if(control.everEncrypted) {
+        if(control.phase==='legacy'||control.everEncrypted||control.phase==='migrating') {
           // Legacy search/tag URLs can contain plaintext. Do not copy them to
           // the dedicated origin or forward POST bodies across that boundary.
           const path=url.pathname.startsWith('/diary/tag/')?'/diary/':url.pathname;
@@ -431,7 +431,7 @@ async function handleApi(request, env, url, path, context, getSession, timing) {
         if(session.authMethod!=='passkey'||!session.isGlobalOwner)throw new HttpError(403,'管理者としてログインしてください。');
         const control=await readRollout(env.DB);if(control.everEncrypted)assertDiaryEncryptionOrigin(env,url);
         const value=request.method==='POST'?await readJson(request,4_000_000):undefined;
-        const result=await env.SECURITY.manageDiaryKeys({...session,service:'diary',path:path.slice('/api/encryption/manage'.length)+url.search,value});
+        const result=await env.SECURITY.manageDiaryKeys({...session,service:'diary',path:path.slice('/api/encryption/manage'.length)+url.search,value,maintenanceAuthorization:request.headers.get('X-Diary-Maintenance')||undefined});
         return json(result);
       }
       const encrypted=await handleEncryptedApi(request,env,url,path,session,{json,readJson,readMultipartForm});if(encrypted)return encrypted;
@@ -691,6 +691,10 @@ async function serveAsset(request, env, url, path) {
     ["/investment.css", "/investment.css"],
     ["/investment.js", "/investment.js"],
     ["/diary-key-preparation.js","/diary-key-preparation.js"],
+    ["/diary-automatic-migration.js","/diary-automatic-migration.js"],
+    ["/diary-restore.mjs","/diary-restore.mjs"],
+    ["/vendor/sql-wasm.wasm","/vendor/sql-wasm.wasm"],
+    ["/vendor/sqlite-license.txt","/vendor/sqlite-license.txt"],
     ["/investment-encryption.js","/investment-encryption.js"]
   ]);
   const isDiaryRoute = path === "/" || path === "/tags" || path === "/tags/" || path.startsWith("/entry/") || path.startsWith("/tag/") || path === "/trash" || path === "/favorites" || path === "/favorites/";
@@ -710,7 +714,7 @@ async function serveAsset(request, env, url, path) {
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
   const immutable = response.ok && /^diary-[a-f0-9]{12}$/.test(url.searchParams.get("v") || "")
     && /\.(?:js|css|png)$/.test(assetPath) && !isInvestmentAssetPath(path);
-  headers.set("Cache-Control", encryptedAsset?"no-cache":assetPath === "/" || assetPath === "/investment.html"
+  headers.set("Cache-Control", encryptedAsset||["/diary-automatic-migration.js","/diary-restore.mjs","/vendor/sql-wasm.wasm"].includes(path)?"no-cache":assetPath === "/" || assetPath === "/investment.html"
     ? "no-store"
     : assetPath === "/service-worker.js" ? "no-cache"
       : immutable ? "public, max-age=31536000, immutable" : "public, max-age=3600");
@@ -2860,7 +2864,7 @@ function secureResponse(response) {
   headers.set("Referrer-Policy", "no-referrer");
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
   headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+  headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
