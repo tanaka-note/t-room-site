@@ -1,6 +1,6 @@
 import {unlockCentralRecovery} from './crypto/e2ee/tcloud-recovery.mjs';
 import {unlockVault,unb64,verifyDirectory} from './crypto/e2ee/crypto.mjs';
-import {openMaintenancePlans,prepareDiaryMaintenance,finishDiaryMaintenance} from './crypto/e2ee/maintenance.mjs';
+import {openMaintenancePlans,prepareDiaryMaintenance,finishDiaryMaintenance,resumeVerifiedMaintenance} from './crypto/e2ee/maintenance.mjs';
 import {rotationDigest} from './crypto/e2ee/rotation.mjs';
 
 // Runs inside the ordinary owner login, using that ceremony's PRF. The scoped
@@ -41,6 +41,7 @@ export async function migrateDiaryOnLogin({api,session,authentication,trust,chec
     authentication.diaryMigrationStarted=true;
     onProgress({phase:'reading',completed:0});
     await prepareDiaryMaintenance({kind:'migration',api:manage,recoveryPrivateKey,trust,plans,onProgress});
+    if(await resumeVerifiedMaintenance({api:manage,signingKey:ownKeys.sign,trust,plans,onProgress})){onProgress({phase:'complete'});return;}
     const checkpoint=await manage('/maintenance/backup',{});
     let manifest;
     for(let attempt=0;attempt<300;attempt++) {
@@ -61,7 +62,7 @@ export async function migrateDiaryOnLogin({api,session,authentication,trust,chec
     }};
     const report=await restoreDiaryCheckpoint({bucket,key:checkpoint.key,trust,onProgress,wasmUrl:new URL('./vendor/sql-wasm.wasm',import.meta.url).href});
     const {build}=await manage('/maintenance/build');
-    await finishDiaryMaintenance({api:manage,recoveryPrivateKey,signingKey:ownKeys.sign,trust,plans,report,readerBuild:build,writerBuild:build});
+    await finishDiaryMaintenance({api:manage,recoveryPrivateKey,signingKey:ownKeys.sign,trust,plans,report,readerBuild:build,writerBuild:build,onProgress});
     onProgress({phase:'complete'});
   }catch(error) {
     authentication.diaryPrivateKeys=null;

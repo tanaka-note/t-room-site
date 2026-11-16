@@ -76,7 +76,7 @@
     if(authentication&&session.encryption) {
       try {
         const preparation=await import(new URL(`diary-key-preparation.js${scriptUrl.search}`,scriptUrl).href);
-        await preparation.prepareDiaryKeys((path,options={})=>api(path,options.body,options.headers),session,authentication,()=>{},progress=>{message.textContent=progress.phase==='complete'?'日記を開いています…':'日記の暗号化を進めています。この画面を開いたままお待ちください。';});
+        await preparation.prepareDiaryKeys((path,options={})=>api(path,options.body,options.headers),session,authentication,()=>{},progress=>{message.textContent=preparation.diaryMigrationMessage(progress);});
       }catch(error){if(session.encryption.enabled||error.migrationPending||error.sessionChanged||[401,403].includes(error.status))throw error;preparationMessage='日記は利用できますが、暗号化の利用準備を完了できませんでした。対応するパスキーで次回ログイン時に再試行します。';}
     }
     if(session.encryption?.enabled){const encryption=await import(new URL(`diary-encryption.js${scriptUrl.search}`,scriptUrl).href);encryptionRuntime=await encryption.startEncryptedDiary(session,authentication);}

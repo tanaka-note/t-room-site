@@ -56,6 +56,14 @@ async function approvePreparedRecipients(api,session,authentication,recipientId,
   return next;
 }
 
+export function diaryMigrationMessage(progress) {
+  if(progress.phase==='complete')return '日記を開いています…';
+  const subject=progress.kind==='media'?'写真情報':progress.kind==='records'?'日記・設定':'データ';
+  const count=Number.isSafeInteger(progress.completed)&&Number.isSafeInteger(progress.total)?`（${subject} ${progress.completed.toLocaleString()} / ${progress.total.toLocaleString()}件）`:'';
+  const labels={reading:'移行する内容を確認しています',writing:'暗号化した内容を保存しています',backup:'復元確認用のバックアップを作成しています',restoring:'バックアップを端末内に復元しています',comparing:'保存内容を照合しています',decrypting:'復元した内容を検証しています'};
+  return (labels[progress.phase]||'日記の暗号化を準備しています')+count+'… この画面を開いたままお待ちください。';
+}
+
 // Called by the normal Diary passkey login. The caller owns and clears PRF;
 // only the sealed vault and public keys cross the service API.
 export async function prepareDiaryKeys(...args) {

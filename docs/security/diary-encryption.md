@@ -54,6 +54,12 @@ Custom DomainはCloudflareのWorkers Domains APIで別管理する。通常のAc
 
 初回の停止開始と継続許可の発行には5分以内の通常本人認証を使う。大きな移行が5分を越えても追加の認証を繰り返さないよう、Security署名の1時間以内の継続許可をメモリーだけに保持する。許可は元の署名済み日記session・Identity・credential・link・account・epoch・鍵世代・停止世代へ結び付け、毎要求でlive session／失効／global owner権限を再確認する。固定の初回移行・復元・切替経路だけに使い、設定変更、停止取消、鍵更新、別sessionには使えない。PRFは本人鍵と復旧鍵の解除直後に消去し、復旧秘密鍵はその処理中の端末メモリーだけで使う。
 
+### 大量の写真情報の照合と切替再開
+
+台帳の容量上限は、追加した行のcanonical UTF-8 byte・区切り・両配列の固定部分を加算して検査する。全件の台帳を各ページ取得後に繰り返し再serializeしない。署名、全件digest比較、全件の実復号は維持し、digestと写真metadataの復号は同時16件、本文・summaryの復号は同時4件までに限定する。処理中は保存・復元・照合・復号確認の段階と件数を表示する。
+
+実際の隔離SQLite復元、plan／現DB／復元DBの全件照合と復号が成功した後にだけ、既存の署名済みcutover evidenceを端末のplan storeへ保存する。これは件数・digest・公開build情報と署名だけであり、秘密鍵・PRF・平文は含まない。最終切替の通信失敗・継続許可切れの後、同じ端末の通常ログインでは現在のdirectoryと同じ署名鍵を確認し、現DBの全件台帳を改めてplanと照合してから証明を再送できる。鍵世代・停止世代・sequence・件数の不一致は切替を拒否する。署名が壊れた任意cacheや別credentialの証明は利用せず、実際の復元・復号をもう一度行う。証明の再開でも通常のlive session、1時間の継続許可、サーバー側の元データcoverage・署名・transaction検査を維持する。
+
 ### 本番確認の境界
 
 1. Backup Worker、Security、Diaryを検証した同一commitから準備公開する。候補SQLは通常migrationの外に置いたままとし、適用前にschema・対象DB・既存バックアップを照合する。`node --use-env-proxy tools/prepare-diary-encryption.mjs --infrastructure`は、既存のクラウド環境Network secretを使い、同じmain commitのCI成功と最新main・対象account/DB・既存DDLを確認してBackup Workerを先に公開し、追加schemaだけを適用する。通常のproduction tokenへD1/R2権限を追加しない。投稿停止・暗号化の有効化・平文削除は実行しない。専用HTTPS originと、そのoriginからの日記専用WebAuthn認証を準備する。
