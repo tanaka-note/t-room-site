@@ -59,6 +59,8 @@ async function approvePreparedRecipients(api,session,authentication,recipientId,
 // Called by the normal Diary passkey login. The caller owns and clears PRF;
 // only the sealed vault and public keys cross the service API.
 export async function prepareDiaryKeys(...args) {
+  const preventUpdate=event=>event.preventDefault();
+  globalThis.document?.addEventListener('troom:before-auto-update',preventUpdate);
   const run=()=>prepareKeys(...args);
   try{return args[1]?.isGlobalOwner&&globalThis.navigator?.locks?await navigator.locks.request('tlain-diary-owner-setup',run):await run();}
   catch(error) {
@@ -66,7 +68,7 @@ export async function prepareDiaryKeys(...args) {
     if(error.message==='RekeyRequired')throw Object.assign(new Error('パスキーの失効または権限変更に伴う鍵更新が必要です。管理者の復旧操作を行ってください。'),{code:'RekeyRequired',migrationPending:error.migrationPending});
     if(['DiaryTrustChanged','DiaryTrustRollback','InvalidPasskeyTrust','InvalidPublicTrust','InvalidEnvelope'].includes(error.message)||error.name==='OperationError')throw Object.assign(new Error('日記の鍵設定の一致を確認できません。管理者へ復旧を依頼してください。'),{code:'DiaryTrustInvalid',migrationPending:error.migrationPending});
     throw error;
-  }
+  }finally{globalThis.document?.removeEventListener('troom:before-auto-update',preventUpdate);}
 }
 async function prepareKeys(api,session,authentication,check=()=>{},onProgress=()=>{}) {
   if(!(authentication?.prfOutput instanceof Uint8Array)||authentication.prfOutput.length!==32)throw new Error('暗号化の利用準備にはPRF対応のパスキーが必要です。');
