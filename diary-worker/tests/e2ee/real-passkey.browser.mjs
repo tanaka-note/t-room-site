@@ -28,13 +28,14 @@ f.db.sqlite.exec("INSERT INTO diary_entries(id,entry_date,title,content,author_i
 f.db.sqlite.exec(readFileSync(new URL('../../e2ee/legacy-fences.sql',import.meta.url),'utf8'));
 security.env={...f.centralEnv,SESSION_SECRET:randomBytes(32).toString('base64url'),PASSKEY_ENABLED:'true',RP_ID:'localhost'};security.ctx=f.ctx;
 f.env.SECURITY=security;
-const root=fileURLToPath(new URL('../../public/',import.meta.url));let origin,failConfiguration=true,failImport=true;
+const root=fileURLToPath(new URL('../../public/',import.meta.url));let origin,failConfiguration=true,failImport=true,failCutover=true;
 const server=createServer(async(req,res)=>{
   try {
     const url=new URL(req.url,origin);
     if(url.pathname.includes('/api/')) {
       const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=Buffer.concat(chunks);wire.push({path:url.pathname,body:body.toString()});
       if(url.pathname==='/diary/api/encryption/manage/config'&&failConfiguration){failConfiguration=false;res.writeHead(503,{'Content-Type':'application/json'});res.end('{"error":"Synthetic connection loss before configuration persistence"}');return;}
+      if(url.pathname==='/diary/api/encryption/manage/control'&&JSON.parse(body.toString()).next==='encrypted'&&failCutover){failCutover=false;res.writeHead(503,{'Content-Type':'application/json'});res.end('{"error":"Synthetic lost cutover request"}');return;}
       const request=new Request(url,{method:req.method,headers:req.headers,...(body.length?{body}:{} )});
       const reply=url.pathname.startsWith('/security/')?await security.fetch(request):await f.worker.fetch(request,f.env,f.ctx);
       if(url.pathname==='/diary/api/encryption/manage/migration/import'&&reply.ok&&failImport){failImport=false;res.writeHead(503,{'Content-Type':'application/json'});res.end('{"error":"Synthetic lost import response"}');return;}
@@ -101,7 +102,14 @@ try {
   assert.equal(await page.locator('#app-view').isVisible(),false);
   await page.reload();await page.locator('#passkey-login').waitFor({state:'visible'});
   assert.match(await page.locator('#login-message').textContent(),/再開/);
+  await page.click('#passkey-login');await page.locator('.troom-passkey-account-option').nth(0).click();
+  await page.waitForFunction(()=>document.querySelector('#login-message').textContent.includes('Synthetic lost cutover request'));
+  assert.equal(f.db.sqlite.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'migrating');
+  assert.equal(await page.evaluate(async()=>{const {openMaintenancePlans}=await import('/diary/crypto/e2ee/maintenance.mjs'),plans=await openMaintenancePlans();try{return Boolean(await plans.getProof());}finally{plans.close();}}),true);
+  const checkpointRequests=wire.filter(row=>row.path.includes('/maintenance/checkpoint')||row.path.includes('/maintenance/backup')).length;
+  await page.reload();await page.locator('#passkey-login').waitFor({state:'visible'});
   await login(0);
+  assert.equal(wire.filter(row=>row.path.includes('/maintenance/checkpoint')||row.path.includes('/maintenance/backup')).length,checkpointRequests,'a verified cutover resumes with a fresh complete inventory check without another backup/SQLite drill');
   assert.equal(f.central.sqlite.prepare('SELECT generation FROM security_diary_key_config').get().generation,1);
   assert.equal(await page.evaluate(()=>localStorage.getItem('tlain-diary-authority-public-v1-automatic-pending')),null);
   assert.equal(f.db.sqlite.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'encrypted');
@@ -113,7 +121,7 @@ try {
   assert.equal(writerReadiness.ready,false,'the owner migrates before other people log in');
   assert.equal(JSON.stringify(wire).includes('AUTOMATIC_PRIVATE_BODY'),false);
   assert.equal(wire.some(row=>row.path.startsWith('/security/api/diary')),false);
-  assert.equal(wire.filter(row=>row.path==='/security/api/auth/verify').length,3,'one passkey ceremony per normal login, including interrupted setup and migration');
+  assert.equal(wire.filter(row=>row.path==='/security/api/auth/verify').length,4,'one passkey ceremony per normal login, including interrupted setup, import and final cutover');
   await page.click('#new-entry-button');await page.locator('#editor-dialog').waitFor({state:'visible'});
   await page.fill('#entry-title','FUTURE_PRIVATE_TITLE');await page.locator('#entry-content').fill('FUTURE_PRIVATE_BODY');
   await page.click('#save-entry-button');await page.locator('#editor-dialog').waitFor({state:'hidden'});
@@ -147,5 +155,5 @@ try {
   await page.reload();await page.locator('#app-view').waitFor({state:'visible'});
   assert.equal(wire.filter(row=>row.path==='/security/api/auth/verify').length,before);
   assert.equal(wire.some(row=>row.body?.includes('prfOutput')),false);assert.deepEqual(errors,[]);
-  console.log('Actual WebAuthn PRF with virtual authenticator: existing central recovery envelope, interrupted normal-login migration resume and automatic D1 cutover before other users enroll, encrypted future posts, late personal-scope grants, shared passkey ordinary account, sealed trust and session reload passed; no JSON or physical-user credentials.');
+  console.log('Actual WebAuthn PRF with virtual authenticator: existing central recovery envelope, interrupted normal-login import and verified-cutover resume and automatic D1 cutover before other users enroll, encrypted future posts, late personal-scope grants, shared passkey ordinary account, sealed trust and session reload passed; no JSON or physical-user credentials.');
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));await f.close();}

@@ -40,7 +40,7 @@ export async function restoreDiaryCheckpoint({bucket,key,trust,onProgress=()=>{}
         insert.reset();
         counts.set(table.name,(counts.get(table.name)||0)+1);total++;
       }}finally{insert.free();}
-      onProgress({phase:'restoring',completed:total});
+      onProgress({phase:'restoring',completed:total,total:manifest.rowCount});
     }
     for(const table of tables)if((counts.get(table.name)||0)!==manifest.tables[table.name].rowCount||rows(db,`SELECT count(*) n FROM ${table.name}`)[0].n!==manifest.tables[table.name].rowCount)throw new Error('RestoreRowCountMismatch');
     db.exec("UPDATE diary_accounts SET active=0,session_version=session_version+1,must_change_password=1; UPDATE diary_e2ee_control SET phase='paused',ever_encrypted=1;");

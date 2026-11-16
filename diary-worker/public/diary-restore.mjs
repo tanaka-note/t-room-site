@@ -4029,7 +4029,7 @@ async function restoreDiaryCheckpoint({ bucket, key, trust, onProgress = () => {
       } finally {
         insert.free();
       }
-      onProgress({ phase: "restoring", completed: total });
+      onProgress({ phase: "restoring", completed: total, total: manifest.rowCount });
     }
     for (const table2 of tables) if ((counts.get(table2.name) || 0) !== manifest.tables[table2.name].rowCount || rows(db, `SELECT count(*) n FROM ${table2.name}`)[0].n !== manifest.tables[table2.name].rowCount) throw new Error("RestoreRowCountMismatch");
     db.exec("UPDATE diary_accounts SET active=0,session_version=session_version+1,must_change_password=1; UPDATE diary_e2ee_control SET phase='paused',ever_encrypted=1;");
