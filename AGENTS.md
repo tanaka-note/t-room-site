@@ -49,6 +49,7 @@
 
 - CI／test／deploy：[`docs/development-flow.md`](docs/development-flow.md)
 - Identity／Passkey／T-Cloud鍵：[`docs/security/passkeys.md`](docs/security/passkeys.md)
+- ゼロ知識暗号化の共通設計・自動準備／移行：[`docs/security/passkeys.md#ゼロ知識暗号化の共通設計`](docs/security/passkeys.md#ゼロ知識暗号化の共通設計)
 - Password停止・復旧：[`docs/security/password-auth-policy.md`](docs/security/password-auth-policy.md)
 - LINE／PWA／TWAのブラウザ挙動：[`docs/browser-support.md`](docs/browser-support.md)
 - 画面遷移／モーダル／戻る・閉じる：[`docs/navigation-and-dialogs.md`](docs/navigation-and-dialogs.md)
@@ -83,6 +84,13 @@
 - 既存PW認証と各サービス固有account／role／sessionを認可の正本として維持し、共通Identityと権限を混同しない。第一管理者PWは恒久的な復旧手段として残す。
 - パスキーの新規・追加・再登録は第一管理者の招待と承認を必須とする。T-Cloudは端末内だけで既存鍵を解除し、PRF出力、復号鍵、folder key、file keyをCloudflare、GitHub、ログへ渡さない。
 - Security CenterをIdentity、招待、連携、監査の正本とし、失敗だけでなく成功ログインと重要な管理者アクセスも監査する。詳細は[`docs/security/passkeys.md`](docs/security/passkeys.md)に従う。
+
+### ゼロ知識暗号化の標準
+
+- 今後の新規サイトと既存サービスのゼロ知識化では、承認済みの既存パスキーによる通常ログインから、本人用の鍵と信頼設定の準備・解除を端末内で自動実行する。通常利用のためにSecurity Centerで追加の暗号化設定、独自の暗号化パスワード、設定ファイルの受け渡し、パスキー再登録を要求しない。
+- サービス初期化、既存データの全件移行、共有鍵の委譲は、権限を持つ管理者・所有者の通常ログインを起点に自動で進める。既存の招待・承認・サービス連携・権限・失効・復旧の境界を維持し、一般利用者へ管理者用の鍵や権限を渡さない。
+- 一時的な通信失敗だけで再ログインを繰り返させず、同じ有効セッション内で安全に再試行・中断再開する。認証期限・本人確認・世代照合を弱めず、移行中・委譲待ち・失敗・利用可能を区別する。
+- 既存データを保護し、全件照合・実際のバックアップ復元検証後に切り替える。共通の安全条件と受入確認は[共通設計](docs/security/passkeys.md#ゼロ知識暗号化の共通設計)、サービス固有の対象・移行順序・実装状況は各サービスの正本文書に記載する。
 
 ## 10. ブランド資産保護
 
