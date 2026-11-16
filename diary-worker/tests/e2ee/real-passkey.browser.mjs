@@ -100,6 +100,21 @@ try {
   await page.waitForFunction(()=>document.querySelector('#login-message').textContent.includes('Synthetic lost import response'));
   assert.equal(f.db.sqlite.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'migrating');
   assert.equal(await page.locator('#app-view').isVisible(),false);
+  const savedCiphertext=f.db.sqlite.prepare('SELECT id,envelope FROM diary_e2ee_records ORDER BY id').all();
+  // Reproduce the production timing: the independent editor's vault becomes
+  // ready after the owner has frozen/imported the source. Owner resume must
+  // grant it through normal login before completing the current migration.
+  const {createVault:prepareVault}=await import('../../e2ee/crypto.mjs');
+  const {diaryRecipientId:recipientFor,handleDiaryKeys:prepareKeys,diaryKeyBundle:readBundle}=await import('../../../security-worker/src/diary-keys.js');
+  const independent=f.users['chiharu-admin'],independentCredential=Buffer.from(independent.credentialId).toString('base64url');
+  const independentRecipient=await recipientFor(independentCredential,independent.serviceLinkId),independentPrf=new Uint8Array(independent.prf);
+  const independentInput={identityId:independent.identityId,credentialId:independentCredential,serviceLinkId:independent.serviceLinkId,serviceAccountId:'chiharu-admin'};
+  const independentVault=await prepareVault(independentPrf,independentRecipient);
+  await prepareKeys('/api/diary/vault',new Request('https://fixture.test/security/api/diary/vault',{method:'POST',body:JSON.stringify({serviceLinkId:independent.serviceLinkId,vault:independentVault})}),security.env,{...independentInput,authenticatedAt:Date.now()/1000},f.helpers);
+  assert.equal(await readBundle(security.env,independentInput),null);
+  // Reproduce a different device's missing local migration plan. Only the
+  // synthetic maintenance DB is removed; credentials and server rows remain.
+  await page.evaluate(()=>new Promise((resolve,reject)=>{const request=indexedDB.deleteDatabase('tlain-diary-maintenance-v1');request.onsuccess=resolve;request.onerror=()=>reject(request.error);}));
   await page.reload();await page.locator('#passkey-login').waitFor({state:'visible'});
   assert.match(await page.locator('#login-message').textContent(),/再開/);
   await page.click('#passkey-login');await page.locator('.troom-passkey-account-option').nth(0).click();
@@ -110,13 +125,16 @@ try {
   await page.reload();await page.locator('#passkey-login').waitFor({state:'visible'});
   await login(0);
   assert.equal(wire.filter(row=>row.path.includes('/maintenance/checkpoint')||row.path.includes('/maintenance/backup')).length,checkpointRequests,'a verified cutover resumes with a fresh complete inventory check without another backup/SQLite drill');
-  assert.equal(f.central.sqlite.prepare('SELECT generation FROM security_diary_key_config').get().generation,1);
+  assert.equal(f.central.sqlite.prepare('SELECT generation FROM security_diary_key_config').get().generation,2);
   assert.equal(await page.evaluate(()=>localStorage.getItem('tlain-diary-authority-public-v1-automatic-pending')),null);
   assert.equal(f.db.sqlite.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'encrypted');
+  for(const row of savedCiphertext)assert.equal(f.db.sqlite.prepare('SELECT envelope FROM diary_e2ee_records WHERE id=?').get(row.id).envelope,row.envelope);
   assert.equal(f.db.sqlite.prepare('SELECT count(*) n FROM diary_entries').get().n,0);
   assert.equal(f.db.sqlite.prepare('SELECT count(*) n FROM diary_favorites').get().n,0);
   assert.equal(f.db.sqlite.prepare('SELECT count(*) n FROM investment_history').get().n,0);
   assert.equal(f.db.sqlite.prepare('SELECT count(*) n FROM diary_e2ee_records').get().n,3);
+  assert.ok(await readBundle(security.env,independentInput),'owner migration resume grants the already prepared independent editor without a Security UI or later owner login');
+  independentPrf.fill(0);
   const {writerReadiness}=await (await import('../../../security-worker/src/diary-keys.js')).handleDiaryKeys('/api/diary/admin',new Request('https://fixture.test/security/api/diary/admin'),security.env,{identityId:'primary-admin',credentialId:credential.id,authenticatedAt:Date.now()/1000},f.helpers).then(response=>response.json());
   assert.equal(writerReadiness.ready,false,'the owner migrates before other people log in');
   assert.equal(JSON.stringify(wire).includes('AUTOMATIC_PRIVATE_BODY'),false);

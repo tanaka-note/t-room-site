@@ -439,7 +439,14 @@ async function handleApi(request, env, url, path, context, getSession, timing) {
       const dataPath=/^\/api\/(bootstrap|meta|entries|drafts|photos|photo-upload-sessions|investment-history)(?:\/|$)/.test(path);
       if(dataPath&&policy.enabled)throw new HttpError(426,'暗号化対応アプリで日記を開き直してください。');
       if(dataPath&&request.method!=='GET'&&policy.phase!=='legacy')throw new HttpError(423,'日記の書き込みを一時停止しています。内容を保管してお待ちください。');
-    }catch(error){if(error instanceof HttpError)throw error;if(String(error.message).includes("DiaryWritesPaused"))throw new HttpError(423,"日記の書き込みを一時停止しています。");if([400,401,403,404,409,413,423,428,503].includes(error.status))throw new HttpError(error.status,'暗号化された日記を処理できません。ログイン・鍵の準備状態・書き込み停止状態を確認してください。');throw error;}
+    }catch(error){
+      if(error instanceof HttpError)throw error;
+      if(String(error.message).includes('DiaryWritesPaused'))throw new HttpError(423,'日記の書き込みを一時停止しています。');
+      const guidance={DiaryMaintenanceAuthorizationInvalid:'暗号化移行の継続確認が切れました。保存済みの内容は保持されています。パスキーでログインすると再開します。',RecentAuthenticationRequired:'暗号化移行を再開するため、パスキーでログインしてください。保存済みの内容は保持されています。',MigrationRetryConflict:'保存済みの移行内容と一致しません。データを保持したまま停止しました。管理者へ確認してください。',EncryptionPreparationRequired:'日記の鍵を準備しています。管理者の次のパスキーログイン後に、もう一度ログインしてください。'};
+      if(Object.hasOwn(guidance,error.message))throw new HttpError(error.status||409,guidance[error.message]);
+      if([400,401,403,404,409,413,423,428,503].includes(error.status))throw new HttpError(error.status,'暗号化された日記を処理できません。ログイン・鍵の準備状態・書き込み停止状態を確認してください。');
+      throw error;
+    }
   }
 
   if (path === "/api/bootstrap" && request.method === "GET") {
