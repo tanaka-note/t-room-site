@@ -16,19 +16,19 @@ export async function importInvestmentTrust(file) {
 export async function loadEncryptedInvestment(session,authentication) {
   let state,cache;
   try {
-    const request=async(path,body)=>{
-      const response=await fetch('/diary/api'+path,{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json',...(body?{'Content-Type':'application/json','X-Diary-Request':'1'}:{})},...(body?{method:'POST',body:JSON.stringify(body)}:{})});
+    const request=async(path,body,headers={})=>{
+      const response=await fetch('/diary/api'+path,{credentials:'same-origin',cache:'no-store',headers:{...headers,Accept:'application/json',...(body?{'Content-Type':'application/json','X-Diary-Request':'1'}:{})},...(body?{method:'POST',body:JSON.stringify(body)}:{})});
       const result=await response.json();if(!response.ok)throw Object.assign(new Error('資産データを安全に読み込めません。パスキーでログインし直してください。'),{status:response.status});return result;
     };
     if(authentication&&(authentication.link?.accountId!==session.encryption.accountId||!authentication.handoff?.handoffToken))throw new Error('AccountMismatch');
     const resumed=authentication?await request('/passkey/handoff',{handoffToken:authentication.handoff.handoffToken}):session;
     if(resumed.encryption?.accountId!==session.encryption.accountId)throw new Error('AccountMismatch');
-    if(authentication)await prepareDiaryKeys((path,options={})=>request(path,options.body),resumed,authentication);
+    if(authentication)await prepareDiaryKeys((path,options={})=>request(path,options.body,options.headers),resumed,authentication);
     let trust=authentication?.diaryTrust||JSON.parse(localStorage.getItem(PIN)||'null');
     const initial=await request('/encryption/profile'),profile=initial.profile;
     if(initial.protocol!==DIARY_READER_PROTOCOL)throw new Error('UnsupportedReaderProtocol');
     if(profile.actor.accountId!==session.encryption.accountId||(authentication&&profile.webAuthnCredentialId!==authentication.credentialId)||!profile.actor.canViewInvestment)throw new Error('AccountMismatch');
-    let cached,liveSession=resumed;
+    let cached=authentication?.diaryPrivateKeys?{privateKeys:authentication.diaryPrivateKeys}:undefined,liveSession=resumed;
     if(!authentication){try{cached=await loadDevice(session,profile);}catch{/* Request the normal passkey if device storage is unavailable. */}if(!cached)throw new Error('PasskeyRequired');if(trust)await sameTrust(cached.trust,trust);else trust=cached.trust;}
     await validatePublicTrust(trust);
     await checkTrustFloor(trust,localStorage);
@@ -49,5 +49,5 @@ export async function loadEncryptedInvestment(session,authentication) {
     if(!current.authenticated||current.encryption?.protocol!==DIARY_READER_PROTOCOL||current.encryption?.accountId!==profile.actor.accountId||current.encryption.webAuthnCredentialId!==profile.webAuthnCredentialId||current.encryption.generation!==initial.rollout.generation)throw new Error('SessionChanged');
     await rememberTrustFloor({...trust,minimumGeneration:state.directory.generation},localStorage);
     return {records,firstDate:records[0]?.date||null,lastDate:records.at(-1)?.date||null};
-  }finally{authentication?.prfOutput?.fill(0);state?.keys.clear();if(state)state.privateKeys=null;cache?.close();}
+  }finally{authentication?.prfOutput?.fill(0);if(authentication)authentication.diaryPrivateKeys=null;state?.keys.clear();if(state)state.privateKeys=null;cache?.close();}
 }

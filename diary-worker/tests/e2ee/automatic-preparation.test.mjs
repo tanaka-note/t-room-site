@@ -54,3 +54,21 @@ test('automatic preparation enforces live session, recent authentication and the
     assert.equal(response.status,403);
   }finally{await f.close();}
 });
+
+test('normal login defers automatic app reload until key preparation and migration finish',async()=>{
+  const f=await systemFixture({phase:'legacy'}),u=f.users['main-user'],previous=globalThis.document,target=new EventTarget();
+  globalThis.document=target;let checks=0;
+  const event=()=>new Event('troom:before-auto-update',{cancelable:true});
+  const api=async()=>{
+    const update=event();target.dispatchEvent(update);assert.equal(update.defaultPrevented,true);checks++;
+    return {accountId:'main-user',webAuthnCredentialId:u.credentialId,recipientId:u.recipientId,vault:u.vault};
+  };
+  try {
+    const session={encryption:{accountId:'main-user'}},auth={credentialId:u.credentialId,prfOutput:new Uint8Array(u.prf)};
+    await prepareDiaryKeys(api,session,auth);assert.ok(checks);
+    const update=event();target.dispatchEvent(update);assert.equal(update.defaultPrevented,false);
+    await assert.rejects(prepareDiaryKeys(async()=>{throw new Error('NetworkUnavailable');},session,auth),/NetworkUnavailable/);
+    const failed=event();target.dispatchEvent(failed);assert.equal(failed.defaultPrevented,false);
+    auth.prfOutput.fill(0);
+  }finally{if(previous===undefined)delete globalThis.document;else globalThis.document=previous;await f.close();}
+});

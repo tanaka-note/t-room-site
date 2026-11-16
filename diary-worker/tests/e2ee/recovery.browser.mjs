@@ -171,11 +171,6 @@ try {
   const photoId=crypto.randomUUID();
   f.db.sqlite.prepare("INSERT INTO diary_photos(id,entry_id,file_name,content_type,original_size,original_key,display_key,thumbnail_key,created_by_id,created_by_name,created_at) VALUES(?,900,'SETUP_PRIVATE_PHOTO.jpg','image/jpeg',3,?,?,?,'main-admin','Synthetic owner','2026-11-15')").run(photoId,'diary/staging/'+photoId+'/original','diary/staging/'+photoId+'/display','diary/staging/'+photoId+'/thumbnail');
   f.db.sqlite.exec(readFileSync(new URL('../../e2ee/legacy-fences.sql',import.meta.url),'utf8'));
-  const pausedVault=f.central.sqlite.prepare('SELECT * FROM security_diary_key_vaults WHERE recipient_id=?').get(f.users['main-user'].recipientId);
-  f.central.sqlite.prepare('DELETE FROM security_diary_key_vaults WHERE recipient_id=?').run(pausedVault.recipient_id);
-  const waiting=await page.evaluate(async()=>{try{await(await import('/security/diary-setup.mjs')).prepareDiaryData();return '';}catch(error){return error.message;}});
-  assert.match(waiting,/全利用者/);assert.equal(f.db.sqlite.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'legacy');assert.equal(checkpoints.length,0);
-  f.central.sqlite.prepare('INSERT INTO security_diary_key_vaults VALUES(?,?,?,?,?,?)').run(...Object.values(pausedVault));
   const result=await page.evaluate(async()=>(await import('/security/diary-setup.mjs')).prepareDiaryData());
   assert.equal(result.requiresRestoreDrill,true);assert.match(result.checkpoint.key,/^v10\/checkpoints\/[a-f0-9-]+\.json\.gz$/);
   assert.equal(checkpoints.length,1);assert.equal(f.db.sqlite.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'migrating');

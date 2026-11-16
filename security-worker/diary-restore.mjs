@@ -12,14 +12,14 @@ const rows=(db,sql)=>{const statement=db.prepare(sql),result=[];try{while(statem
 
 // Restore the real checkpoint into a NEW in-memory SQLite database on the
 // trusted device. Archive SQL is never executed; DDL is bundled from Git.
-export async function restoreDiaryCheckpoint({bucket,key,trust,onProgress=()=>{}}) {
+export async function restoreDiaryCheckpoint({bucket,key,trust,onProgress=()=>{},wasmUrl='/security/vendor/sql-wasm.wasm'}) {
   const verified=await verifiedGeneration(bucket,key,p=>validateExportManifest(p,'diary'));
   if(!verified||verified.payload.expectedMigration!=='diary-e2ee-v1')throw new Error('EncryptedCheckpointRequired');
   const manifest=verified.payload;
   await assertArchiveSchema('diary',manifest.expectedMigration,manifest.schema);
   const directory=await verifyDirectory(manifest.keyMetadata.directory,trust.anchor,trust.minimumGeneration);
   await validateKeyMetadata(manifest.keyMetadata,directory,trust.anchor);
-  const SQL=await initSqlJs({locateFile:()=>'/security/vendor/sql-wasm.wasm'}),db=new SQL.Database();
+  const SQL=await initSqlJs({locateFile:()=>wasmUrl}),db=new SQL.Database();
   try {
     db.exec(trustedDDL);
     const triggers=rows(db,"SELECT name,sql FROM sqlite_schema WHERE type='trigger'");

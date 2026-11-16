@@ -75,7 +75,6 @@ export async function prepareDiaryData({kind='migration',onProgress=()=>{}}={}) 
   try {
     const status=await api('/admin');
     if(!status.config)throw new Error('日記の管理者設定はまだ保存されていません。利用設定の状態を確認してください。');
-    if(kind==='migration'&&status.writerReadiness?.ready===false)throw new Error('全利用者の鍵の準備・承認が完了していません。移行の開始状態は変更していません。');
     const trust=await authenticationTrust(auth,await prepare(auth.prfOutput));
     if(!auth.prfOutput||!status.adminEnvelope)throw new Error('日記のログインで使った、管理者復旧に対応するパスキーを選んでください。');
     const privateKey=await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput,status.adminEnvelope);
@@ -94,7 +93,6 @@ export async function migrateDiary({kind='migration',onProgress=()=>{}}={}) {
   try {
     const own=await prepare(auth.prfOutput),trust=await authenticationTrust(auth,own),status=await api('/admin');
     if(!status.config||!trust)throw new Error('日記の鍵設定を先に完了してください。');
-    if(kind==='migration'&&status.writerReadiness?.ready===false)throw new Error('日記の利用者全員が通常のパスキーログインを行った後、管理者として日記を開いてください。投稿停止は開始していません。');
     const privateKey=await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput,status.adminEnvelope);
     const maintenance=await import('/security/diary-crypto/e2ee/maintenance.mjs');plans=await maintenance.openMaintenancePlans();
     await maintenance.prepareDiaryMaintenance({kind,api,recoveryPrivateKey:privateKey,trust,plans,onProgress});

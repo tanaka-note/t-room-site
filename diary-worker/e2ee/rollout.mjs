@@ -22,7 +22,7 @@ export const leaseSQL = lease => lease ? ' AND (SELECT generation FROM diary_e2e
 
 function requireOperator(actor) {
   if(!actor?.active||!actor.isGlobalOwner||!actor.credentialId)fail('AccessDenied',403);
-  if(!Number.isFinite(actor.reauthenticatedAt)||Math.abs(Date.now()/1000-actor.reauthenticatedAt)>300)fail('RecentAuthenticationRequired',428);
+  if(!(Number.isSafeInteger(actor.maintenanceUntil)&&actor.maintenanceUntil>Date.now()&&actor.maintenanceUntil<=Date.now()+3600000)&&(!Number.isFinite(actor.reauthenticatedAt)||Math.abs(Date.now()/1000-actor.reauthenticatedAt)>300))fail('RecentAuthenticationRequired',428);
 }
 
 // The trusted device signs evidence ONLY after source comparison and a real
@@ -63,7 +63,8 @@ export async function transitionRollout(db,{actor,expectedGeneration,next,eviden
     ]);
     return readRollout(db);
   }
-  const result=await db.prepare(`UPDATE diary_e2ee_control SET phase=?,generation=generation+1,ever_encrypted=CASE WHEN ?='encrypted' THEN 1 ELSE ever_encrypted END,evidence=? WHERE id=1 AND generation=? AND phase=? ${next==='encrypted'?'AND (SELECT COUNT(*) FROM diary_e2ee_records)=? AND (SELECT COALESCE(MAX(seq),0) FROM diary_e2ee_changes)=?':''}`)
+  const hasUploads=current.phase==='legacy'&&next==='migrating'&&await db.prepare("SELECT 1 found FROM sqlite_schema WHERE type='table' AND name='diary_photo_upload_sessions'").first();
+  const result=await db.prepare(`UPDATE diary_e2ee_control SET phase=?,generation=generation+1,ever_encrypted=CASE WHEN ?='encrypted' THEN 1 ELSE ever_encrypted END,evidence=? WHERE id=1 AND generation=? AND phase=? ${next==='encrypted'?'AND (SELECT COUNT(*) FROM diary_e2ee_records)=? AND (SELECT COALESCE(MAX(seq),0) FROM diary_e2ee_changes)=?':''} ${hasUploads?"AND NOT EXISTS (SELECT 1 FROM diary_photo_upload_sessions WHERE status='active' AND expires_at>strftime('%Y-%m-%dT%H:%M:%fZ','now'))":''}`)
     .bind(next,next,proof?JSON.stringify(proof):null,expectedGeneration,current.phase,...(next==='encrypted'?[proof.records,proof.sequence]:[])).run();
   if(result.meta.changes!==1)fail('RolloutConflict');
   return readRollout(db);

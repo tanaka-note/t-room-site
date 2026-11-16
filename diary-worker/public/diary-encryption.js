@@ -13,7 +13,7 @@ export async function importDiaryTrust(file) {
   const value=await validatePublicTrust(JSON.parse(await file.text()));
   localStorage.setItem(PIN,JSON.stringify(value));return value;
 }
-export async function startEncryptedDiary(session,authentication) {try{return await createEncryptedDiary(session,authentication);}finally{authentication?.prfOutput?.fill(0);}}
+export async function startEncryptedDiary(session,authentication) {try{return await createEncryptedDiary(session,authentication);}finally{authentication?.prfOutput?.fill(0);if(authentication)authentication.diaryPrivateKeys=null;}}
 async function createEncryptedDiary(session,authentication) {
   let pin=authentication?.diaryTrust||JSON.parse(localStorage.getItem(TRUST_PIN)||'null');
   const nativeFetch=window.fetch.bind(window);
@@ -26,7 +26,7 @@ async function createEncryptedDiary(session,authentication) {
   const request=(path,init)=>nativeApi('/encryption'+path,init);
   const initial=await request('/profile');
   if(initial.protocol!==DIARY_READER_PROTOCOL)throw new Error('暗号化対応の最新版で開き直してください。');
-  let cached;
+  let cached=authentication?.diaryPrivateKeys?{privateKeys:authentication.diaryPrivateKeys}:undefined;
   if(!authentication?.prfOutput) {
     try{cached=await loadDevice(session,initial.profile);}catch{/* Authenticate again if secure device storage is unavailable. */}
     if(!cached)throw new Error('パスキーでログインしてください。');
