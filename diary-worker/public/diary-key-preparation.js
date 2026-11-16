@@ -1,31 +1,31 @@
 import {createVault,unlockVault} from './crypto/e2ee/crypto.mjs';
-import {TRUST_PIN,resolveTrust,sealTrust,openTrust,sameTrust} from './crypto/e2ee/trust.mjs';
+import {TRUST_PIN,resolveTrust,sealTrust,openTrust,sameTrust,sealPendingConfiguration,openPendingConfiguration,rememberTrustFloor,checkTrustFloor} from './crypto/e2ee/trust.mjs';
 import {prepareKeyConfiguration,publicTrustPackage} from './crypto/e2ee/setup.mjs';
 import {unlockCentralRecovery} from './crypto/e2ee/tcloud-recovery.mjs';
 
 function pinnedTrust() {
   return typeof localStorage==='undefined'?null:JSON.parse(localStorage.getItem(TRUST_PIN)||'null');
 }
-function remember(trust) {
-  if(typeof localStorage!=='undefined')localStorage.setItem(TRUST_PIN,JSON.stringify(trust));
+async function remember(trust) {
+  return rememberTrustFloor(trust,typeof localStorage==='undefined'?undefined:localStorage);
 }
 const PENDING=TRUST_PIN+'-automatic-pending';
 const pending=()=>typeof localStorage==='undefined'?null:JSON.parse(localStorage.getItem(PENDING)||'null');
 const managementApi=api=>(path,body)=>api('/encryption/manage'+path,body===undefined?{}:{method:'POST',body});
-async function resumeConfiguration(api,session,check) {
+async function resumeConfiguration(api,session,authentication,recipientId,check) {
   if(!session.isGlobalOwner||!pending())return null;
-  const configuration=pending(),manage=managementApi(api),status=await manage('/admin');check();
+  const configuration=await openPendingConfiguration(authentication.prfOutput,recipientId,pending()),manage=managementApi(api),status=await manage('/admin');check();
   if(status.config&&JSON.stringify(status.config.directory)===JSON.stringify(configuration.directory)&&JSON.stringify(status.config.recoveryEnvelope)===JSON.stringify(configuration.recoveryEnvelope)) {
     // Both are written with all grants in one Security transaction.
   }else {
     if((status.config?.generation||0)!==configuration.expectedGeneration)throw new Error('前回の鍵設定の結果を照合できません。管理者の復旧操作で確認してください。');
     await manage('/config',configuration);check();
   }
-  const trust=await publicTrustPackage(configuration);remember(trust);
+  const trust=await publicTrustPackage(configuration);await remember(trust);
   localStorage.removeItem(PENDING);return trust;
 }
 
-async function approvePreparedRecipients(api,session,authentication,trust,check) {
+async function approvePreparedRecipients(api,session,authentication,recipientId,trust,check) {
   if(!session.isGlobalOwner)return trust;
   const management=managementApi(api);
   const own=await management('/own');check();
@@ -47,8 +47,8 @@ async function approvePreparedRecipients(api,session,authentication,trust,check)
   // Preserve the generated anchor before attempting a first configuration write.
   // The server accepts the exact generation retry after a lost response.
   const next=await publicTrustPackage(configuration);
-  if(typeof localStorage!=='undefined')localStorage.setItem(PENDING,JSON.stringify(configuration));
-  remember(next);
+  if(typeof localStorage!=='undefined')localStorage.setItem(PENDING,JSON.stringify(await sealPendingConfiguration(authentication.prfOutput,recipientId,configuration)));
+  await remember(next);
   await management('/config',configuration);check();
   if(typeof localStorage!=='undefined')localStorage.removeItem(PENDING);
   return next;
@@ -81,18 +81,19 @@ async function prepareKeys(api,session,authentication,check=()=>{}) {
   await unlockVault(authentication.prfOutput,info.recipientId,info.vault);check();
   let bootstrap=authentication.handoff?.diaryTrust||authentication.verified?.diaryTrust;
   if(authentication.handoff?.diaryTrust&&authentication.verified?.diaryTrust)await sameTrust(authentication.verified.diaryTrust,authentication.handoff.diaryTrust);
-  const resumed=await resumeConfiguration(api,session,check);
+  const resumed=await resumeConfiguration(api,session,authentication,info.recipientId,check);
   if(resumed){if(bootstrap)await sameTrust(bootstrap,resumed);bootstrap=resumed;}
   let trust;
   if(info.vault.trust||bootstrap||pinnedTrust())trust=await resolveTrust({prf:authentication.prfOutput,recipientId:info.recipientId,sealed:info.vault.trust,bootstrap,pinned:pinnedTrust()});
-  check();trust=await approvePreparedRecipients(api,session,authentication,trust,check);check();
+  if(trust)await checkTrustFloor(trust,typeof localStorage==='undefined'?undefined:localStorage);
+  check();trust=await approvePreparedRecipients(api,session,authentication,info.recipientId,trust,check);check();
   if(trust) {
     if(!info.vault.trust||info.vault.trust.generation!==trust.minimumGeneration) {
       const packet=await sealTrust(authentication.prfOutput,info.recipientId,trust);check();
       info=assertOwn(await api('/encryption/prepare',{method:'POST',body:{recipientId:info.recipientId,trust:packet}}));
     }
     if(!info.vault.trust)throw new Error('DiaryTrustNotSaved');
-    await sameTrust(trust,await openTrust(authentication.prfOutput,info.recipientId,info.vault.trust));check();remember(trust);
+    await sameTrust(trust,await openTrust(authentication.prfOutput,info.recipientId,info.vault.trust));check();await remember(trust);authentication.diaryTrust=trust;
   }else if(session.encryption.enabled)throw new Error('日記の鍵の準備を待っています。管理者の次の利用後にログインし直してください。');
   return {prepared:true};
 }

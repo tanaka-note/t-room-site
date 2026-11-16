@@ -42,8 +42,8 @@ try {
     adminPrivateCipher:Buffer.from(ciphertext).toString('base64url'), adminPrivateIv:Buffer.from(iv).toString('base64url'),
   }, user.prf);
 } finally { raw.fill(0); }
-f.central.sqlite.prepare("INSERT INTO security_service_links(id,identity_id,service,service_account_id,display_label,status) VALUES('fixture-existing-cloud','primary-admin','cloud','owner','Synthetic existing cloud','active')").run();
-f.central.sqlite.prepare("INSERT INTO security_tcloud_key_envelopes(id,identity_id,credential_id,service_link_id,envelope_type,encrypted_payload,payload_iv) VALUES('fixture-envelope','primary-admin',?,'fixture-existing-cloud','admin_private_prf',?,?)").run(user.credentialId, envelope.encryptedPayload, envelope.payloadIv);
+f.central.sqlite.prepare("INSERT INTO security_service_links(id,identity_id,service,service_account_id,display_label,status) VALUES('fixture-existing-cloud','primary-admin','cloud','owner','Synthetic existing cloud','active') ON CONFLICT DO NOTHING").run();
+f.central.sqlite.prepare("INSERT INTO security_tcloud_key_envelopes(id,identity_id,credential_id,service_link_id,envelope_type,encrypted_payload,payload_iv) VALUES(?,'primary-admin',?,'fixture-existing-cloud','admin_private_prf',?,?)").run('fixture-envelope-'+user.credentialId,user.credentialId, envelope.encryptedPayload, envelope.payloadIv);
 }
 await addAdminEnvelope(f,user);
 
@@ -198,6 +198,19 @@ try {
   assert.equal(f.r2.size,0,'photo objects must not be rewritten or removed');
   assert.equal(JSON.stringify(wire).includes('SETUP_LEGACY_PRIVATE'),false,'legacy plaintext must never be sent back in migration requests');
   assert.equal(await page.evaluate(()=>window.lastSetupPrf.every(value=>value===0)),true);
+  // Password recovery/new admin passkey must rotate BEFORE asking for a grant
+  // signed by the new credential. The former admin credentials are revoked.
+  const previous=user.credentialId;
+  user={...user,credentialId:'fixture-recovered-admin',prf:crypto.getRandomValues(new Uint8Array(32))};
+  f.central.sqlite.prepare("INSERT INTO security_credentials(credential_id,identity_id,public_key,prf_salt,status,prf_enabled) VALUES(?,'primary-admin','synthetic','synthetic','active',1)").run(user.credentialId);
+  f.central.sqlite.prepare("UPDATE security_credentials SET status='revoked' WHERE credential_id=?").run(previous);
+  await addAdminEnvelope(f,user);
+  await context.addCookies(['identity','admin'].map(kind=>({name:'troom_security_'+kind,value:securityCookie(kind),url:origin})));
+  await page.evaluate(({prf,credentialId})=>{window.TRoomPasskeys={authenticate:async()=>{window.lastSetupPrf=new Uint8Array(prf);return {credentialId,prfOutput:window.lastSetupPrf};}};},{prf:[...user.prf],credentialId:user.credentialId});
+  assert.deepEqual(await page.evaluate(async()=>(await import('/security/diary-setup.mjs')).migrateDiary({kind:'rotation'})),{completed:true});
+  assert.equal(f.central.sqlite.prepare('SELECT generation FROM security_diary_key_config').get().generation,2);
+  assert.equal(f.db.sqlite.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'encrypted');
+  assert.equal(await page.evaluate(()=>window.lastSetupPrf.every(value=>value===0)),true);user.prf.fill(0);
   assert.deepEqual(errors,[]);
   await page.evaluate(() => window.fixtureBridge?.lock());
   console.log('Recovery browser: full Security HTTP/session gates, real T-Cloud PRF envelope, safe setup diagnostics, encrypted Diary/Investment, and the public migration entrypoint through checkpoint creation passed (synthetic authentication).');

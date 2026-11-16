@@ -5,7 +5,7 @@ import { createPrivateNavigation } from './crypto/e2ee/privacy.mjs';
 import { createEncryptedDiaryApi } from './crypto/e2ee/ui-api.mjs';
 import { createEncryptedMediaClient } from './crypto/e2ee/media-client.mjs';
 import { validatePublicTrust,DIARY_READER_PROTOCOL } from './crypto/e2ee/crypto.mjs';
-import {TRUST_PIN,sameTrust} from './crypto/e2ee/trust.mjs';
+import {TRUST_PIN,sameTrust,checkTrustFloor,rememberTrustFloor} from './crypto/e2ee/trust.mjs';
 import {saveDevice,loadDevice,clearDevice} from './crypto/e2ee/device.mjs';
 const PIN='tlain-diary-authority-public-v1';
 export async function importDiaryTrust(file) {
@@ -15,7 +15,7 @@ export async function importDiaryTrust(file) {
 }
 export async function startEncryptedDiary(session,authentication) {try{return await createEncryptedDiary(session,authentication);}finally{authentication?.prfOutput?.fill(0);}}
 async function createEncryptedDiary(session,authentication) {
-  let pin=JSON.parse(localStorage.getItem(TRUST_PIN)||'null');
+  let pin=authentication?.diaryTrust||JSON.parse(localStorage.getItem(TRUST_PIN)||'null');
   const nativeFetch=window.fetch.bind(window);
   const nativeApi=async(path,init={})=>{
     const headers=new Headers(init.headers);if(init.method&&init.method!=='GET')headers.set('X-Diary-Request','1');
@@ -34,6 +34,7 @@ async function createEncryptedDiary(session,authentication) {
   }
   if(!pin)throw new Error('日記の鍵設定を確認するため、パスキーでログインし直してください。');
   await validatePublicTrust(pin);
+  await checkTrustFloor(pin,localStorage);
   if(authentication&&initial.profile.webAuthnCredentialId!==authentication.credentialId)throw new Error('ログインしたパスキーが一致しません。');
   const expectedAccount=initial.profile.actor.accountId,expectedCredential=initial.profile.webAuthnCredentialId;
   let client,navigation,api,media,cache,deadline=session.expiresAt||null;
@@ -56,7 +57,7 @@ async function createEncryptedDiary(session,authentication) {
     if(reply.profile.actor.accountId!==expectedAccount||reply.profile.webAuthnCredentialId!==expectedCredential||reply.profile.household!==household||reply.profile.directory.value.generation!==client.directory.generation){client.lock();throw new Error('パスキーでログインし直してください。');}
     navigation.close();if(/^\/diary\/tag\//.test(location.pathname))window.history.replaceState({},'','/diary/');client.generation++;client.records.clear();client.revisionFloor.clear();client.sequence=undefined;client.profile={...client.profile,household};await client.sync();navigation=await createPrivateNavigation(client);
   }});
-  localStorage.setItem(PIN,JSON.stringify({...pin,minimumGeneration:client.directory.generation}));
+  await rememberTrustFloor({...pin,minimumGeneration:client.directory.generation},localStorage);
   let lastDeviceSave=0;
   persistDevice=async()=>{
     if(client.closed||Date.now()-lastDeviceSave<60000)return;lastDeviceSave=Date.now();

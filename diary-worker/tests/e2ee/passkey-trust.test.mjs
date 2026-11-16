@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {sealTrust,openTrust,resolveTrust} from '../../e2ee/trust.mjs';
+import {sealTrust,openTrust,resolveTrust,sealPendingConfiguration,openPendingConfiguration,rememberTrustFloor,checkTrustFloor,TRUST_PIN} from '../../e2ee/trust.mjs';
 import {publicTrustPackage} from '../../e2ee/setup.mjs';
 import {prepareDiaryKeys} from '../../public/diary-key-preparation.js';
 import {diaryLoginTrust,diaryRecipientId,handleDiaryKeys,diaryKeyBundle} from '../../../security-worker/src/diary-keys.js';
@@ -24,6 +24,16 @@ test('passkey-protected trust survives device changes and rejects corruption, cr
     const changed=await publicTrustPackage({...f.configuration,anchor:await crypto.subtle.exportKey('jwk',other.publicKey)});
     await assert.rejects(resolveTrust({prf:u.prf,recipientId:u.recipientId,sealed:packet,bootstrap:changed}),/TrustChanged/);
     assert.equal(JSON.stringify(packet).includes('anchor'),false);
+    const pending=await sealPendingConfiguration(u.prf,u.recipientId,f.configuration);
+    assert.deepEqual(await openPendingConfiguration(u.prf,u.recipientId,pending),f.configuration);
+    await assert.rejects(openPendingConfiguration(f.users['wife-admin'].prf,u.recipientId,pending));
+    await assert.rejects(openPendingConfiguration(u.prf,f.users['main-admin'].recipientId,pending));
+    assert.equal(JSON.stringify(pending).includes('anchor'),false);
+    const items=new Map(),storage={getItem:key=>items.get(key),setItem:(key,value)=>items.set(key,value)};
+    await rememberTrustFloor(trust,storage);await rememberTrustFloor({...trust,minimumGeneration:2},storage);
+    await assert.rejects(checkTrustFloor(trust,storage),/Rollback/);
+    await assert.rejects(checkTrustFloor({...changed,minimumGeneration:2},storage),/Rollback/);
+    assert.deepEqual(Object.keys(JSON.parse(storage.getItem(TRUST_PIN+'-floor'))).sort(),['fingerprint','minimumGeneration']);
   }finally{await f.close();}
 });
 

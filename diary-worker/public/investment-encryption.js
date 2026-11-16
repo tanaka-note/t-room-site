@@ -5,7 +5,7 @@ import {openCipherCache} from './crypto/e2ee/cache.mjs';
 import {investmentRecords} from './crypto/e2ee/investment.mjs';
 import {prepareDiaryKeys} from './diary-key-preparation.js';
 import {saveDevice,loadDevice} from './crypto/e2ee/device.mjs';
-import {sameTrust} from './crypto/e2ee/trust.mjs';
+import {sameTrust,checkTrustFloor,rememberTrustFloor} from './crypto/e2ee/trust.mjs';
 const PIN='tlain-diary-authority-public-v1';
 export async function importInvestmentTrust(file) {
   if(!file||file.size>12000)throw new Error('信頼設定ファイルを確認してください。');
@@ -24,13 +24,14 @@ export async function loadEncryptedInvestment(session,authentication) {
     const resumed=authentication?await request('/passkey/handoff',{handoffToken:authentication.handoff.handoffToken}):session;
     if(resumed.encryption?.accountId!==session.encryption.accountId)throw new Error('AccountMismatch');
     if(authentication)await prepareDiaryKeys((path,options={})=>request(path,options.body),resumed,authentication);
-    let trust=JSON.parse(localStorage.getItem(PIN)||'null');
+    let trust=authentication?.diaryTrust||JSON.parse(localStorage.getItem(PIN)||'null');
     const initial=await request('/encryption/profile'),profile=initial.profile;
     if(initial.protocol!==DIARY_READER_PROTOCOL)throw new Error('UnsupportedReaderProtocol');
     if(profile.actor.accountId!==session.encryption.accountId||(authentication&&profile.webAuthnCredentialId!==authentication.credentialId)||!profile.actor.canViewInvestment)throw new Error('AccountMismatch');
     let cached,liveSession=resumed;
     if(!authentication){try{cached=await loadDevice(session,profile);}catch{/* Request the normal passkey if device storage is unavailable. */}if(!cached)throw new Error('PasskeyRequired');if(trust)await sameTrust(cached.trust,trust);else trust=cached.trust;}
     await validatePublicTrust(trust);
+    await checkTrustFloor(trust,localStorage);
     state=await unlockSession({prf:authentication?.prfOutput,cachedPrivateKeys:cached?.privateKeys,profile,anchor:trust.anchor,minimumGeneration:Math.max(trust.minimumGeneration,initial.minimumGeneration),checkSession:async()=>{
       const current=await request('/session');const valid=current.authenticated&&current.encryption?.protocol===DIARY_READER_PROTOCOL&&current.encryption.accountId===profile.actor.accountId&&current.encryption.webAuthnCredentialId===profile.webAuthnCredentialId&&current.encryption.generation===initial.rollout.generation&&JSON.stringify(resumed.keySession)===JSON.stringify(current.keySession);if(valid)liveSession=current;return valid;
     }});
@@ -46,7 +47,7 @@ export async function loadEncryptedInvestment(session,authentication) {
     if(cache)try{await cache.put(cacheKey,{version:1,household:record.household,sequence:record.revision,baseSequence:-1,delta:false,unchanged:false,removed:[],records:[record]});}catch(error){if(error.message==='CacheRollbackRejected')throw new Error('RollbackDetected');}
     const current=await request('/session');
     if(!current.authenticated||current.encryption?.protocol!==DIARY_READER_PROTOCOL||current.encryption?.accountId!==profile.actor.accountId||current.encryption.webAuthnCredentialId!==profile.webAuthnCredentialId||current.encryption.generation!==initial.rollout.generation)throw new Error('SessionChanged');
-    localStorage.setItem(PIN,JSON.stringify({...trust,minimumGeneration:state.directory.generation}));
+    await rememberTrustFloor({...trust,minimumGeneration:state.directory.generation},localStorage);
     return {records,firstDate:records[0]?.date||null,lastDate:records.at(-1)?.date||null};
   }finally{authentication?.prfOutput?.fill(0);state?.keys.clear();if(state)state.privateKeys=null;cache?.close();}
 }

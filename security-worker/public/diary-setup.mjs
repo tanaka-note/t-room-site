@@ -96,10 +96,12 @@ export async function migrateDiary({kind='migration',onProgress=()=>{}}={}) {
     if(!status.config||!trust)throw new Error('日記の鍵設定を先に完了してください。');
     if(kind==='migration'&&status.writerReadiness?.ready===false)throw new Error('日記の利用者全員が通常のパスキーログインを行った後、管理者として日記を開いてください。投稿停止は開始していません。');
     const privateKey=await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput,status.adminEnvelope);
-    const signing=await api('/maintenance/signing-vault',{}),vault=await unlockVault(auth.prfOutput,signing.recipientId,signing.vault);
-    auth.prfOutput.fill(0);
     const maintenance=await import('/security/diary-crypto/e2ee/maintenance.mjs');plans=await maintenance.openMaintenancePlans();
     await maintenance.prepareDiaryMaintenance({kind,api,recoveryPrivateKey:privateKey,trust,plans,onProgress});
+    // A recovered/new admin credential joins the directory during rotation.
+    // Obtain its normal signing vault after that transaction, not beforehand.
+    const signing=await api('/maintenance/signing-vault',{}),vault=await unlockVault(auth.prfOutput,signing.recipientId,signing.vault);
+    auth.prfOutput.fill(0);
     const checkpoint=await api('/maintenance/backup',{});
     let manifest;
     for(let attempt=0;attempt<120;attempt++) {

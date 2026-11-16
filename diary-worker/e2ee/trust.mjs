@@ -8,8 +8,8 @@ async function key(prf,recipientId) {
   const material=await crypto.subtle.importKey('raw',prf,'HKDF',false,['deriveKey']);
   return crypto.subtle.deriveKey({name:'HKDF',hash:'SHA-256',salt:encode(label),info:encode(recipientId)},material,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
 }
-export function validateSealedTrust(packet) {
-  if(!packet||Object.keys(packet).sort().join(',')!=='envelope,generation'||!Number.isSafeInteger(packet.generation)||packet.generation<1||encode(packet).length>12000)throw new Error('InvalidPasskeyTrust');
+export function validateSealedTrust(packet,maxBytes=12000) {
+  if(!packet||Object.keys(packet).sort().join(',')!=='envelope,generation'||!Number.isSafeInteger(packet.generation)||packet.generation<1||encode(packet).length>maxBytes)throw new Error('InvalidPasskeyTrust');
   validateEnvelope(packet.envelope);return packet;
 }
 export async function sealTrust(prf,recipientId,trust) {
@@ -20,6 +20,29 @@ export async function openTrust(prf,recipientId,packet) {
   validateSealedTrust(packet);
   const trust=await validatePublicTrust(await open(await key(prf,recipientId),packet.envelope,binding(recipientId,packet.generation)));
   if(trust.minimumGeneration!==packet.generation)throw new Error('InvalidPasskeyTrust');
+  return trust;
+}
+export async function sealPendingConfiguration(prf,recipientId,configuration) {
+  const generation=configuration.expectedGeneration+1;
+  return {generation,envelope:await seal(await key(prf,recipientId),configuration,{...binding(recipientId,generation),scope:'configuration',kind:'pending-configuration'})};
+}
+export async function openPendingConfiguration(prf,recipientId,packet) {
+  validateSealedTrust(packet,2_100_000);
+  const value=await open(await key(prf,recipientId),packet.envelope,{...binding(recipientId,packet.generation),scope:'configuration',kind:'pending-configuration'});
+  if(value.expectedGeneration+1!==packet.generation)throw new Error('InvalidPasskeyTrust');return value;
+}
+const FLOOR=TRUST_PIN+'-floor';
+export async function checkTrustFloor(trust,storage) {
+  await validatePublicTrust(trust);
+  const floor=JSON.parse(storage?.getItem(FLOOR)||'null');
+  if(floor&&(!Number.isSafeInteger(floor.minimumGeneration)||floor.minimumGeneration<1||floor.fingerprint!==trust.fingerprint||floor.minimumGeneration>trust.minimumGeneration))throw new Error('DiaryTrustRollback');
+  return trust;
+}
+export async function rememberTrustFloor(trust,storage) {
+  await checkTrustFloor(trust,storage);
+  // This guard needs a digest and numeric floor only. Cross-device trust and
+  // configuration retries are kept in PRF-authenticated envelopes.
+  storage?.setItem(FLOOR,JSON.stringify({fingerprint:await fingerprint(trust.anchor),minimumGeneration:trust.minimumGeneration}));
   return trust;
 }
 export async function sameTrust(a,b) {

@@ -2615,11 +2615,13 @@ var domain = createDiaryEntryDomain({ HttpError: Error, basePath: "/diary" });
 var LEGACY_TABLES = Object.freeze(["diary_entries", "diary_tags", "diary_photos", "diary_trash_scopes", "diary_favorites", "investment_history"]);
 
 // diary-worker/e2ee/trust.mjs
-function validateSealedTrust(packet) {
-  if (!packet || Object.keys(packet).sort().join(",") !== "envelope,generation" || !Number.isSafeInteger(packet.generation) || packet.generation < 1 || encode(packet).length > 12e3) throw new Error("InvalidPasskeyTrust");
+var TRUST_PIN = "tlain-diary-authority-public-v1";
+function validateSealedTrust(packet, maxBytes = 12e3) {
+  if (!packet || Object.keys(packet).sort().join(",") !== "envelope,generation" || !Number.isSafeInteger(packet.generation) || packet.generation < 1 || encode(packet).length > maxBytes) throw new Error("InvalidPasskeyTrust");
   validateEnvelope(packet.envelope);
   return packet;
 }
+var FLOOR = TRUST_PIN + "-floor";
 
 // diary-worker/e2ee/backup.mjs
 var exact2 = (value, keys) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).sort().join(",") === [...keys].sort().join(",");
