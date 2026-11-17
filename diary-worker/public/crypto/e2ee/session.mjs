@@ -8,6 +8,19 @@ import {
   verifySigned,
 } from "./crypto.mjs";
 import {validDeviceKeys} from './device.mjs';
+
+const vaultBinding=(accountId,recipientId,vault)=>b64(encode({accountId,recipientId,publicKey:vault.publicKey,signPublicKey:vault.signPublicKey,privateEnvelope:vault.privateEnvelope}));
+// Reuse only the non-extractable keys already unlocked by this login's
+// preparation. The carrier is memory-only and consumed exactly once. Trust,
+// directory, grants and both live session checks still run in unlockSession.
+export function rememberPreparedVault(authentication,info,privateKeys) {
+  authentication.diaryPreparedKeys={binding:vaultBinding(info.accountId,info.recipientId,info.vault),credentialId:info.webAuthnCredentialId,privateKeys};
+}
+export function takePreparedVault(authentication,profile) {
+  const saved=authentication?.diaryPreparedKeys;
+  if(authentication)authentication.diaryPreparedKeys=null;
+  if(saved&&saved.credentialId===authentication.credentialId&&saved.credentialId===profile.webAuthnCredentialId&&saved.binding===vaultBinding(profile.actor.accountId,profile.actor.credentialId,profile.vault)&&validDeviceKeys(saved.privateKeys))return saved.privateKeys;
+}
 // Callers supply an externally pinned trust anchor and last known generation.
 // PRF material is consumed and erased, including on validation failures.
 export async function unlockSession({

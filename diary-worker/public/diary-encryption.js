@@ -7,13 +7,14 @@ import { createEncryptedMediaClient } from './crypto/e2ee/media-client.mjs';
 import { validatePublicTrust,DIARY_READER_PROTOCOL } from './crypto/e2ee/crypto.mjs';
 import {TRUST_PIN,sameTrust,checkTrustFloor,rememberTrustFloor} from './crypto/e2ee/trust.mjs';
 import {saveDevice,loadDevice,clearDevice} from './crypto/e2ee/device.mjs';
+import {takePreparedVault} from './crypto/e2ee/session.mjs';
 const PIN='tlain-diary-authority-public-v1';
 export async function importDiaryTrust(file) {
   if(!file||file.size>12000)throw new Error('信頼設定ファイルを確認してください。');
   const value=await validatePublicTrust(JSON.parse(await file.text()));
   localStorage.setItem(PIN,JSON.stringify(value));return value;
 }
-export async function startEncryptedDiary(session,authentication) {try{return await createEncryptedDiary(session,authentication);}finally{authentication?.prfOutput?.fill(0);if(authentication)authentication.diaryPrivateKeys=null;}}
+export async function startEncryptedDiary(session,authentication) {try{return await createEncryptedDiary(session,authentication);}finally{authentication?.prfOutput?.fill(0);if(authentication){authentication.diaryPrivateKeys=null;authentication.diaryPreparedKeys=null;}}}
 async function createEncryptedDiary(session,authentication) {
   let pin=authentication?.diaryTrust||JSON.parse(localStorage.getItem(TRUST_PIN)||'null');
   const nativeFetch=window.fetch.bind(window);
@@ -27,7 +28,8 @@ async function createEncryptedDiary(session,authentication) {
   const request=(path,init)=>nativeApi('/encryption'+path,init);
   const initial=await request('/profile');
   if(initial.protocol!==DIARY_READER_PROTOCOL)throw new Error('暗号化対応の最新版で開き直してください。');
-  let cached=authentication?.diaryPrivateKeys?{privateKeys:authentication.diaryPrivateKeys}:undefined;
+  let cached={privateKeys:authentication?.diaryPrivateKeys||takePreparedVault(authentication,initial.profile)};
+  if(!cached.privateKeys)cached=undefined;
   if(!authentication?.prfOutput) {
     try{cached=await loadDevice(session,initial.profile);}catch{/* Authenticate again if secure device storage is unavailable. */}
     if(!cached)throw new Error('パスキーでログインしてください。');
