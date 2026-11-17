@@ -3241,7 +3241,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         button.dataset.photoId = photo.id;
         button.setAttribute("aria-label", `${formatDate(photo.entryDate)}「${photo.entryTitle || "無題"}」の写真を開く`);
         const image = document.createElement("img");
-        photoImages.bind(image, photo, "thumbnail");
+        photoImages.bind(image, photo, "thumbnail", { root: elements.cameraRollDialog });
         image.alt = photo.fileName;
         image.loading = "lazy";
         const caption = document.createElement("span");
