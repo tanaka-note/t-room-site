@@ -2,6 +2,7 @@ import { selectAlbumMonth } from "./album-month-fixture.mjs";
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { EventEmitter, once } from 'node:events';
 import { extname } from 'node:path';
 import { chromium } from 'playwright';
 import { createDiaryFixtureServer } from './bootstrap-fixture.mjs';
@@ -10,6 +11,7 @@ const publicRoot = new URL('../../public/', import.meta.url);
 const photoId = n => `aaaaaaaa-aaaa-4aaa-8aaa-${String(n).padStart(12, '0')}`;
 let photos, entry, canManage = true, failDelete = false, holdDelete = false, releaseDelete;
 const requests = [], deletes = [];
+const deleteEvents = new EventEmitter();
 const json = (response, data, status = 200) => {
   response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
   response.end(JSON.stringify(data));
@@ -47,6 +49,7 @@ const server = createDiaryFixtureServer(async (request, response) => {
       const body = JSON.parse(text);
       const id = path.split('/').at(-1);
       deletes.push({ id, body });
+      deleteEvents.emit('received');
       if (holdDelete) await new Promise(resolve => { releaseDelete = resolve; });
       if (failDelete) return json(response, { error: 'fixture conflict' }, 409);
       assert.equal(body.revision, entry.revision);
@@ -110,8 +113,13 @@ try {
       await closed('delete-confirm-dialog');
       assert.equal(deletes.length, 0, 'cancel, Esc, Back and backdrop never delete');
       holdDelete = true;
-      await confirm(); await page.click('#delete-confirm-yes');
+      await confirm();
+      // A disabled button precedes request routing/body receipt. Synchronize
+      // with the fixture before counting mutations, while holding its reply.
+      const receivedDelete = once(deleteEvents, 'received', { signal: AbortSignal.timeout(10000) });
+      await page.click('#delete-confirm-yes');
       await page.waitForFunction(() => document.getElementById('delete-confirm-yes').disabled);
+      await receivedDelete;
       await page.keyboard.press('Escape');
       await page.evaluate(() => history.back());
       await page.waitForTimeout(100);

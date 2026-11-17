@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
-import {readFile} from 'node:fs/promises';
-import {resolve,extname,sep} from 'node:path';
+import {readFile,mkdtemp,writeFile,utimes,unlink,rmdir} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {resolve,extname,sep,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium} from 'playwright';
 import {systemFixture} from './system-fixture.mjs';
@@ -15,6 +16,9 @@ const f=await systemFixture(),user=f.users[process.argv.includes('--independent-
 const wire=[],errors=[];let origin,authentications=0;
 const trust=await publicTrustPackage(f.configuration);
 const progressive=process.argv.includes('--progressive');let bodyIV,holdSnapshot=progressive,releaseSnapshot;
+const photoSelection=process.argv.includes('--photo-selection');
+let photoDirectory;const photoPaths=[];
+const originalPng=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
 let snapshotStarted;const snapshotRequested=new Promise(resolve=>{snapshotStarted=resolve;});
 if(progressive) {
   const request=async(path,body)=>{
@@ -56,7 +60,7 @@ async function pageFor(context) {
   const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));return page;
 }
 try {
-  const context=await browser.newContext(),page=await pageFor(context);let downloads=0;page.on('download',()=>downloads++);
+  const context=await browser.newContext(photoSelection?{viewport:{width:390,height:844},isMobile:true,hasTouch:true}:{}),page=await pageFor(context);let downloads=0;page.on('download',()=>downloads++);
   await page.goto(origin+'/diary/');await page.locator('#passkey-login').click();await page.locator('#app-view').waitFor({state:'visible'});
   await page.waitForFunction(()=>window.lastPRF.every(value=>value===0));assert.equal(authentications,1);
   if(progressive) {
@@ -73,11 +77,44 @@ try {
   assert.ok(vault.trust);assert.deepEqual(vault.publicKey,user.vault.publicKey);assert.deepEqual(vault.privateEnvelope,user.vault.privateEnvelope);
   await page.click('#new-entry-button');await page.locator('#editor-dialog').waitFor({state:'visible'});
   await page.fill('#entry-title','SYNTHETIC_PRIVATE_POST');await page.locator('#entry-content').fill('SYNTHETIC_PRIVATE_POST_BODY');
+  if(photoSelection) {
+    photoDirectory=await mkdtemp(join(tmpdir(),'diary-encrypted-photos-'));
+    for(let i=0;i<31;i++){const path=join(photoDirectory,`SYNTHETIC_PRIVATE_PHOTO_${i}.png`);photoPaths.push(path);await writeFile(path,originalPng);}
+    await page.evaluate(()=>{
+      const nativeRead=File.prototype.arrayBuffer,nativeBitmap=window.createImageBitmap.bind(window);let release;
+      const gate=new Promise(resolve=>{release=resolve;});let first=true;
+      window.photoSourceReads=0;window.releasePhotoConversion=release;
+      File.prototype.arrayBuffer=async function(){const bytes=await nativeRead.call(this);window.photoSourceReads++;return bytes;};
+      window.createImageBitmap=async(...args)=>{if(first){first=false;window.photoConversionWaiting=true;await gate;}return nativeBitmap(...args);};
+    });
+    const chooser=page.waitForEvent('filechooser');await page.click('#add-photo-button');await(await chooser).setFiles(photoPaths);
+    await page.waitForFunction(()=>window.photoConversionWaiting);
+    assert.equal(await page.evaluate(()=>window.photoSourceReads),31,'all sources captured before conversion');
+    const later=new Date(Date.now()+60000);for(const path of photoPaths.slice(2))await utimes(path,later,later);
+    await page.evaluate(()=>window.releasePhotoConversion());
+    await page.waitForFunction(()=>!document.querySelector('#photo-input').disabled);
+    assert.equal(await page.locator('#editor-photo-list .editor-photo-card').count(),31);
+  }
   await page.click('#save-entry-button');await page.locator('#editor-dialog').waitFor({state:'hidden'});
   const saved=f.db.sqlite.prepare("SELECT household,author,envelope FROM diary_e2ee_records WHERE state='published'").all();
   assert.equal(saved.length,progressive?49:1);assert.equal(saved.at(-1).author,user.serviceAccountId);assert.equal(saved.at(-1).household,user.claims.households[0]);
   assert.equal(JSON.stringify(saved).includes('SYNTHETIC_PRIVATE_POST'),false);assert.equal(JSON.stringify(wire).includes('SYNTHETIC_PRIVATE_POST_BODY'),false);
+  if(photoSelection) {
+    const media=f.db.sqlite.prepare('SELECT status,account_id,original_key,metadata FROM diary_e2ee_media').all();
+    assert.equal(media.length,31);assert.ok(media.every(row=>row.status==='attached'&&row.account_id===user.serviceAccountId));
+    assert.equal(JSON.stringify(media).includes('SYNTHETIC_PRIVATE_PHOTO'),false);assert.equal(JSON.stringify(wire).includes('SYNTHETIC_PRIVATE_PHOTO'),false);
+    for(const row of media)assert.deepEqual([...f.r2.get(row.original_key).bytes],[...originalPng]);
+    const committed=f.db.sqlite.prepare("SELECT committed_ids FROM diary_e2ee_uploads WHERE status='committed'").all();
+    assert.equal(committed.length,1);assert.equal(JSON.parse(committed[0].committed_ids).length,31);
+    assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) AS n FROM diary_photos').get().n,0);
+  }
   await page.reload();await page.locator('#app-view').waitFor({state:'visible'});assert.equal(authentications,1,'same live session resumes without another WebAuthn operation');
+  if(photoSelection) {
+    await page.locator('#entry-list .diary-entry-card').filter({hasText:'SYNTHETIC_PRIVATE_POST'}).first().click();
+    await page.locator('#entry-dialog').waitFor({state:'visible'});assert.equal(await page.locator('#detail-content .entry-photo').count(),31);
+    await page.click('[data-close-dialog="entry-dialog"]');
+    console.log('Encrypted photo selection: ordinary mobile account, 31 native source snapshots, source timestamp changes, encrypted metadata, original bytes, single commit and reload passed.');
+  }
   await page.click('#logout-button');await page.locator('#passkey-login').waitFor({state:'visible'});
   const storage=await inspectLogoutStorage(page);assert.equal(storage.keys,0);assert.ok(storage.cipherSnapshots>0);assert.equal(storage.containsPlaintext,false);
   await verifyCacheBudget(page);
@@ -96,4 +133,4 @@ try {
   assert.equal(JSON.stringify(wire).includes(Buffer.from(user.prf).toString('base64url')),false);
   assert.equal(wire.some(row=>row.path.startsWith('/security/')),false);assert.deepEqual(errors,[]);
   console.log('Unified Diary passkey: sealed trust, fresh device, unchanged vault, secure session resume, logout/relogin, session mismatch and revocation passed without JSON (synthetic WebAuthn).');
-}finally{await browser.close();await new Promise(resolve=>server.close(resolve));await f.close();}
+}finally{await browser.close();await new Promise(resolve=>server.close(resolve));await f.close();for(const path of photoPaths)await unlink(path).catch(()=>{});if(photoDirectory)await rmdir(photoDirectory);}

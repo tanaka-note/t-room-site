@@ -1933,6 +1933,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       window.requestAnimationFrame(finishPhotoPickerInteraction);
     };
     window.addEventListener("focus", photoPickerReturnHandler, { once: true });
+    // Start loading while the OS picker is open, before its File references
+    // need reading. Keep the click synchronous to preserve user activation.
+    void loadPhotoTools().catch(() => {});
     try {
       elements.photoInput.click();
     } catch (error) {

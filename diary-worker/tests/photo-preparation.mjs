@@ -46,9 +46,9 @@ try {
   await assert.rejects(preparePhoto(allocation), error => error.stage === "snapshot" && error.cause.name === "RangeError");
   globalThis.File = originals.File;
 
-  // While decoding photo 0, photo 1 must already be owned, but photo 2 must
-  // remain unread. A provider failure after that read cannot affect photo 1.
-  const files = [file("0.png"), file("1.png"), file("2.png")];
+  // Own the complete selection before conversion can delay later source reads.
+  // Expiring every picker File during the first decode must not lose photos.
+  const files = Array.from({ length: 31 }, (_, index) => file(`${index}.png`));
   const reads = [];
   for (const f of files) f.arrayBuffer = async () => { reads.push(f.name); return Blob.prototype.arrayBuffer.call(f); };
   const entered = gate(), blocked = gate();
@@ -57,24 +57,27 @@ try {
   const batch = preparePhotoBatch(files);
   const first = batch.next();
   await entered.promise;
-  assert.deepEqual(reads, ["0.png", "1.png"]);
-  files[1].arrayBuffer = async () => { throw new DOMException("provider reference expired", "NotReadableError"); };
+  assert.deepEqual(reads, files.map(file => file.name));
+  for (const source of files) source.arrayBuffer = async () => { throw new DOMException("provider reference expired", "NotReadableError"); };
   blocked.resolve();
   const results = [(await first).value];
   for await (const result of batch) results.push(result);
-  assert.deepEqual(results.map(result => result.photo.fileName), ["0.png", "1.png", "2.png"]);
+  assert.deepEqual(results.map(result => result.photo.fileName), files.map(file => file.name));
   for (const result of results) release(result.photo);
 
-  // Original-byte budget includes the photo being converted. Oversized photos
-  // are allowed singly, without adding a second read alongside them.
+  // Bound temporary source-read buffers even while capturing a whole selection.
+  // Oversized photos run alone; completed snapshots no longer retain buffers.
   for (const size of [9 * 1024 * 1024, 17 * 1024 * 1024]) {
     const sizes = size > 16 * 1024 * 1024 ? [size, 1] : [size, size];
     const files = sizes.map((size, i) => file(`${i}.png`, size));
     const reads = [];
-    for (const f of files) f.arrayBuffer = async () => { reads.push(f.name); return Blob.prototype.arrayBuffer.call(f); };
     const entered = gate(), blocked = gate();
-    let decodes = 0;
-    decode = async () => { if (++decodes === 1) { entered.resolve(); await blocked.promise; } };
+    for (const [index, f] of files.entries()) f.arrayBuffer = async () => {
+      reads.push(f.name);
+      if (index === 0) { entered.resolve(); await blocked.promise; }
+      return Blob.prototype.arrayBuffer.call(f);
+    };
+    decode = async () => {};
     const batch = preparePhotoBatch(files);
     const first = batch.next();
     await entered.promise;
