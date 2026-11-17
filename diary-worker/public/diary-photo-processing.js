@@ -33,19 +33,23 @@ async function readPhotoSnapshot(file) {
   }
   try {
     file = new File([fileBytes], file.name, { type: file.type, lastModified: file.lastModified });
+    // Parse orientation while the source buffer is available. The returned
+    // Blobs reference the owned File, so queued photos retain no ArrayBuffers.
+    return { file, imageSource: preparePhotoSource(file, fileBytes) };
   } catch (cause) {
     throw preparationError("snapshot", cause, "写真の読み込みを完了できませんでした。枚数を減らしてもう一度お試しください。");
   }
-  return { file, bytes: fileBytes };
 }
 
 export async function preparePhoto(file) {
   return prepareSnapshot(await readPhotoSnapshot(file));
 }
 
-// Snapshot the next photo while the current one is decoded/resized. Bound both
-// the count (current + one ahead) and original bytes; a large photo runs alone.
-export async function* preparePhotoBatch(files, onProgress = () => {}) {
+// Capture picker-backed Files before decoding/resizing can delay later reads.
+// Bound temporary read buffers to two / 16 MiB; an oversized photo runs alone.
+// Completed snapshots contain only immutable, document-lifetime File/Blob data.
+async function snapshotPhotoBatch(files) {
+  const snapshots = new Array(files.length);
   const pending = [];
   let next = 0;
   let pendingBytes = 0;
@@ -55,30 +59,38 @@ export async function* preparePhotoBatch(files, onProgress = () => {}) {
       const bytes = file.size || 0;
       if (pending.length && pendingBytes + bytes > PHOTO_READ_AHEAD_BYTES) break;
       const started = Date.now();
-      // Attach the rejection handler immediately: prefetched reads can fail
-      // before the consumer finishes preparing the preceding photo.
+      // Attach rejection handlers before awaiting any other source read.
       const result = readPhotoSnapshot(file).then(snapshot => ({ snapshot }), error => ({ error }));
       pending.push({ index: next++, bytes, started, result });
       pendingBytes += bytes;
     }
     const current = pending[0];
-    onProgress(current.index);
     const result = await current.result;
-    let photo, error = result.error;
-    if (!error) {
-      try { photo = await prepareSnapshot(result.snapshot); } catch (cause) { error = cause; }
-    }
+    snapshots[current.index] = { ...result, started: current.started };
     pending.shift();
     pendingBytes -= current.bytes;
-    yield { index: current.index, photo, error, preparationMs: Date.now() - current.started };
+  }
+  return snapshots;
+}
+
+export async function* preparePhotoBatch(files, onProgress = () => {}) {
+  const snapshots = await snapshotPhotoBatch(files);
+  for (let index = 0; index < snapshots.length; index += 1) {
+    const current = snapshots[index];
+    snapshots[index] = null;
+    onProgress(index);
+    let photo, error = current.error;
+    if (!error) {
+      try { photo = await prepareSnapshot(current.snapshot); } catch (cause) { error = cause; }
+    }
+    yield { index, photo, error, preparationMs: Date.now() - current.started };
   }
 }
 
 async function prepareSnapshot(snapshot) {
-  let { file, bytes: fileBytes } = snapshot;
-  snapshot.bytes = null;
-  const imageSource = await preparePhotoSource(file, fileBytes);
-  fileBytes = null;
+  const { file, imageSource } = snapshot;
+  snapshot.file = null;
+  snapshot.imageSource = null;
   let bitmap;
   try {
     bitmap = await createImageBitmap(imageSource.source);
@@ -114,16 +126,19 @@ async function prepareSnapshot(snapshot) {
   }
 }
 
-async function preparePhotoSource(file, bytes) {
+function preparePhotoSource(file, bytes) {
   const isJpeg = /^image\/(?:jpeg|jpg)$/i.test(String(file.type || "")) || /\.jpe?g$/i.test(String(file.name || ""));
   if (!isJpeg) return { source: file, orientation: 1 };
   const exif = readJpegOrientation(bytes);
   if (!exif) return { source: file, orientation: 1 };
-  // File construction snapshots the bytes before EXIF normalization, preserving
-  // the original without reading the source file for a second time.
-  writeExifOrientation(bytes, exif.valueOffset, exif.littleEndian, 1);
+  // Replace just the orientation bytes using slices of our immutable copy.
+  // Preserve the original EXIF without copying the entire JPEG a second time.
+  const orientationBytes = new Uint8Array(2);
+  writeExifOrientation(orientationBytes, 0, exif.littleEndian, 1);
   return {
-    source: new Blob([bytes], { type: file.type || "image/jpeg" }),
+    source: new Blob([
+      file.slice(0, exif.valueOffset), orientationBytes, file.slice(exif.valueOffset + 2)
+    ], { type: file.type || "image/jpeg" }),
     orientation: exif.orientation
   };
 }
