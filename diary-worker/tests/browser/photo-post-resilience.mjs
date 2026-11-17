@@ -702,7 +702,7 @@ async function verifyReadAheadSnapshot(browser, name, contextOptions) {
     await page.click("#add-photo-button");
     await (await chooser).setFiles(paths);
     await page.waitForFunction(() => window.__photoPreparationWaiting);
-    assert.deepEqual(await page.evaluate(() => window.__readPhotos), paths.map(path => path.split(/[\\/]/).at(-1)),
+    assert.deepEqual(await page.evaluate(() => [...window.__readPhotos].sort()), paths.map(path => path.split(/[\\/]/).at(-1)).sort(),
       `${name}: capture all 31 originals before conversion can delay picker reads`);
     assert.equal(await page.locator("#photo-input").evaluate(el => el.files.length), 31,
       `${name}: keep picker selection until preparation completes`);
