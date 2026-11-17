@@ -14,6 +14,8 @@ HTMLは共通Updater、Passkeyクライアント、軽量な `diary-bootstrap.js
 
 bootstrapもrequestごとに現在のSecurity状態を検証し、同じGET requestの内部だけで検証結果を再利用する。foregroundのbootstrapは置き換え元の一覧GETと同じRolling Session更新条件を維持する。バックグラウンド・エラー・session確認だけでは延長しない。遅い応答は検索のrequest IDとsession／householdの世代で区別し、ログアウト後や切替後に前のデータを再表示しない。
 
+暗号文snapshotのgzip応答は既に圧縮したbyte列を返すため、Cloudflareの`encodeBody: 'manual'`を最終のsession・header wrapper後にも指定する。自動圧縮と重ねるとHTTP 200でもブラウザのJSON読込が失敗する。通常verifyに含まれる`node tests/e2ee/progressive.browser.mjs`は実際のhandlerの応答とencoding指定をローカルworkerdのHTTP経由でAndroid相当のブラウザへ渡し、ログイン後の一覧・検索・投稿・cache再開・ログアウトを確認する。NodeのHTTP fixtureだけではCloudflareの自動圧縮を再現しない。
+
 写真ビューアの読み込み・画像切り替え・スワイプ・矢印キーは `public/diary-photo-viewer.js` が担当する。選択中の写真と戻る履歴、閉じる要求、認可・アップロードは本体側で管理し、ビューアには表示要素と写真選択だけを渡す。認証後に先読みするが、一覧描画や編集準備の完了条件には含めない。未準備の写真操作だけが読み込みを待ち、閉じる・session切替後に遅れて表示しない。
 
 写真は画面全体に収め、操作を上下に重ねる。左右の矢印ボタンは置かず、等倍では左右スワイプ／左右キーで写真を切り替える。ピンチ、マウスホイール、ダブルクリック、＋・－キーで1～6倍に拡大・縮小し、拡大中はドラッグ／矢印キーで画像内を移動する。表示中の倍率ボタンまたは0キーで等倍に戻す。倍率と移動量は写真切り替え・閉じる際にリセットし、画像の表示範囲に合わせて移動量を制限する。対応ブラウザでは全画面ボタンからFullscreen APIも利用でき、解除後も写真表示を維持する。表示用画像の長辺上限1800pxと既存の保存操作は維持する。

@@ -59,7 +59,7 @@ export async function handleEncryptedApi(request,env,url,path,session,{json,read
     const response=json(await store.snapshotPage(actor,session.activeHouseholdId,{since:Number(q.get('since')??-1),after:q.get('after'),at:q.has('at')?Number(q.get('at')):null,limit:Number(q.get('limit')||50)}));
     if(request.headers.get('Accept')==='application/vnd.tlain.diary-snapshot+json'&&typeof CompressionStream==='function'){
       const headers=new Headers(response.headers);headers.set('Content-Encoding','gzip');headers.set('Vary','Accept');
-      return new Response(response.body.pipeThrough(new CompressionStream('gzip')),{status:response.status,headers});
+      return new Response(response.body.pipeThrough(new CompressionStream('gzip')),{status:response.status,headers,encodeBody:'manual'});
     }
     return response;
   }
