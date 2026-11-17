@@ -114,7 +114,7 @@ async function createEncryptedDiary(session,authentication) {
         const status=Number.isInteger(error.status)&&error.status>=400&&error.status<=599?error.status:500;
         return Response.json({error:status===500?'日記を準備できませんでした。もう一度お試しください。':error.message},{status});
       }finally{if(path==='/logout')await lock({logout:true});}
-    },fetch:media.fetch,readPhoto:async(...args)=>{try{return await media.read(...args);}catch(error){if(error.status===401||client.closed)expire();throw error;}},
+    },fetch:async(...args)=>{try{const response=await media.fetch(...args);if(response.status===401||client.closed)expire();return response;}catch(error){if(error.status===401||client.closed)expire();throw error;}},readPhoto:async(...args)=>{try{return await media.read(...args);}catch(error){if(error.status===401||client.closed)expire();throw error;}},
     presented:()=>releaseFirstView(),
     get storage(){return navigation.storage;},get history(){return navigation.history;},tagRoute:tag=>navigation.tagRoute(tag),tagValue:segment=>navigation.tagValue(segment),flush:()=>navigation.flush(),
     lock
