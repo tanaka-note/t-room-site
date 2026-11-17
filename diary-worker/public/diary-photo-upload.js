@@ -56,6 +56,13 @@ export function createPhotoUploadManager({ state, api, basePath, getTargetEntryI
   }
 
   async function ensurePhotoUploadSession() {
+    if (state.photoUploadCommitted) {
+      state.photoUploadSessionId = null;
+      state.photoUploadSessionPromise = null;
+      state.photoUploadSessionTiming = null;
+      state.photoUploadTargetEntryId = null;
+      state.photoUploadCommitted = false;
+    }
     if (state.photoUploadSessionId) return state.photoUploadSessionId;
     if (state.photoUploadSessionPromise) return state.photoUploadSessionPromise;
     degraded = false;

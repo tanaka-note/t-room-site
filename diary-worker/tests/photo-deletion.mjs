@@ -19,7 +19,7 @@ function fixture({ status = "published", draftOfEntryId = null, pending = false,
   const writes = [], deletes = [];
   let closes = 0, deleteFails = failDelete, commitFails = failCommit;
   const context = { state, elements, editorSaveTiming: null, console: { info() {} },
-    Date, Map, Set, JSON, Number, String, Boolean,
+    Date, Map, Set, JSON, Number, String, Boolean, structuredClone, sessionGeneration: 0,
     waitForPhotoPreparation: async () => {}, serializeRichEditor: () => ({ content: "本文", contentFormat: null }),
     parseTags: value => [value], photoMarker: id => `[[写真:${id}]]`, setEditorSaveBusy() {},
     api: async (path, { body }) => {
@@ -38,7 +38,7 @@ function fixture({ status = "published", draftOfEntryId = null, pending = false,
     renderEditorPhotos() {}, showToast() {}, updateFilterControls() {}, loadMeta: async () => {}, loadEntries: async () => {},
     closeEditorDialog: async () => { closes++; }
   };
-  const persist = runInNewContext(`(${persistSource.trim()})`, context);
+  const persist = runInNewContext(`(() => { ${persistSource}\n return persistEditor; })()`, context);
   return { state, elements, writes, deletes, persist, closes: () => closes };
 }
 
@@ -95,8 +95,9 @@ assert.equal(mixed.state.editorDeletedPhotoIds.has(historicalId), true,
 
 const clearSource = source.slice(source.indexOf("  function clearEditorPhotos("), source.indexOf("  async function deletePhoto("));
 const clearing = { editorPhotos: [], editorDeletedPhotoIds: new Set([photoId]), editorPendingPhotoDeletionIds: new Set([photoId]),
-  photoUploadActiveTasks: new Set() };
+  photoUploadActiveTasks: new Set(), pendingPhotoSave: { entry: { content: "private pending content" } } };
 runInNewContext(`(${clearSource.trim()})()`, { state: clearing, elements: {}, URL });
 assert.equal(clearing.editorPendingPhotoDeletionIds.size, 0, "closing/reopening the editor clears current deletion intent");
 assert.equal(clearing.editorDeletedPhotoIds.size, 0);
+assert.equal(clearing.pendingPhotoSave, null, "closing the editor discards the pending plaintext save checkpoint");
 process.stdout.write("Photo deletion intent: historical exclusions, title edits, drafts, explicit deletion, retry and publish recovery passed.\n");

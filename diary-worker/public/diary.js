@@ -122,6 +122,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     editorPendingPhotoDeletionIds: new Set(),
     photoPreparing: false,
     photoPreparationPromise: null,
+    pendingPhotoSave: null,
     photoUploading: false,
     photoUploadPendingCount: 0,
     photoUploadActiveTasks: new Set(),
@@ -2013,7 +2014,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
           state.editorPhotos.push(photo);
           preparedPhotos.push(photo);
           preparedCount += 1;
-          queueBackgroundPhotoUpload(photo);
+          // A failed commit may already have attached photos server-side.
+          // Keep new payloads locally until that session is safely completed.
+          if (!state.pendingPhotoSave) queueBackgroundPhotoUpload(photo);
         }
       }
       await waitForEditorCompositionEnd();
@@ -2621,6 +2624,11 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         state.editorDeletedPhotoIds.add(photo.id);
         state.editorPendingPhotoDeletionIds.add(photo.id);
       }
+      else if (state.pendingPhotoSave?.photos.includes(photo)) {
+        // Finish the already-submitted attachment before applying this removal.
+        // Its original upload is still needed if that attachment is retried.
+        photo.removed = true;
+      }
       else void deleteStagedPhotoUpload(photo).catch(() => {
         elements.photoPreparationStatus.textContent = "一時保存した画像は後ほど自動的に削除されます。";
       });
@@ -2643,6 +2651,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.photoUploadSessionPromise = null;
     state.photoUploadTargetEntryId = null;
     state.photoUploadCommitted = false;
+    state.pendingPhotoSave = null;
     state.photoUploadPendingCount = 0;
     state.photoUploading = false;
     state.photoUploadActiveTasks.clear();
@@ -2650,14 +2659,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function deletePhoto(photoId) {
-    const response = await fetch(`${BASE_PATH}/api/photos/${photoId}`, {
-      method: "DELETE",
-      headers: { "X-Diary-Request": "1" },
-      credentials: "same-origin"
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || "画像を削除できませんでした。");
-    return result;
+    return api(`/photos/${photoId}`, { method: "DELETE" });
   }
 
   function hasEditorChanges() {
@@ -2794,6 +2796,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     setEditorSaveBusy(true, targetStatus === "draft" ? "下書き保存中..." : "投稿中...");
     try {
       await measure("prepare", () => waitForPhotoPreparation());
+      if (state.pendingPhotoSave) {
+        setEditorSaveBusy(true, "前回の写真保存を再開しています...");
+        await measure("photoRecovery", () => completePendingPhotoSave());
+      }
       const id = Number(elements.entryId.value || 0);
       const editorDocument = serializeRichEditor(true);
       const body = {
@@ -2866,22 +2872,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         }
       }
       if (state.photoUploadSessionId && !state.photoUploadCommitted) {
-        setEditorSaveBusy(true, "写真を日記へ反映しています...");
+        state.pendingPhotoSave = {
+          entry: structuredClone(saved.entry), body: structuredClone(body), photos: [...pendingPhotos],
+          sessionId: state.photoUploadSessionId, generation: sessionGeneration
+        };
         try {
-          const committedPhotos = await measure("photoCommit", () => commitStagedPhotos(saved.entry.id, pendingPhotos));
-          const committedById = new Map(committedPhotos.map((photo) => [photo.id, photo]));
-          for (const photo of pendingPhotos) {
-            photo.existing = true;
-            Object.assign(photo, committedById.get(photo.id) || {});
-            releaseUploadedPhotoPayload(photo, { releasePreview: Boolean(photo.thumbnailUrl) });
-          }
-          if (pendingPhotos.length) {
-            setEditorSaveBusy(true, "写真を本文へ反映しています...");
-            saved = await measure("finalize", () => finalizeCommittedPhotoEntry(saved.entry.id, body, saved.entry));
-            elements.entryRevision.value = String(saved.entry.revision);
-            elements.entryStatus.value = saved.entry.status;
-            state.editorSourceEntry = saved.entry;
-          }
+          saved = await completePendingPhotoSave(measure);
         } catch (error) {
           failures.push(`写真の反映：${error.message}`);
         }
@@ -2920,6 +2916,38 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         photos: timing.photos.map((photo) => ({ preparationMs: photo.preparationMs, ...photo.uploadMetrics }))
       }));
     }
+  }
+
+  async function completePendingPhotoSave(measure = async (_stage, operation) => operation()) {
+    const pending = state.pendingPhotoSave;
+    if (!pending || pending.generation !== sessionGeneration || pending.sessionId !== state.photoUploadSessionId) {
+      throw new Error("写真の保存状態を確認できませんでした。編集内容を確認してください。");
+    }
+    if (!state.photoUploadCommitted) {
+      setEditorSaveBusy(true, "写真を日記へ反映しています...");
+      const committed = await measure("photoCommit", () => commitStagedPhotos(pending.entry.id, pending.photos));
+      const committedById = new Map(committed.map(photo => [photo.id, photo]));
+      for (const photo of pending.photos) {
+        photo.existing = true;
+        Object.assign(photo, committedById.get(photo.id) || {});
+        if (photo.removed) {
+          state.editorDeletedPhotoIds.add(photo.id);
+          state.editorPendingPhotoDeletionIds.add(photo.id);
+        }
+        releaseUploadedPhotoPayload(photo, { releasePreview: Boolean(photo.thumbnailUrl) });
+      }
+    }
+    let saved = { entry: pending.entry };
+    if (pending.photos.length) {
+      setEditorSaveBusy(true, "写真を本文へ反映しています...");
+      saved = await measure("finalize", () => finalizeCommittedPhotoEntry(pending.entry.id, pending.body, pending.entry));
+    }
+    elements.entryId.value = String(saved.entry.id);
+    elements.entryRevision.value = String(saved.entry.revision);
+    elements.entryStatus.value = saved.entry.status;
+    state.editorSourceEntry = saved.entry;
+    state.pendingPhotoSave = null;
+    return saved;
   }
 
   async function createEntryIdempotently(body) {
