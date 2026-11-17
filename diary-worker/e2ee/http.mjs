@@ -56,7 +56,12 @@ export async function handleEncryptedApi(request,env,url,path,session,{json,read
   if(path==='/api/encryption/head'&&request.method==='GET'){if(url.searchParams.get('household')!==session.activeHouseholdId)fail(403,'HouseholdDenied');return json(await store.snapshotHead(actor,session.activeHouseholdId));}
   if(path==='/api/encryption/snapshot'&&request.method==='GET') {
     const q=url.searchParams;if(q.get('household')!==session.activeHouseholdId)fail(403,'HouseholdDenied');
-    return json(await store.snapshotPage(actor,session.activeHouseholdId,{since:Number(q.get('since')??-1),after:q.get('after'),at:q.has('at')?Number(q.get('at')):null,limit:Number(q.get('limit')||50)}));
+    const response=json(await store.snapshotPage(actor,session.activeHouseholdId,{since:Number(q.get('since')??-1),after:q.get('after'),at:q.has('at')?Number(q.get('at')):null,limit:Number(q.get('limit')||50)}));
+    if(request.headers.get('Accept')==='application/vnd.tlain.diary-snapshot+json'&&typeof CompressionStream==='function'){
+      const headers=new Headers(response.headers);headers.set('Content-Encoding','gzip');headers.set('Vary','Accept');
+      return new Response(response.body.pipeThrough(new CompressionStream('gzip')),{status:response.status,headers});
+    }
+    return response;
   }
   if(bundle.rekeyRequired)fail(423,'DiaryRekeyRequired');
   if(path==='/api/encryption/mutation'&&request.method==='POST') {

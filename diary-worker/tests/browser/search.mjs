@@ -166,9 +166,13 @@ async function run(browserType, name, options = {}) {
     await page.waitForFunction((count) => document.querySelectorAll("#entry-list [data-entry-id]").length === count, 20);
     assert.equal(requests.at(-1).q, "ふゆ");
     const beforeEnter = requests.length;
-    await input.fill("公園");
     const enterResponse = page.waitForResponse((response) => response.url().includes("/diary/api/entries?") && new URL(response.url()).searchParams.get("q") === "公園");
-    await input.press("Enter");
+    // Keep input and Enter in the same browser task: a slow automation round
+    // trip may otherwise let the 150ms debounce finish before Enter is sent.
+    await input.evaluate(element=>{
+      element.value='公園';element.dispatchEvent(new InputEvent('input',{bubbles:true}));
+      element.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,key:'Enter'}));
+    });
     await enterResponse;
     await page.waitForTimeout(200);
     assert.equal(requests.length, beforeEnter + 1, "Enter must search immediately without a second debounced request");

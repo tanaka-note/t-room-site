@@ -281,8 +281,8 @@ test('synchronous list commit retains the latest user position', () => {
 function entriesFixture({ count = 120, monthly = false, expanded = false, hook = () => {} } = {}) {
   const state = { entries: [], entryMap: new Map(), requestId: 0, monthExpanded: expanded, month: '2026-10',
     query: 'keyword', tag: 'tag', dateFrom: '2026-10-01', dateTo: '2026-10-31', favoritePage: true };
-  const requests = [], renders = [];
-  const elements = { entryList: { replaceChildren() {} }, loadMore: {}, searchStatus: {} };
+  const requests = [], renders = [], placeholders = [];
+  const elements = { entryList: { replaceChildren(value) { placeholders.push(value); } }, loadMore: {}, searchStatus: {} };
   const api = async (path, options) => {
     requests.push({ path, options });
     const url = new URL(path, 'https://fixture.test');
@@ -293,7 +293,7 @@ function entriesFixture({ count = 120, monthly = false, expanded = false, hook =
     return path.startsWith('/bootstrap') ? { session: { authenticated: true }, households: {}, meta: {}, entries: result } : result;
   };
   const load = new Function('state', 'elements', 'api', 'renders', `
-    let sessionGeneration = 1;
+    let sessionGeneration = 1, remoteRefreshPending = false;
     const activeSessionContext = 'fixture', readingToolsReady = Promise.resolve();
     const window = { clearTimeout() {} };
     const isMonthlyView = () => ${monthly};
@@ -301,10 +301,10 @@ function entriesFixture({ count = 120, monthly = false, expanded = false, hook =
     const createEmpty = value => value, setBusy = () => {}, updateListHeading = () => {}, updateSearchStatus = () => {};
     const sessionContext = () => 'fixture', applyHouseholds = () => {}, applyMeta = () => {};
     const preserveViewport = render => render(), renderEntries = () => renders.push(state.entries.map(e => e.id));
-    const resetState = () => {}, showLogin = () => {};
+    const resetState = () => {}, showLogin = () => {}, showToast = () => {};
     ${body('loadEntries')}
     return { load: loadEntries, invalidateSession: () => { sessionGeneration++; } };`)(state, elements, api, renders);
-  return { state, requests, renders, ...load };
+  return { state, requests, renders, placeholders, ...load };
 }
 test('return fetches 50/50/20 once each and commits the complete list once', async () => {
   const f = entriesFixture({ count: 140 });
@@ -575,4 +575,12 @@ test('interrupted handoff survives pagehide but is rejected after visiting anoth
   assert.equal(f.take('household-a'), null);
   assert.equal(f.has('/diary/'), false);
   assert.equal(f.storage.get('troom-diary-return-view-v1'), snapshot);
+});
+
+test('remote refresh preserves the loaded page and its DOM until the complete replacement is ready',async()=>{
+ let observed;
+ const f=entriesFixture({count:80,hook:({state})=>{observed=state.entries.length;}});
+ f.state.entries=Array.from({length:50},(_,i)=>({id:i+1}));
+ await f.load(true,false,50,true);
+ assert.equal(observed,50);assert.equal(f.state.entries.length,50);assert.equal(f.renders.length,1);assert.deepEqual(f.placeholders,[]);
 });

@@ -41,6 +41,13 @@ const numericId = () =>
     Number(BigInt("0x" + crypto.randomUUID().replaceAll("-", "").slice(0, 12))),
   );
 const equal = (a, b) => b64(encode(a)) === b64(encode(b));
+async function creationIdentity(actor, household, requestId, payload) {
+  if(typeof requestId!=='string'||!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(requestId))throw new InputError(400,'InvalidRequestId');
+  const value={version:1,accountId:actor.accountId,household,requestId:requestId.toLowerCase()};
+  const digest=new Uint8Array(await crypto.subtle.digest('SHA-256',encode(value)));
+  const id=String((BigInt('0x'+[...digest.slice(0,7)].map(byte=>byte.toString(16).padStart(2,'0')).join(''))&((1n<<53n)-1n))||1n);
+  return {id,creation:{...value,payloadHash:b64(await crypto.subtle.digest('SHA-256',encode(payload)))}};
+}
 export class EncryptedDiaryClient {
   constructor({ transport, profile, anchor, minimumGeneration=1,documentFormat=1,cache=null,minimumSequence=0,lazy=false }) {
     this.transport = transport;
@@ -53,8 +60,10 @@ export class EncryptedDiaryClient {
     this.generation = 0;
     this.keys = new Map();this.recordKeys=new Map();
     this.records = new Map();
+    this.albumCache = null;
     this.pending = new Map();
     this.closed = true;
+    this.switching = false;
     this.pendingDeletes = new Map();
     this.preparedBindings = new WeakMap();
     this.lazy=lazy;this.documentLoads=new WeakMap();this.background=null;
@@ -64,6 +73,7 @@ export class EncryptedDiaryClient {
     const generation = ++this.generation;
     this.closed = true;
     this.records.clear();
+    this.albumCache = null;
     this.keys.clear();this.recordKeys.clear();
     this.sequence = undefined;
     this.revisionFloor.clear();
@@ -90,6 +100,7 @@ export class EncryptedDiaryClient {
     this.closed = true;
     this.keys.clear();this.recordKeys.clear();
     this.records.clear();
+    this.albumCache = null;
     this.revisionFloor.clear();
     this.pending.clear();
     this.pendingDeletes.clear();
@@ -98,10 +109,18 @@ export class EncryptedDiaryClient {
     this.documentLoads=new WeakMap();this.onProgress({phase:'locked',completed:0,total:0});
   }
   async check() {
-    if (this.closed || !(await this.transport.valid())) {
+    const generation=this.generation;
+    this.assertOpen(generation);
+    const valid=await this.transport.valid();
+    this.assertOpen(generation);
+    if (!valid) {
       this.lock();
       throw Object.assign(new Error("SessionExpired"), { status: 401 });
     }
+  }
+  assertOpen(generation=this.generation) {
+    if(this.closed)throw Object.assign(new Error('SessionExpired'),{status:401});
+    if(this.switching||generation!==this.generation)throw new Error('SessionChanged');
   }
   get actor() {
     return this.profile.actor;
@@ -109,14 +128,70 @@ export class EncryptedDiaryClient {
   get household() {
     return this.profile.household;
   }
-  sync() {
+  sync(options={}) {
     if(this.syncing?.generation===this.generation)return this.syncing.promise;
-    const pending={generation:this.generation,promise:this.syncSnapshot()};this.syncing=pending;
+    const pending={generation:this.generation,promise:this.syncSnapshot(options)};this.syncing=pending;
     void pending.promise.finally(()=>{if(this.syncing===pending)this.syncing=null;}).catch(()=>{});
     return pending.promise;
   }
-  async syncSnapshot() {
-    await this.check();
+  async indexRecord(row,generation=this.generation) {
+    this.assertOpen(generation);
+    if (!canRead(this.actor, row)) throw new Error("AccessDenied");
+    if (row.revision < (this.revisionFloor.get(row.id) || 0))
+      throw new Error("RecordRollbackDetected");
+    const previous = this.records.get(row.id);
+    if (
+      previous &&
+      previous.row.revision === row.revision &&
+      !equal(previous.row, row)
+    )
+      throw new Error("RecordEquivocation");
+    if (previous && equal(previous.row, row)) {
+      return previous;
+    }
+    await verifyRecord(row, this.directory);
+    const binding = bindingOf(row);
+    const key = Object.keys(row.keyBox).length
+      ? (row.keyBox[this.actor.credentialId]?await openRecipientKey(
+          row.keyBox,
+          { ...binding, kind: "record-key" },
+          this.actor.credentialId,
+          this.privateKeys.rsa,
+        ):this.recordKeys.get(`${row.id}:${row.revision}`))
+      : this.keys.get(row.scope);
+    if (!key) throw new Error("GrantDenied");
+    if(this.lazy&&row.state!=='preferences') {
+      const summary=await open(key,row.summary,{...binding,kind:'summary'});
+      if(row.state!=='investment'&&(typeof summary.entryDate!=='string'||typeof summary.title!=='string'||!Array.isArray(summary.tags)||summary.tags.some(tag=>typeof tag!=='string')||summary.photoCount!==row.photoIds.length))throw new Error('InvalidSummary');
+      this.assertOpen(generation);return {row,summary,key};
+    }
+    const value = await open(key, row.envelope, {
+      ...binding,
+      kind: "document",
+    });
+    if (
+      value.version !== 1 ||
+      !value.entry ||
+      typeof value.entry !== "object"
+    )
+      throw new Error("UnsupportedPayload");
+    if (
+      !["preferences","investment"].includes(row.state) &&
+      (typeof value.entry.title !== "string" ||
+        typeof value.entry.content !== "string" ||
+        !Array.isArray(value.entry.photos) ||
+        !equal(
+          value.entry.photos.map((p) => p.id),
+          row.photoIds,
+        ))
+    )
+      throw new Error("InvalidPayload");
+    if(row.state==='investment')investmentRecords(value.entry.records);
+    this.assertOpen(generation);return { row, entry: value.entry };
+  }
+
+  async syncSnapshot({sessionChecked=false}={}) {
+    if(sessionChecked)this.assertOpen();else await this.check();
     const generation = this.generation;
     let cached=null, checkpoint=0;
     const checkpointKey=[this.actor.accountId,this.actor.credentialId,this.household].join('/');
@@ -127,7 +202,18 @@ export class EncryptedDiaryClient {
       if (!Number.isSafeInteger(checkpoint) || checkpoint < 0) throw new Error('InvalidCache');
     }
     const since=this.sequence??cached?.sequence??-1;
-    let snapshot=await this.transport.snapshot(this.household,since);
+    // Verify/decrypt the small summaries while the remaining pages are in
+    // flight. Nothing becomes visible until the complete fixed snapshot and
+    // live session have passed the same validation as the non-pipelined path.
+    const prefetched=new Map();
+    const onPage=since<0?async(rows,{total=0}={})=>{
+      let cursor=0;
+      await Promise.all(Array.from({length:Math.min(2,rows.length)},async()=>{
+        while(cursor<rows.length){const row=rows[cursor++],old=prefetched.get(row.id);prefetched.set(row.id,old&&equal(old.row,row)?old:await this.indexRecord(row,generation));}
+      }));
+      if(this.lazy)this.onProgress({phase:'index',completed:prefetched.size,total});
+    }:undefined;
+    let snapshot=await this.transport.snapshot(this.household,since,{onPage});
     if(generation!==this.generation||this.closed)throw new Error("SessionChanged");
     validateSnapshot(snapshot);
     if(snapshot.sequence<Math.max(this.minimumSequence,checkpoint)||snapshot.sequence<since)throw new Error('RollbackDetected');
@@ -166,61 +252,9 @@ export class EncryptedDiaryClient {
       Array.from({ length: 8 }, async () => {
         while (cursor < snapshot.records.length) {
           const row = snapshot.records[cursor++];
-          if (!canRead(this.actor, row)) throw new Error("AccessDenied");
-          if (row.revision < (this.revisionFloor.get(row.id) || 0))
-            throw new Error("RecordRollbackDetected");
-          const previous = this.records.get(row.id);
-          if (
-            previous &&
-            previous.row.revision === row.revision &&
-            !equal(previous.row, row)
-          )
-            throw new Error("RecordEquivocation");
-          if (previous && equal(previous.row, row)) {
-            records.set(row.id, previous);
-            continue;
-          }
-          await verifyRecord(row, this.directory);
-          const binding = bindingOf(row);
-          const key = Object.keys(row.keyBox).length
-            ? (row.keyBox[this.actor.credentialId]?await openRecipientKey(
-                row.keyBox,
-                { ...binding, kind: "record-key" },
-                this.actor.credentialId,
-                this.privateKeys.rsa,
-              ):this.recordKeys.get(`${row.id}:${row.revision}`))
-            : this.keys.get(row.scope);
-          if (!key) throw new Error("GrantDenied");
-          if(this.lazy&&row.state!=='preferences') {
-            const summary=await open(key,row.summary,{...binding,kind:'summary'});
-            if(row.state!=='investment'&&(typeof summary.entryDate!=='string'||typeof summary.title!=='string'||!Array.isArray(summary.tags)||summary.tags.some(tag=>typeof tag!=='string')||summary.photoCount!==row.photoIds.length))throw new Error('InvalidSummary');
-            records.set(row.id,{row,summary,key});
-            indexed++;if(indexed%25===0)this.onProgress({phase:'index',completed:indexed,total:snapshot.records.length});
-            continue;
-          }
-          const value = await open(key, row.envelope, {
-            ...binding,
-            kind: "document",
-          });
-          if (
-            value.version !== 1 ||
-            !value.entry ||
-            typeof value.entry !== "object"
-          )
-            throw new Error("UnsupportedPayload");
-          if (
-            !["preferences","investment"].includes(row.state) &&
-            (typeof value.entry.title !== "string" ||
-              typeof value.entry.content !== "string" ||
-              !Array.isArray(value.entry.photos) ||
-              !equal(
-                value.entry.photos.map((p) => p.id),
-                row.photoIds,
-              ))
-          )
-            throw new Error("InvalidPayload");
-          if(row.state==='investment')investmentRecords(value.entry.records);
-          records.set(row.id, { row, entry: value.entry });
+          const prepared=prefetched.get(row.id);
+          records.set(row.id,prepared&&equal(prepared.row,row)?prepared:await this.indexRecord(row,generation));
+          indexed++;if(this.lazy&&indexed%25===0)this.onProgress({phase:'index',completed:indexed,total:snapshot.records.length});
         }
       }),
     );
@@ -236,6 +270,7 @@ export class EncryptedDiaryClient {
     for (const [id, current] of records)
       this.revisionFloor.set(id, current.row.revision);
     this.records = records;
+    this.albumCache = null;
     this.sequence = snapshot.sequence;
     if(this.lazy)this.progress();
     if(generation!==this.generation||this.closed)throw new Error("SessionChanged");
@@ -318,8 +353,10 @@ export class EncryptedDiaryClient {
       draftRevision,
       importMeta,
     } = {},
+    {sessionChecked=false} = {},
   ) {
-    await this.check();
+    if(sessionChecked)this.assertOpen();else await this.check();
+    const generation=this.generation;
     const revision = importMeta?.revision || (current?.revision || 0) + 1,
       author =
         importMeta?.author ||
@@ -432,14 +469,16 @@ export class EncryptedDiaryClient {
       ...(draftId ? { draftId, draftRevision } : {}),
     };
     this.preparedBindings.set(proposal, binding);
+    this.assertOpen(generation);
     return proposal;
   }
   async commit(
     entry,
     options = {},
-    { refresh = true, prepared = null, onPrepared = () => {} } = {},
+    { refresh = true, prepared = null, onPrepared = () => {}, sessionChecked = false } = {},
   ) {
-    await this.check();
+    if(sessionChecked)this.assertOpen();else await this.check();
+    const generation = this.generation;
     const intentEntry = { ...entry };
     delete intentEntry.lastPublishedAt;
     delete intentEntry.updatedAt;
@@ -453,10 +492,10 @@ export class EncryptedDiaryClient {
     const proposal =
       prepared ||
       this.pending.get(intent) ||
-      (await this.prepare(entry, options));
+      (await this.prepare(entry, options, {sessionChecked:true}));
+    this.assertOpen(generation);
     this.pending.set(intent, proposal);
     onPrepared(proposal);
-    const generation = this.generation;
     const result = await this.transport.mutation(
       proposal,
       options.operation || "save",
@@ -472,8 +511,9 @@ export class EncryptedDiaryClient {
     )
       throw new Error("InvalidReceipt");
     this.pending.delete(intent);
-    if (refresh) {await this.sync();if(this.records.has(result.id))await this.hydrate(result.id);}
-    else
+    if (refresh) {await this.sync({sessionChecked:true});if(this.records.has(result.id))await this.hydrate(result.id);}
+    else {
+      this.albumCache = null;
       this.records.set(proposal.id, {
         row: {
           ...this.preparedBindings.get(proposal),
@@ -484,13 +524,15 @@ export class EncryptedDiaryClient {
         },
         entry: structuredClone(entry),
       });
+    }
     return result;
   }
-  async commitAction(key, entry, options) {
+  async commitAction(key, entry, options, {sessionChecked=false}={}) {
     const saved = this.actions.get(key);
     entry = saved?.entry || entry;
     options = saved?.options || options;
     const result = await this.commit(entry, options, {
+      sessionChecked,
       prepared: saved?.proposal,
       onPrepared: (proposal) =>
         this.actions.set(key, { entry, options, proposal }),
@@ -507,7 +549,7 @@ export class EncryptedDiaryClient {
       id: Number(record.row.id),
       revision: record.row.revision,
       status: record.row.state === "draft" ? "draft" : "published",
-      deletedAt: record.row.state === "trash" ? "retained" : null,
+      deletedAt: record.row.state === "trash" ? record.entry?.deletedAt || "retained" : null,
       draftOfEntryId: record.row.sourceId ? Number(record.row.sourceId) : null,
       draftOfRevision: record.row.sourceRevision,
       isFavorite: this.favoriteIds().includes(String(id)),
@@ -558,6 +600,13 @@ export class EncryptedDiaryClient {
       draft: state === "draft",
       allowEmptyContent: (body.pendingPhotoIds || []).length > 0,
     });
+    const creation = !id && body.requestId ? await creationIdentity(this.actor,this.household,body.requestId,
+      {state,...valid,pendingPhotoIds:body.pendingPhotoIds||[],photoUploadSessionId:body.photoUploadSessionId||null}) : null;
+    if(creation&&this.records.has(creation.id)){
+      await this.hydrate(creation.id);const existing=this.entry(creation.id);
+      if(!existing.creation||!equal(existing.creation,creation.creation))throw new InputError(409,'IdempotencyConflict');
+      return {entry:existing};
+    }
     const contentFormat = valid.contentFormat
       ? JSON.parse(valid.contentFormat)
       : null;
@@ -570,6 +619,7 @@ export class EncryptedDiaryClient {
     const entry = {
       ...current?.entry,
       ...valid,
+      ...(creation?{creation:creation.creation}:{}),
       contentFormat,
       photos,
       authorName:
@@ -587,7 +637,7 @@ export class EncryptedDiaryClient {
           ? timestamp
           : current?.entry.lastPublishedAt || null,
     };
-    let options = { current: current?.row || null, state };
+    let options = { current: current?.row || null, state, ...(creation?{id:creation.id,requestId:creation.creation.requestId}:{}) };
     if (current?.row.state === "published" && state === "draft") {
       const draft = [...this.records.values()].find(
         (r) => r.row.sourceId === current.row.id && r.row.state === "draft",
@@ -623,7 +673,7 @@ export class EncryptedDiaryClient {
         operation: "publish-new",
       };
     }
-    const result = await this.commitAction(actionKey, entry, options);
+    const result = await this.commitAction(actionKey, entry, options, {sessionChecked:true});
     return { entry: this.entry(result.id) };
   }
   async transition(id, operation, revision) {
@@ -667,7 +717,8 @@ export class EncryptedDiaryClient {
     const entry = {
       ...record.entry,
       updatedAt: timestamp,
-      ...(operation === "restore" ? { lastPublishedAt: timestamp } : {}),
+      ...(operation === "trash" ? { deletedAt: timestamp, deletedById: this.actor.accountId, deletedByName: this.profile.displayName } : {}),
+      ...(operation === "restore" ? { lastPublishedAt: timestamp, deletedAt: null, deletedById: null, deletedByName: null } : {}),
     };
     return this.commitAction(actionKey, entry, {
       current: record.row,

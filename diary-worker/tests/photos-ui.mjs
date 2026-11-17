@@ -53,10 +53,11 @@ assert.match(script, /queueBackgroundPhotoUpload\(photo\)/,
 assert.match(photoUpload, /\/api\/photo-upload-sessions/);
 assert.match(script, /await measure\("uploadWait", \(\) => ensurePhotosUploaded\(pendingPhotos\)\)/,
   "posting must wait for any remaining staged uploads");
-assert.match(script, /commitStagedPhotos\(saved\.entry\.id, pendingPhotos\)/,
+assert.match(script, /commitStagedPhotos\(pending\.entry\.id, pending\.photos\)/,
   "posting must promote staged photos without uploading them again");
-assert.match(script, /await measure\("prepare", \(\) => waitForPhotoPreparation\(\)\);\s*const id = Number\(elements\.entryId\.value/s,
-  "entry serialization must wait for the active photo preparation task");
+const persistence=script.slice(script.indexOf('async function persistEditor('),script.indexOf('async function completePendingPhotoSave('));
+assert.ok(persistence.indexOf('await measure("prepare"')>=0&&persistence.indexOf('await measure("prepare"')<persistence.indexOf('const id = Number(elements.entryId.value'),
+  'entry serialization must follow photo preparation and any interrupted-save recovery');
 assert.match(photoUpload, /PHOTO_UPLOAD_RETRY_DELAYS_MS = Object\.freeze\(\[1000, 3000, 7000\]\)/);
 assert.match(photoUpload, /status === 408 \|\| status === 429 \|\| status >= 500/);
 assert.match(photoProcessing, /String\(file\.type\)\.startsWith\("image\/"\)/);

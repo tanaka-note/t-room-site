@@ -248,7 +248,10 @@ export default {
           // Legacy search/tag URLs can contain plaintext. Do not copy them to
           // the dedicated origin or forward POST bodies across that boundary.
           const path=url.pathname.startsWith('/diary/tag/')?'/diary/':url.pathname;
-          return secureResponse(Response.redirect(new URL(path,diaryEncryptionOrigin(env)),308));
+          const destination=new URL(path,diaryEncryptionOrigin(env));
+          const migrationYear=url.searchParams.get('takeout-migration');
+          if(path==='/diary/'&&['2023','2024','2025'].includes(migrationYear))destination.searchParams.set('takeout-migration',migrationYear);
+          return secureResponse(Response.redirect(destination,308));
         }
       }
       if (request.method !== "GET" && request.method !== "HEAD") {
@@ -442,7 +445,7 @@ async function handleApi(request, env, url, path, context, getSession, timing) {
     }catch(error){
       if(error instanceof HttpError)throw error;
       if(String(error.message).includes('DiaryWritesPaused'))throw new HttpError(423,'日記の書き込みを一時停止しています。');
-      const guidance={DiaryMaintenanceAuthorizationInvalid:'暗号化移行の継続確認が切れました。保存済みの内容は保持されています。パスキーでログインすると再開します。',RecentAuthenticationRequired:'暗号化移行を再開するため、パスキーでログインしてください。保存済みの内容は保持されています。',MigrationRetryConflict:'保存済みの移行内容と一致しません。データを保持したまま停止しました。管理者へ確認してください。',EncryptionPreparationRequired:'日記の鍵を準備しています。管理者の次のパスキーログイン後に、もう一度ログインしてください。'};
+      const guidance={DiaryCapacityExceeded:'日記の読み込み上限に達するため保存を中止しました。編集内容は保持しています。不要な下書き・ゴミ箱を整理してから再試行してください。',DiaryMaintenanceAuthorizationInvalid:'暗号化移行の継続確認が切れました。保存済みの内容は保持されています。パスキーでログインすると再開します。',RecentAuthenticationRequired:'暗号化移行を再開するため、パスキーでログインしてください。保存済みの内容は保持されています。',MigrationRetryConflict:'保存済みの移行内容と一致しません。データを保持したまま停止しました。管理者へ確認してください。',EncryptionPreparationRequired:'日記の鍵を準備しています。管理者の次のパスキーログイン後に、もう一度ログインしてください。'};
       if(Object.hasOwn(guidance,error.message))throw new HttpError(error.status||409,guidance[error.message]);
       if([400,401,403,404,409,413,423,428,503].includes(error.status))throw new HttpError(error.status,'暗号化された日記を処理できません。ログイン・鍵の準備状態・書き込み停止状態を確認してください。');
       throw error;

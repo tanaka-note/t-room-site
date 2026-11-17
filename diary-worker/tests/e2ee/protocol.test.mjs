@@ -213,7 +213,7 @@ test("personal retention is isolated and global-owner removal preserves the pers
     const e = (await user.saveEntry(entry())).entry;
     await user.transition(e.id, "trash", e.revision);
     await owner.sync();
-    assert.equal(owner.entry(e.id).deletedAt, "retained");
+    assert.ok(Number.isFinite(Date.parse(owner.entry(e.id).deletedAt)));
     await other.sync();
     assert.equal(other.records.has(String(e.id)), false);
     await owner.transition(e.id, "purge");
@@ -234,7 +234,7 @@ test("independent household trash is available through the existing global-owner
     const e = (await owner.saveEntry(entry())).entry;
     await local.transition(e.id, "trash", e.revision);
     await owner.sync();
-    assert.equal(owner.entry(e.id).deletedAt, "retained");
+    assert.ok(Number.isFinite(Date.parse(owner.entry(e.id).deletedAt)));
     await owner.transition(e.id, "purge");
     await local.sync();
     assert.equal(local.records.size, 0);

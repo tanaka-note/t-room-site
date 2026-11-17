@@ -43,14 +43,14 @@ export function entryMatches(entry, day) {
 
 export class PhotoMigration {
   constructor({ manifest, journal, api, readFile, saveJournal, destination, onProgress = () => {}, shouldStop = () => false,
-    concurrency = 3, parallelBytes = 16 * 1024 ** 2, canParallel = () => true }) {
+    concurrency = 3, parallelBytes = 16 * 1024 ** 2, canParallel = () => true, photoCommitChangesRevision = false }) {
     this.manifest = validateManifest(manifest);
     this.journal = journal || { version: 1, manifestId: manifest.id, destination, days: {} };
     if (this.journal.version !== 1 || this.journal.manifestId !== manifest.id
       || JSON.stringify(this.journal.destination) !== JSON.stringify(destination)) throw new Error('進捗のデータまたは保存先が一致しません。');
     if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 3
       || !Number.isSafeInteger(parallelBytes) || parallelBytes < 1 || parallelBytes > 16 * 1024 ** 2) throw new Error('並列送信の指定が不正です。');
-    Object.assign(this, { api, readFile, saveJournal, destination, onProgress, shouldStop, concurrency, parallelBytes, canParallel });
+    Object.assign(this, { api, readFile, saveJournal, destination, onProgress, shouldStop, concurrency, parallelBytes, canParallel, photoCommitChangesRevision });
     this.checkpointTail = Promise.resolve();
   }
 
@@ -63,7 +63,7 @@ export class PhotoMigration {
   async verifySession() {
     const session = await this.api('/session');
     if (!session.authenticated || !session.canManageEntries || session.activeHouseholdId !== this.destination.householdId
-      || session.loginId !== this.destination.loginId || session.role !== this.destination.role) throw new Error('ログイン先が変更されています。同じアカウントでログインし直してください。');
+      || (session.loginId || null) !== (this.destination.loginId || null) || session.role !== this.destination.role) throw new Error('ログイン先が変更されています。同じアカウントでログインし直してください。');
   }
 
   async run({ through = `${this.manifest.year}-12-31`, maxDays = Infinity, verifyOnly = false } = {}) {
@@ -114,6 +114,14 @@ export class PhotoMigration {
         await this.checkpoint();
       } else {
         entry = (await this.api(`/entries/${record.entryId}`)).entry;
+      }
+      if(this.photoCommitChangesRevision && record.status==='committing' && entry.status==='draft'
+        && entry.revision===record.draftRevision+1 && entry.content==='' && !entry.deletedAt && !entry.draftOfEntryId
+        && entry.entryDate===day.date && entry.title===day.title && !entry.tags?.length && entry.weather==null
+        && entry.photos?.length===day.photos.length && day.photos.every(photo=>entry.photos.some(saved=>saved.id===photo.id))) {
+        // An encrypted attachment is itself a signed entry revision. Recover
+        // its lost receipt without accepting an unrelated concurrent edit.
+        record.draftRevision=entry.revision;await this.checkpoint();
       }
       if (entry.entryDate !== day.date || entry.title !== day.title) throw new Error(`${day.date}: 日記が変更されています。`);
       if (entry.status === 'published') {
@@ -206,9 +214,13 @@ export class PhotoMigration {
           || entry.entryDate !== day.date || entry.title !== day.title || entry.content !== '') throw new Error(`${day.date}: 下書きが変更されています。`);
         record.status = 'committing';
         await this.checkpoint();
-        await this.api(`/photo-upload-sessions/${record.uploadSessionId}/commit`, {
+        const committed=await this.api(`/photo-upload-sessions/${record.uploadSessionId}/commit`, {
           method: 'POST', body: { entryId: entry.id, photoIds: record.stagePhotoIds }
         });
+        if(this.photoCommitChangesRevision){
+          if(!Number.isSafeInteger(committed.entryRevision)||![record.draftRevision,record.draftRevision+1].includes(committed.entryRevision))throw new Error(`${day.date}: 写真反映の更新番号が一致しません。`);
+          record.draftRevision=committed.entryRevision;await this.checkpoint();
+        }
       }
       entry = (await this.api(`/entries/${entry.id}`)).entry;
       if (entry.status !== 'draft' || entry.deletedAt || entry.revision !== record.draftRevision

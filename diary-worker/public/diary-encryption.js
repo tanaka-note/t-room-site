@@ -19,6 +19,7 @@ async function createEncryptedDiary(session,authentication) {
   const nativeFetch=window.fetch.bind(window);
   const nativeApi=async(path,init={})=>{
     const headers=new Headers(init.headers);if(init.method&&init.method!=='GET')headers.set('X-Diary-Request','1');
+    if(path.startsWith('/encryption/snapshot?'))headers.set('Accept','application/vnd.tlain.diary-snapshot+json');
     let body=init.body;if(body&&typeof body!=='string'&&!(body instanceof FormData)){headers.set('Content-Type','application/json');body=JSON.stringify(body);}
     const response=await nativeFetch(`/diary/api${path}`,{...init,headers,body,credentials:'same-origin',cache:'no-store'});
     const result=await response.json();if(!response.ok)throw Object.assign(new Error(result.error||'暗号化された日記を読み込めません。'),{status:response.status});return result;
@@ -40,9 +41,9 @@ async function createEncryptedDiary(session,authentication) {
   let client,navigation,api,media,cache,deadline=session.expiresAt||null;
   let liveSession=session,persistDevice=async()=>{};
   const transport={
-    valid:async()=>{try{const result=await nativeApi('/session');deadline=result.expiresAt||deadline;const valid=result.authenticated&&result.encryption?.enabled&&result.encryption.protocol===DIARY_READER_PROTOCOL&&result.encryption.accountId===expectedAccount&&result.encryption.webAuthnCredentialId===expectedCredential&&result.activeHouseholdId===client.household&&result.encryption.generation===initial.rollout.generation&&(!liveSession.keySession||JSON.stringify(liveSession.keySession)===JSON.stringify(result.keySession));if(valid){liveSession=result;await persistDevice();}return valid;}catch(error){if([401,403].includes(error.status))return false;throw error;}},
+    valid:async()=>{const generation=client.generation;try{const result=await nativeApi('/session');const valid=generation===client.generation&&!client.switching&&result.authenticated&&result.encryption?.enabled&&result.encryption.protocol===DIARY_READER_PROTOCOL&&result.encryption.accountId===expectedAccount&&result.encryption.webAuthnCredentialId===expectedCredential&&result.activeHouseholdId===client.household&&result.encryption.generation===initial.rollout.generation&&(!liveSession.keySession||JSON.stringify(liveSession.keySession)===JSON.stringify(result.keySession));if(valid){deadline=result.expiresAt||deadline;liveSession=result;await persistDevice();}return valid;}catch(error){if([401,403].includes(error.status))return false;throw error;}},
     timestamp:async()=>(await request('/time')).timestamp,
-    snapshot:(household,since)=>readSnapshotPages(options=>request(`/snapshot?${new URLSearchParams(Object.entries(options).filter(([,value])=>value!==null))}`),household,since,{fetchHead:h=>request(`/head?household=${encodeURIComponent(h)}`)}),
+    snapshot:(household,since,{onPage}={})=>readSnapshotPages(options=>request(`/snapshot?${new URLSearchParams(Object.entries(options).filter(([,value])=>value!==null))}`),household,since,{onPage,fetchHead:h=>request(`/head?household=${encodeURIComponent(h)}`)}),
     mutation:(proposal,operation)=>request('/mutation',{method:'POST',body:{proposal,operation}}),
     remove:proposal=>request('/remove',{method:'POST',body:proposal})
   };
@@ -61,7 +62,7 @@ async function createEncryptedDiary(session,authentication) {
   api=createEncryptedDiaryApi(client,{session,nativeApi,media,prepareNavigation:()=>navigation.prepareTags(),onHousehold:async household=>{
     const reply=await request('/profile');
     if(reply.profile.actor.accountId!==expectedAccount||reply.profile.webAuthnCredentialId!==expectedCredential||reply.profile.household!==household||reply.profile.directory.value.generation!==client.directory.generation){client.lock();throw new Error('パスキーでログインし直してください。');}
-    navigation.close();if(/^\/diary\/tag\//.test(location.pathname))window.history.replaceState({},'','/diary/');client.generation++;client.records.clear();client.revisionFloor.clear();client.sequence=undefined;client.profile={...client.profile,household};client.background=null;navigation=await createPrivateNavigation(client);
+    navigation.close();if(/^\/diary\/tag\//.test(location.pathname))window.history.replaceState({},'','/diary/');client.records.clear();client.albumCache=null;client.revisionFloor.clear();client.sequence=undefined;client.profile={...client.profile,household};client.background=null;navigation=await createPrivateNavigation(client);
   }});
   await rememberTrustFloor({...pin,minimumGeneration:client.directory.generation},localStorage);
   let lastDeviceSave=0;
@@ -73,30 +74,39 @@ async function createEncryptedDiary(session,authentication) {
   const signals=new AbortController();let lastActivity=performance.now();
   for(const type of ['pointerdown','keydown','touchstart','wheel'])document.addEventListener(type,event=>{if(event.isTrusted)lastActivity=performance.now();},{passive:true,signal:signals.signal});
   const channel=typeof BroadcastChannel==='function'?new BroadcastChannel('tlain-diary-session-change'):null;
+  const sessionIdentity=()=>JSON.stringify([liveSession.keySession||null,expectedAccount,expectedCredential,client.household,initial.rollout.generation]);
   let closed=false,external=false;
-  const expire=()=>{if(closed)return;external=true;client.lock();void clearDevice(liveSession).catch(()=>{});window.dispatchEvent(new Event('troom-session-expired'));};
+  const expire=()=>{if(closed)return;external=true;void lock();window.dispatchEvent(new Event('troom-session-expired'));};
   client.onBackgroundError=()=>expire();
-  if(channel)channel.onmessage=expire;
-  const timer=setInterval(()=>{if(deadline&&Date.now()/1000>=deadline)return expire();if(client.sequence!==undefined&&document.visibilityState==='visible'&&performance.now()-lastActivity<60000)void client.sync().then(()=>client.startBackground()).catch(error=>{if([401,403].includes(error.status)||/Session|Signature|Rollback|GrantDenied|UnknownWriter/.test(error.message))expire();});},30000);
+  if(channel)channel.onmessage=event=>{
+    if(event.data?.type!=='changed')return;
+    // Opening another view of the same live session is not a logout. Older
+    // readers and genuine session/household changes still invalidate this view.
+    if(event.data.reason==='open'&&event.data.session===sessionIdentity())return;
+    if(event.data.reason==='closed'&&event.data.session&&event.data.session!==sessionIdentity())return;
+    expire();
+  };
+  const timer=setInterval(()=>{if(deadline&&Date.now()/1000>=deadline)return expire();if(!client.switching&&client.sequence!==undefined&&document.visibilityState==='visible'&&performance.now()-lastActivity<60000){const before=client.sequence,generation=client.generation;void client.sync().then(()=>{if(generation!==client.generation)return;client.startBackground();if(!client.closed&&client.sequence!==before)window.dispatchEvent(new Event('troom-diary-data-changed'));}).catch(error=>{if(generation===client.generation&&!client.switching&&([401,403].includes(error.status)||/Session|Signature|Rollback|GrantDenied|UnknownWriter/.test(error.message)))expire();});}},30000);
   window.addEventListener('troom-session-renewed',event=>{deadline=event.detail.expiresAt;},{signal:signals.signal});
-  channel?.postMessage({type:'changed'});
+  channel?.postMessage({type:'changed',reason:'open',session:sessionIdentity()});
   let cleanup;
-  const lock=()=>{
+  const lock=({logout=false}={})=>{
     if(cleanup)return cleanup;
-    closed=true;clearInterval(timer);signals.abort();if(!external)channel?.postMessage({type:'changed'});channel?.close();
+    closed=true;clearInterval(timer);signals.abort();if(!external)channel?.postMessage({type:'changed',reason:logout?'logout':'closed',session:sessionIdentity()});channel?.close();
     client.lock();media.close();navigation.close();cache?.close();
-    cleanup=clearDevice(liveSession,{all:!external}).catch(()=>{});return cleanup;
+    cleanup=clearDevice(liveSession,{all:logout}).catch(()=>{});return cleanup;
   };
   return {
     api:async(path,init)=>{
       try{return Response.json(await api(path,init));}
       catch(error){
         if(error.name==='AbortError')throw error;
+        if(path!=='/logout'&&(error.status===401||client.closed))expire();
         // The authorized shell is already visible. Preserve HTTP failures so
         // the UI can close it immediately if the initial sync loses its session.
         const status=Number.isInteger(error.status)&&error.status>=400&&error.status<=599?error.status:500;
         return Response.json({error:status===500?'日記を準備できませんでした。もう一度お試しください。':error.message},{status});
-      }finally{if(path==='/logout')await lock();}
+      }finally{if(path==='/logout')await lock({logout:true});}
     },fetch:media.fetch,
     get storage(){return navigation.storage;},get history(){return navigation.history;},tagRoute:tag=>navigation.tagRoute(tag),tagValue:segment=>navigation.tagValue(segment),flush:()=>navigation.flush(),
     lock

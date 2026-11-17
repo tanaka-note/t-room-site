@@ -14,8 +14,8 @@ export function createEncryptedMediaClient(client,request,nativeFetch) {
     if(method==='POST'&&route.endsWith('/commit')) {
       const session=route.split('/')[2],photos=[];
       for(const id of body.photoIds)photos.push(await metadata(session,id));
-      await client.attachPhotos(body.entryId,photos);
-      await request(route,{method,body});return {photos};
+      const result=await client.attachPhotos(body.entryId,photos);
+      await request(route,{method,body});return {photos,entryRevision:result.revision};
     }
     return request(route,{method,body:method==='GET'?undefined:body});
   };

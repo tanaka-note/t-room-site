@@ -78,3 +78,20 @@ test('old diary navigation redirects to the dedicated origin without copying pla
     assert.equal(response.status,308);assert.equal(response.headers.get('Location'),f.env.DIARY_ENCRYPTION_ORIGIN+'/diary/');
   }
 });
+
+test('opt-in compressed snapshots retain identical ciphertext, permission filters and sequence',async()=>{
+ const path='/encryption/snapshot?household=tanaka-household&since=-1&limit=50';
+ const plain=await call(path),compressed=await call(path,{headers:{Accept:'application/vnd.tlain.diary-snapshot+json'}});
+ assert.equal(plain.status,200);assert.equal(compressed.status,200);assert.equal(compressed.headers.get('Content-Encoding'),'gzip');assert.equal(compressed.headers.get('Vary'),'Accept');
+ const wire=new Uint8Array(await compressed.arrayBuffer()),decoded=await new Response(new Blob([wire]).stream().pipeThrough(new DecompressionStream('gzip'))).text(),original=await plain.text();
+ assert.deepEqual(JSON.parse(decoded),JSON.parse(original));assert.ok(wire.length<Buffer.byteLength(original));assert.equal(compressed.headers.get('Cache-Control'),'no-store');
+});
+
+test('legacy Takeout bookmarks preserve only the public supported migration year on redirect',async()=>{
+ for(const year of ['2023','2024','2025','2026']){
+  const response=await f.worker.fetch(new Request(`https://tanaka-note.com/diary/?takeout-migration=${year}&q=SYNTHETIC_PRIVATE_QUERY`),f.env,f.ctx);
+  assert.equal(response.status,308);const target=new URL(response.headers.get('Location'));
+  assert.equal(target.origin,f.env.DIARY_ENCRYPTION_ORIGIN);assert.equal(target.searchParams.has('q'),false);
+  assert.equal(target.searchParams.get('takeout-migration'),year==='2026'?null:year);
+ }
+});
