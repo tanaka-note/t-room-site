@@ -10,12 +10,12 @@ import {publicTrustPackage} from '../../e2ee/setup.mjs';
 import {EncryptedDiaryClient} from '../../e2ee/client.mjs';
 import {readSnapshotPages} from '../../e2ee/snapshot.mjs';
 import {entry} from './fixture.mjs';
-import {verifyCacheBudget,inspectLogoutStorage} from './cache-browser-fixture.mjs';
+import {verifyCacheBudget,inspectLogoutStorage,waitForPreparedIndex} from './cache-browser-fixture.mjs';
 
 const f=await systemFixture(),user=f.users[process.argv.includes('--independent-editor')?'chiharu-admin':'main-user'],root=resolve(fileURLToPath(new URL('../../public/',import.meta.url)));
 const wire=[],errors=[];let origin,authentications=0;
 const trust=await publicTrustPackage(f.configuration);
-const progressive=process.argv.includes('--progressive');let bodyIV,holdSnapshot=progressive,releaseSnapshot;
+const progressive=process.argv.includes('--progressive');let bodyIV,summaryIV,holdSnapshot=progressive,releaseSnapshot;
 const photoSelection=process.argv.includes('--photo-selection');
 const workerd=process.argv.includes('--workerd')?await(await import('./workerd-response.mjs')).workerdResponseTransport():null;
 let compressedSnapshots=0;
@@ -31,7 +31,7 @@ if(progressive) {
   const initial=await request('/profile'),writer=new EncryptedDiaryClient({profile:initial.profile,anchor:trust.anchor,documentFormat:2,transport:{valid:async()=>true,snapshot:(h,since)=>readSnapshotPages(options=>request('/snapshot?'+new URLSearchParams(Object.entries(options).filter(([,v])=>v!==null))),h,since),mutation:(proposal,operation)=>request('/mutation',{proposal,operation})}});
   await writer.unlock(new Uint8Array(user.prf));
   for(let i=0;i<progressiveEntries;i++)await writer.commit(entry({entryDate:new Date(Date.now()-(progressiveEntries-1-i)*86400000).toISOString().slice(0,10),title:`Synthetic seed ${i}`,content:i===0?'OLDEST_BROWSER_CANARY':'Synthetic body '+i,photos:[]}),{id:String(i+1)},{refresh:false});
-  bodyIV=writer.records.get('1').row.envelope.iv;writer.lock();
+  bodyIV=writer.records.get('1').row.envelope.iv;summaryIV=writer.records.get('1').row.summary.iv;writer.lock();
 }
 const server=createServer(async(req,res)=>{
   try {
@@ -55,12 +55,18 @@ const browser=await chromium.launch({headless:true});
 async function pageFor(context) {
   await context.exposeBinding('fixtureAuthentication',()=>{authentications++;});
   await context.addInitScript(({prf,credentialId,trust,accountId})=>{window.TRoomPasskeys={authenticate:async()=>{await window.fixtureAuthentication();window.lastPRF=new Uint8Array(prf);return {credentialId,prfOutput:window.lastPRF,verified:{diaryTrust:trust},link:{accountId},handoff:{handoffToken:accountId,diaryTrust:trust}};}};},{prf:[...user.prf],credentialId:user.credentialId,trust,accountId:user.serviceAccountId});
-  if(progressive)await context.addInitScript(({iv})=>{
+  if(progressive)await context.addInitScript(({iv,summaryIV})=>{
     const native=crypto.subtle.decrypt.bind(crypto.subtle);let release;
     const gate=new Promise(resolve=>{release=resolve;});window.releaseOldBody=release;window.oldBodyBlocked=false;
+    const holdSummary=sessionStorage.getItem('fixture-warm-index')==='1';sessionStorage.removeItem('fixture-warm-index');
+    const summaryGate=new Promise(resolve=>{window.releaseCachedSummary=resolve;});window.cachedSummaryReads=0;
     const toBase64=bytes=>btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
-    crypto.subtle.decrypt=async(algorithm,...args)=>{if(algorithm.iv&&toBase64(algorithm.iv)===iv){window.oldBodyBlocked=true;await gate;}return native(algorithm,...args);};
-  },{iv:bodyIV});
+    crypto.subtle.decrypt=async(algorithm,...args)=>{
+      if(holdSummary&&algorithm.iv&&toBase64(algorithm.iv)===summaryIV){window.cachedSummaryReads++;await summaryGate;}
+      if(algorithm.iv&&toBase64(algorithm.iv)===iv){window.oldBodyBlocked=true;await gate;}
+      return native(algorithm,...args);
+    };
+  },{iv:bodyIV,summaryIV});
   const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));return page;
 }
 try {
@@ -113,7 +119,19 @@ try {
     assert.equal(committed.length,1);assert.equal(JSON.parse(committed[0].committed_ids).length,31);
     assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) AS n FROM diary_photos').get().n,0);
   }
+  if(workerd){
+    // Closing the editor precedes the awaited post-save list refresh. Let that
+    // foreground operation finish before testing an eligible warm-cache visit.
+    await page.waitForFunction(()=>!document.querySelector('#save-entry-button').disabled&&document.querySelector('#entry-list').textContent.includes('SYNTHETIC_PRIVATE_POST'));
+    await waitForPreparedIndex(page);await page.evaluate(()=>sessionStorage.setItem('fixture-warm-index','1'));
+  }
   await page.reload();await page.locator('#app-view').waitFor({state:'visible'});assert.equal(authentications,1,'same live session resumes without another WebAuthn operation');
+  if(workerd){
+    await page.waitForFunction(()=>document.querySelector('#entry-list .diary-entry-card')||window.cachedSummaryReads>0||document.querySelector('#diary-search-status').textContent.includes('できません'));
+    assert.equal(await page.evaluate(()=>window.cachedSummaryReads),0,`the first screen cannot wait for every old cached summary; since=${JSON.stringify(wire.filter(row=>'snapshotSince' in row).slice(-6).map(row=>row.snapshotSince))}`);
+    await page.locator('#entry-list .diary-entry-card').first().waitFor({state:'visible'});
+    await page.evaluate(()=>{window.releaseCachedSummary();window.releaseOldBody();});
+  }
   if(photoSelection) {
     await page.locator('#entry-list .diary-entry-card').filter({hasText:'SYNTHETIC_PRIVATE_POST'}).first().click();
     await page.locator('#entry-dialog').waitFor({state:'visible'});assert.equal(await page.locator('#detail-content .entry-photo').count(),31);
@@ -122,6 +140,7 @@ try {
   }
   await page.click('#logout-button');await page.locator('#passkey-login').waitFor({state:'visible'});
   const storage=await inspectLogoutStorage(page);assert.equal(storage.keys,0);assert.ok(storage.cipherSnapshots>0);assert.equal(storage.containsPlaintext,false);
+  if(workerd)assert.ok(storage.indexes>0,'logout preserves only encrypted derived indexes, never the unlocked device keys');
   await verifyCacheBudget(page);
   await page.click('#passkey-login');await page.locator('#app-view').waitFor({state:'visible'});assert.equal(authentications,2);
   // A different signed session cannot reuse the previous session's device key.

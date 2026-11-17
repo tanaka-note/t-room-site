@@ -32,19 +32,51 @@ export async function verifyCacheBudget(page) {
       catch(error){blockedFallback=error.message==='CacheUnavailable';}
       finally{clearTimeout(timer);old.close();}
       const recovered=await openCipherCache(blockedName);recovered.close();
-      return {lru,point,oldGeneration,usage,rollback,oversized,upgrade,blockedFallback,defaultLimit:CIPHER_CACHE_LIMIT};
+      const indexed=await openCipherCache(name+'-indexes',{limitBytes:size*3});
+      const box={version:1,iv:'AAAAAAAAAAAAAAAA',ciphertext:'AAAAAAAAAAAAAAAAAAAAAA'};
+      await indexed.put('a/key/A/1',snapshot(),'a/key/A');await indexed.putIndex('a/key/A/1',1,box);
+      const withIndex=await indexed.usage();await indexed.get('a/key/A/1');const afterRead=await indexed.usage();
+      await pause();await indexed.put('b/key/A/1',snapshot(),'b/key/A');await pause();await indexed.put('c/key/A/1',snapshot(),'c/key/A');
+      const evictedIndex=await indexed.getIndex('a/key/A/1'),retainedPoint=await indexed.checkpoint('a/key/A');
+      await indexed.put('c/key/A/1',snapshot(2),'c/key/A');await indexed.putIndex('c/key/A/1',1,box);
+      const lateIndex=await indexed.getIndex('c/key/A/1');let rejectsPlaintext=false;
+      try{await indexed.putIndex('c/key/A/1',2,{summary:'PRIVATE_INDEX_TITLE'});}catch{rejectsPlaintext=true;}
+      const indexBudget={baseSize:size,withIndex,afterRead,evictedIndex,retainedPoint,lateIndex,rejectsPlaintext,usage:await indexed.usage()};indexed.close();
+      // Real users currently have v3: its snapshots/checkpoints must survive
+      // the addition of the optional encrypted-index store.
+      const v3Name=name+'-v3';
+      await new Promise((resolve,reject)=>{const req=indexedDB.open(v3Name,3);req.onupgradeneeded=()=>{for(const store of ['snapshots','checkpoints','usage'])req.result.createObjectStore(store);};req.onerror=reject;req.onsuccess=()=>{const db=req.result,tx=db.transaction(['snapshots','checkpoints'],'readwrite');tx.objectStore('snapshots').put(snapshot(),'a/key/A/1');tx.objectStore('checkpoints').put(7,'a/key/A');tx.oncomplete=()=>{db.close();resolve();};tx.onerror=reject;};});
+      const v4=await openCipherCache(v3Name),v3Upgrade={snapshot:await v4.get('a/key/A/1'),point:await v4.checkpoint('a/key/A'),index:await v4.getIndex('a/key/A/1')};v4.close();
+      return {lru,point,oldGeneration,usage,rollback,oversized,upgrade,blockedFallback,indexBudget,v3Upgrade,defaultLimit:CIPHER_CACHE_LIMIT};
     }finally{a.close();b.close();}
   });
   assert.equal(result.defaultLimit,50_000_000);assert.equal(result.lru,true);assert.equal(result.point,1);assert.equal(result.oldGeneration,undefined);
   assert.ok(result.usage.bytes<=result.usage.limitBytes);assert.ok(result.usage.count<=2);assert.equal(result.rollback,true);
   assert.equal(result.oversized.usage.bytes,0);assert.equal(result.oversized.checkpoint,9);assert.ok(result.upgrade.usage.bytes<=result.upgrade.usage.limitBytes);assert.equal(result.upgrade.point,7);
   assert.equal(result.blockedFallback,true,'an older open tab cannot stall login during a cache upgrade');
+  assert.ok(result.indexBudget.withIndex.bytes>result.indexBudget.baseSize);assert.equal(result.indexBudget.withIndex.bytes,result.indexBudget.afterRead.bytes);
+  assert.equal(result.indexBudget.evictedIndex,undefined);assert.equal(result.indexBudget.retainedPoint,1);assert.equal(result.indexBudget.lateIndex,undefined);
+  assert.equal(result.indexBudget.rejectsPlaintext,true);assert.ok(result.indexBudget.usage.bytes<=result.indexBudget.usage.limitBytes);
+  assert.equal(result.v3Upgrade.snapshot.sequence,1);assert.equal(result.v3Upgrade.point,7);assert.equal(result.v3Upgrade.index,undefined);
+}
+
+export async function waitForPreparedIndex(page) {
+  await page.waitForFunction(async()=>new Promise((resolve,reject)=>{
+    const req=indexedDB.open('tlain-diary-encrypted-v1');req.onerror=reject;
+    req.onsuccess=()=>{
+      const db=req.result;if(!db.objectStoreNames.contains('indexes')){db.close();resolve(false);return;}
+      const tx=db.transaction(['snapshots','indexes']);let found=false;
+      const cursor=tx.objectStore('snapshots').openCursor();
+      cursor.onsuccess=()=>{const row=cursor.result;if(!row)return;const index=tx.objectStore('indexes').get(row.key);index.onsuccess=()=>{if(index.result?.sequence===row.value.sequence)found=true;row.continue();};};
+      tx.oncomplete=()=>{db.close();resolve(found);};tx.onerror=reject;
+    };
+  }));
 }
 
 export async function inspectLogoutStorage(page) {
   return page.evaluate(async()=>{
     const read=async(name,store)=>new Promise((resolve,reject)=>{const r=indexedDB.open(name);r.onerror=reject;r.onsuccess=()=>{const db=r.result,tx=db.transaction(store),all=tx.objectStore(store).getAll();tx.oncomplete=()=>{db.close();resolve(all.result);};tx.onerror=reject;};});
-    const keys=await read('tlain-diary-device-v1','keys'),cipher=await read('tlain-diary-encrypted-v1','snapshots');
-    return {keys:keys.length,cipherSnapshots:cipher.length,containsPlaintext:JSON.stringify(cipher).includes('SYNTHETIC_PRIVATE_POST')};
+    const keys=await read('tlain-diary-device-v1','keys'),cipher=await read('tlain-diary-encrypted-v1','snapshots'),indexes=await read('tlain-diary-encrypted-v1','indexes');
+    return {keys:keys.length,cipherSnapshots:cipher.length,indexes:indexes.length,containsPlaintext:JSON.stringify([cipher,indexes]).includes('SYNTHETIC_PRIVATE_POST')};
   });
 }
