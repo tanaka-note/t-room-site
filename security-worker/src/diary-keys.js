@@ -112,13 +112,19 @@ export async function diaryKeyBundle(env,input) {
   const active=(await env.DB.prepare(`SELECT v.recipient_id FROM security_diary_key_vaults v JOIN security_credentials c ON c.credential_id=v.credential_id AND c.identity_id=v.identity_id JOIN security_service_links l ON l.id=v.service_link_id AND l.identity_id=v.identity_id AND l.service='diary' AND l.service_account_id=v.account_id JOIN security_identities i ON i.id=v.identity_id WHERE c.status='active' AND l.status='active' AND i.status='active'`).all()).results;
   const ids=new Set(active.map(v=>v.recipient_id));
   if(!equal(directory.households,await env.DIARY_AUTH.encryptionHouseholds()))rekeyRequired=true;
-  for(const m of directory.members)if(m.active!==false) {
-    if(!ids.has(m.credentialId)){rekeyRequired=true;continue;}
-    try {
-      const claims=await accountClaims(env,m.accountId);
-      if(!claims.active||m.canManageEntries!==claims.canManageEntries||!equal([...m.households].sort(),[...claims.households].sort())||m.scopes.some(scope=>!canRead(claims,scopeRecord(scope,directory.households))))rekeyRequired=true;
-    }catch{rekeyRequired=true;}
-  }
+  const members=directory.members.filter(m=>m.active!==false);let memberIndex=0;
+  // Keep every live permission check, but overlap independent Diary RPCs.
+  // Await all workers before returning; never reuse claims across requests.
+  await Promise.all(Array.from({length:Math.min(4,members.length)},async()=>{
+    while(memberIndex<members.length) {
+      const m=members[memberIndex++];
+      if(!ids.has(m.credentialId)){rekeyRequired=true;continue;}
+      try {
+        const claims=await accountClaims(env,m.accountId);
+        if(!claims.active||m.canManageEntries!==claims.canManageEntries||!equal([...m.households].sort(),[...claims.households].sort())||m.scopes.some(scope=>!canRead(claims,scopeRecord(scope,directory.households))))rekeyRequired=true;
+      }catch{rekeyRequired=true;}
+    }
+  }));
   return {...current,recipientId,webAuthnCredentialId:input.credentialId,serviceLinkId:link.id,accountId:link.accountId,vault:JSON.parse(row.vault_json),grants:JSON.parse(row.grants_json),recordGrants:JSON.parse(row.record_grants_json),rekeyRequired};
 }
 
