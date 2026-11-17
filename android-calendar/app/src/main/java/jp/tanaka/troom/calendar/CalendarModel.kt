@@ -9,6 +9,10 @@ import java.util.UUID
 val JAPAN: ZoneId = ZoneId.of("Asia/Tokyo")
 fun today(): LocalDate = LocalDate.now(JAPAN)
 fun nowJapan(): LocalDateTime = LocalDateTime.now(JAPAN)
+const val CALENDAR_MONTH_COUNT = 9999 * 12
+fun calendarMonthPage(month: YearMonth): Int = (month.year - 1) * 12 + month.monthValue - 1
+fun calendarMonthAt(page: Int): YearMonth = YearMonth.of(page.coerceIn(0, CALENDAR_MONTH_COUNT - 1) / 12 + 1, page.coerceIn(0, CALENDAR_MONTH_COUNT - 1) % 12 + 1)
+fun calendarSelectedDate(month: YearMonth, preferredDay: Int): LocalDate = month.atDay(preferredDay.coerceIn(1, month.lengthOfMonth()))
 fun newId(): String = UUID.randomUUID().toString()
 fun JSONObject.strings(name: String): List<String> = optJSONArray(name)?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
 fun JSONObject.ints(name: String): List<Int> = optJSONArray(name)?.let { a -> (0 until a.length()).map { a.getInt(it) } } ?: emptyList()
@@ -146,18 +150,19 @@ data class CalendarSettings(
     val reminders: List<Int> = emptyList(), val eventReminders: Map<String, List<Int>> = emptyMap(),
     val pinned: List<String> = emptyList(), val manualOrder: List<String> = emptyList(),
     val sort: String = "MANUAL", val descending: Boolean = false, val cacheMiB: Int = 100,
+    val appearance: String = "system",
 ) {
     fun minutesFor(id: String, anchor: String? = null) = anchor?.let { eventReminders["$id@$it"] } ?: eventReminders[id] ?: reminders
     fun json(): JSONObject {
         val overrides = JSONObject(); eventReminders.forEach { (k, v) -> overrides.put(k, JSONArray(v)) }
-        return JSONObject().put("theme", theme).put("startPage", startPage).put("durationMinutes", durationMinutes)
+        return JSONObject().put("theme", theme).put("appearance", appearance).put("startPage", startPage).put("durationMinutes", durationMinutes)
             .put("reminders", JSONArray(reminders)).put("eventReminders", overrides).put("pinned", JSONArray(pinned))
             .put("manualOrder", JSONArray(manualOrder)).put("sort", sort).put("descending", descending).put("cacheMiB", cacheMiB)
     }
     companion object {
         fun parse(v: JSONObject): CalendarSettings {
             val overrides = v.optJSONObject("eventReminders") ?: JSONObject()
-            return CalendarSettings(v.optString("theme", "blue"), v.optString("startPage", "MONTH"), v.optInt("durationMinutes", 60), v.ints("reminders"), overrides.keys().asSequence().associateWith { overrides.ints(it) }, v.strings("pinned"), v.strings("manualOrder"), v.optString("sort", "MANUAL"), v.optBoolean("descending"), v.optInt("cacheMiB", 100).coerceIn(20, 500))
+            return CalendarSettings(v.optString("theme", "blue"), v.optString("startPage", "MONTH"), v.optInt("durationMinutes", 60), v.ints("reminders"), overrides.keys().asSequence().associateWith { overrides.ints(it) }, v.strings("pinned"), v.strings("manualOrder"), v.optString("sort", "MANUAL"), v.optBoolean("descending"), v.optInt("cacheMiB", 100).coerceIn(20, 500), v.optString("appearance", "system").takeIf { it in listOf("system", "light", "dark") } ?: "system")
         }
     }
 }

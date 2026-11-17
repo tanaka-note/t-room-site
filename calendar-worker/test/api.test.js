@@ -24,6 +24,26 @@ const named=(name='佐藤と遊ぶ')=>({id:randomUUID(),name,archived:false,merg
 const event=(ids=[])=>({id:randomUUID(),title:'食事',start:'2026-10-29T18:00',end:'2026-10-29T19:00',allDay:false,trackIds:ids,tagIds:[],color:'blue',place:'',memo:'',url:'',cancelled:false,deletedAt:null,repeat:{mode:'NONE',interval:1,weekdays:[],monthly:'DAY',until:null,count:null,dates:[]},exceptions:{},excludedDates:[]});
 const settings=()=>({theme:'blue',startPage:'MONTH',durationMinutes:60,reminders:[],eventReminders:{},pinned:[],manualOrder:[],sort:'MANUAL',descending:false,cacheMiB:100});
 
+test('existing preferences and all palette/appearance combinations persist through sync',async()=>{
+  const f=fixture(),cookie=await f.login();let version=0;
+  assert.equal((await f.mutate(cookie,'settings',settings(),version++)).status,200);
+  for(const theme of ['blue','mint','lavender','rose','peach','gray'])for(const appearance of ['system','light','dark']){
+    const payload={...settings(),theme,appearance};
+    assert.equal((await f.mutate(cookie,'settings',payload,version++)).status,200);
+    const own=(await f.call('sync',{cookie})).body.entities.find(e=>e.kind==='settings');
+    assert.deepEqual(own.payload,payload);
+  }
+  const other=await f.login('main:two');
+  assert.equal((await f.call('sync',{cookie:other})).body.entities.some(e=>e.kind==='settings'),false);
+});
+
+test('appearance validation keeps the settings field boundary strict',async()=>{
+  const f=fixture(),cookie=await f.login();
+  for(const patch of [{theme:'unknown'},{appearance:'unknown'},{appearance:null},{appearance:0},{appearance:'dark',customPalette:'#000000'}]){
+    assert.equal((await f.mutate(cookie,'settings',{...settings(),...patch})).status,400);
+  }
+});
+
 test('explicit linked accounts isolate events while the same account shares events and keeps Identity settings private',async()=>{
   const f=fixture(),one=await f.login(),two=await f.login('main:two'),other=await f.login('second:two');
   const track=named();assert.equal((await f.mutate(one,'track',track)).status,200);
