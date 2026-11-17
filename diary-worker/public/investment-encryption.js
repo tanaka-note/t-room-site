@@ -1,5 +1,5 @@
 import {DIARY_READER_PROTOCOL,validatePublicTrust,open,b64,encode} from './crypto/e2ee/crypto.mjs';
-import {unlockSession} from './crypto/e2ee/session.mjs';
+import {unlockSession,takePreparedVault} from './crypto/e2ee/session.mjs';
 import {bindingOf,verifyRecord} from './crypto/e2ee/record.mjs';
 import {openCipherCache} from './crypto/e2ee/cache.mjs';
 import {investmentRecords} from './crypto/e2ee/investment.mjs';
@@ -28,7 +28,8 @@ export async function loadEncryptedInvestment(session,authentication) {
     const initial=await request('/encryption/profile'),profile=initial.profile;
     if(initial.protocol!==DIARY_READER_PROTOCOL)throw new Error('UnsupportedReaderProtocol');
     if(profile.actor.accountId!==session.encryption.accountId||(authentication&&profile.webAuthnCredentialId!==authentication.credentialId)||!profile.actor.canViewInvestment)throw new Error('AccountMismatch');
-    let cached=authentication?.diaryPrivateKeys?{privateKeys:authentication.diaryPrivateKeys}:undefined,liveSession=resumed;
+    const prepared=authentication?.diaryPrivateKeys||takePreparedVault(authentication,profile);
+    let cached=prepared?{privateKeys:prepared}:undefined,liveSession=resumed;
     if(!authentication){try{cached=await loadDevice(session,profile);}catch{/* Request the normal passkey if device storage is unavailable. */}if(!cached)throw new Error('PasskeyRequired');if(trust)await sameTrust(cached.trust,trust);else trust=cached.trust;}
     await validatePublicTrust(trust);
     await checkTrustFloor(trust,localStorage);
@@ -49,5 +50,5 @@ export async function loadEncryptedInvestment(session,authentication) {
     if(!current.authenticated||current.encryption?.protocol!==DIARY_READER_PROTOCOL||current.encryption?.accountId!==profile.actor.accountId||current.encryption.webAuthnCredentialId!==profile.webAuthnCredentialId||current.encryption.generation!==initial.rollout.generation)throw new Error('SessionChanged');
     await rememberTrustFloor({...trust,minimumGeneration:state.directory.generation},localStorage);
     return {records,firstDate:records[0]?.date||null,lastDate:records.at(-1)?.date||null};
-  }finally{authentication?.prfOutput?.fill(0);if(authentication)authentication.diaryPrivateKeys=null;state?.keys.clear();if(state)state.privateKeys=null;cache?.close();}
+  }finally{authentication?.prfOutput?.fill(0);if(authentication){authentication.diaryPrivateKeys=null;authentication.diaryPreparedKeys=null;}state?.keys.clear();if(state)state.privateKeys=null;cache?.close();}
 }

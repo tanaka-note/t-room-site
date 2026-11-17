@@ -213,6 +213,7 @@ try {
 
 await import('./automatic-preparation.browser.mjs');
 await import('./unified-passkey.browser.mjs');
+await import('./login-pipeline.browser.mjs');
 await import('./real-passkey.browser.mjs');
 await import('./photo-rollout.browser.mjs');
 

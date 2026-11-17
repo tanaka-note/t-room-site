@@ -2,6 +2,7 @@ import {createVault,unlockVault} from './crypto/e2ee/crypto.mjs';
 import {TRUST_PIN,resolveTrust,sealTrust,openTrust,sameTrust,sealPendingConfiguration,openPendingConfiguration,rememberTrustFloor,checkTrustFloor} from './crypto/e2ee/trust.mjs';
 import {prepareKeyConfiguration,publicTrustPackage,scopeDefinitions} from './crypto/e2ee/setup.mjs';
 import {unlockCentralRecovery} from './crypto/e2ee/tcloud-recovery.mjs';
+import {rememberPreparedVault} from './crypto/e2ee/session.mjs';
 
 function pinnedTrust() {
   return typeof localStorage==='undefined'?null:JSON.parse(localStorage.getItem(TRUST_PIN)||'null');
@@ -28,12 +29,16 @@ async function resumeConfiguration(api,session,authentication,recipientId,check)
 async function approvePreparedRecipients(api,session,authentication,recipientId,trust,check) {
   if(!session.isGlobalOwner)return trust;
   const management=managementApi(api);
-  const own=await management('/own');check();
+  // These reads are independent for an already prepared owner. If preparing
+  // a vault changes the recipient inventory, obtain a new admin view afterward.
+  const [own,initialStatus]=await Promise.all([management('/own'),management('/admin')]);check();
+  let changed=false;
   for(const link of own.links.filter(link=>!link.prepared)) {
     const vault=await createVault(authentication.prfOutput,link.recipientId);check();
     await management('/vault',{serviceLinkId:link.id,vault});check();
+    changed=true;
   }
-  const status=await management('/admin');check();
+  const status=changed?await management('/admin'):initialStatus;check();
   // The ordinary addition-only configuration checks also apply on resume.
   // A newer directory invalidates old continuations and forces the migration
   // controller to recheck the frozen source/ciphertext and restore checkpoint.
@@ -68,6 +73,7 @@ export function diaryMigrationMessage(progress) {
 // Called by the normal Diary passkey login. The caller owns and clears PRF;
 // only the sealed vault and public keys cross the service API.
 export async function prepareDiaryKeys(...args) {
+  if(args[2])args[2].diaryPreparedKeys=null;
   const preventUpdate=event=>event.preventDefault();
   globalThis.document?.addEventListener('troom:before-auto-update',preventUpdate);
   const run=()=>prepareKeys(...args);
@@ -93,7 +99,7 @@ async function prepareKeys(api,session,authentication,check=()=>{},onProgress=()
   }
   // Check the existing vault too. A race or response loss must never cause
   // replacement of an already prepared key, nor accept an unusable vault.
-  await unlockVault(authentication.prfOutput,info.recipientId,info.vault);check();
+  const unlocked={...info,privateKeys:await unlockVault(authentication.prfOutput,info.recipientId,info.vault)};check();
   let bootstrap=authentication.handoff?.diaryTrust||authentication.verified?.diaryTrust;
   if(authentication.handoff?.diaryTrust&&authentication.verified?.diaryTrust)await sameTrust(authentication.verified.diaryTrust,authentication.handoff.diaryTrust);
   const resumed=await resumeConfiguration(api,session,authentication,info.recipientId,check);
@@ -117,5 +123,6 @@ async function prepareKeys(api,session,authentication,check=()=>{},onProgress=()
     if(!fresh.authenticated||JSON.stringify(session.keySession)!==JSON.stringify(fresh.keySession))throw Object.assign(new Error('ログイン状態が変わりました。'),{sessionChanged:true});
     Object.assign(session,fresh);
   }
+  if(!authentication.diaryPrivateKeys)rememberPreparedVault(authentication,unlocked,unlocked.privateKeys);
   return {prepared:true};
 }

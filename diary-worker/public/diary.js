@@ -725,6 +725,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         : error.message;
     } finally {
       authentication?.prfOutput?.fill(0);
+      if(authentication){authentication.diaryPrivateKeys=null;authentication.diaryPreparedKeys=null;}
       if (attempt === loginAttempt) setBusy(button, false, "パスキーでログイン");
     }
   }
