@@ -1,3 +1,4 @@
+import {photoHeader} from '../../e2ee/photo-crypto.mjs';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -132,7 +133,7 @@ try {
   assert.equal(requests.filter(row => row.method === 'DELETE' && /^\/diary\/api\/photos\//.test(row.path)).length, 0, 'editor cleanup must use the encrypted API');
   for (const id of replacements) {
     const media = f.db.sqlite.prepare('SELECT status,original_key FROM diary_e2ee_media WHERE id=?').get(id);
-    assert.equal(media.status, 'attached'); assert.deepEqual([...f.r2.get(media.original_key).bytes], [...png]);
+    assert.equal(media.status, 'attached'); assert.ok(photoHeader(f.r2.get(media.original_key).bytes));
   }
   await page.reload(); await page.locator('#app-view').waitFor({ state: 'visible' });
   await page.locator(`#entry-list [data-entry-id="${id}"]`).click(); await page.locator('#entry-dialog').waitFor({ state: 'visible' });
@@ -220,7 +221,7 @@ try {
   for (const photoId of idsFor(id)) {
     const media = f.db.sqlite.prepare('SELECT household,status,original_key FROM diary_e2ee_media WHERE id=?').get(photoId);
     assert.equal(media.household, user.claims.households[0]); assert.equal(media.status, 'attached');
-    assert.deepEqual([...f.r2.get(media.original_key).bytes], [...png]);
+    assert.ok(photoHeader(f.r2.get(media.original_key).bytes));
   }
   assert.equal(JSON.stringify(f.db.sqlite.prepare('SELECT * FROM diary_e2ee_records').all()).includes('PHOTO_EDIT_PRIVATE'), false);
   assert.equal(JSON.stringify(requests).includes('PHOTO_EDIT_PRIVATE'), false);

@@ -1,3 +1,4 @@
+import {photoHeader} from '../../e2ee/photo-crypto.mjs';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -170,7 +171,7 @@ try {
   await migration.getByText('処理完了：1/1日を保存済み',{exact:true}).first().waitFor();
   await migration.click('#migration-verify');await migration.getByText('処理完了：1/1日を保存済み',{exact:true}).first().waitFor();
   const rows=f.db.sqlite.prepare('SELECT state,id FROM diary_e2ee_records WHERE photo_ids LIKE ?').all(`%${photoId}%`);assert.equal(rows.length,1);assert.equal(rows[0].state,'published');
-  const photo=f.db.sqlite.prepare('SELECT original_key FROM diary_e2ee_media WHERE id=?').get(photoId);assert.deepEqual([...f.r2.get(photo.original_key).bytes],[...png]);
+  const photo=f.db.sqlite.prepare('SELECT original_key FROM diary_e2ee_media WHERE id=?').get(photoId);assert.ok(photoHeader(f.r2.get(photo.original_key).bytes));
   assert.equal(requests.filter(r=>r.status===426).length,0,'encrypted migration must not call guarded legacy routes');
   assert.equal(requests.filter(r=>r.method==='POST'&&/\/uploads\/[^/]+\/photos$/.test(r.path)).length,1,'recovery does not upload the original again');
   assert.deepEqual(errors,[]);console.log(JSON.stringify({engine:process.env.TROOM_BROWSER||'chromium',desktop:process.argv.includes('--desktop'),account:user.serviceAccountId,sameSessionTabs:true,logoutClears:true,liveRefreshPreservesEditor:true,staleDraftSave:true,publicationConflict:true,deletedByVisible:true,takeoutReloadRecovery:true,originalPreserved:true,noLegacyApi:true}));

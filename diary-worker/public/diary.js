@@ -15,6 +15,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
   // Keep the shared module on the same build URL as this app shell, including offline fallback.
   const scriptUrl = new URL(import.meta.url);
+  const photoImages = (await import(new URL(`diary-photo-images.js${scriptUrl.search}`, scriptUrl).href)).createPhotoImages(encryptionRuntime);
   let splitSearchTerms, createSearchExcerpt, highlightSearchTerms;
   let applyFormatToSelection, findPhotoMarkers, getSelectionFormatState, hasTextMarks,
     insertTextIntoRichDocument, mergeRichTextRuns, photoMarker, removeTextFromRichDocument,
@@ -380,6 +381,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
             set index(value) { state.viewerIndex = value; }
           },
           formatDate, formatBytes, canDelete: canDeleteViewerPhoto,
+          loadImage: (image, photo, kind) => photoImages.bind(image, photo, kind, { eager: true }),
+          releaseImage: image => photoImages.release(image),
+          prefetch: photo => photoImages.prefetch(photo),
+          downloadPhoto: photoImages.download,
           canNavigate: () => !state.photoDeleteBusy
         });
         photoViewer.bind();
@@ -418,7 +423,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     placeArchive();
     compactArchive.addEventListener("change", placeArchive);
     document.addEventListener("troom:before-auto-update", (event) => {
-      if (hasEditorChanges() || state.editorComposing || state.photoPreparing || state.photoUploading || state.photoPickerActive || photoSaver?.busy || document.querySelector("dialog[open]")) {
+      if (hasEditorChanges() || state.editorComposing || state.photoPreparing || state.photoUploading || state.photoPickerActive || photoSaver?.busy || elements.photoDownloadOriginal.getAttribute("aria-busy") === "true" || document.querySelector("dialog[open]")) {
         event.preventDefault();
       }
     });
@@ -706,6 +711,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       if (attempt !== loginAttempt) return;
       const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
       if (attempt !== loginAttempt) return;
+      photoImages.reset();
       encryptionRuntime?.lock();encryptionRuntime=null;
       let preparationMessage;
       if(session.encryption) {
@@ -713,7 +719,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
           const preparation=await import(new URL(`diary-key-preparation.js${scriptUrl.search}`,scriptUrl).href);
           await preparation.prepareDiaryKeys(api,session,authentication,()=>{if(attempt!==loginAttempt)throw new Error('ログイン状態が変わりました。');},progress=>{elements.loginMessage.textContent=preparation.diaryMigrationMessage(progress);});
         }catch(error){if(session.encryption.enabled||error.migrationPending||error.sessionChanged||[401,403].includes(error.status))throw error;preparationMessage='日記は利用できますが、暗号化の利用準備を完了できませんでした。対応するパスキーで次回ログイン時に再試行します。';}
-        if(session.encryption.enabled){const encryption=await import(new URL(`diary-encryption.js${scriptUrl.search}`,scriptUrl).href);encryptionRuntime=await encryption.startEncryptedDiary(session,authentication);}
+        if(session.encryption.enabled){const encryption=await import(new URL(`diary-encryption.js${scriptUrl.search}`,scriptUrl).href);encryptionRuntime=await encryption.startEncryptedDiary(session,authentication);photoImages.setRuntime(encryptionRuntime);}
       }
       if(attempt!==loginAttempt)return;
       await enterDiary(session);
@@ -818,6 +824,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     const householdId = elements.householdSwitcher.value;
     elements.householdSwitcher.disabled = true;
     try {
+      photoImages.reset();
       await api("/households/select", { method: "POST", body: { householdId } });
       sessionGeneration += 1;
       cancelPendingEntrySearch();
@@ -1925,7 +1932,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function createEntryPhoto(photo, photos) {
     const image = document.createElement("img");
     image.className = "entry-photo";
-    image.src = photo.displayUrl;
+    photoImages.bind(image, photo, "display");
     image.alt = photo.fileName || "日記の写真";
     image.loading = "lazy";
     image.addEventListener("click", () => openPhotoViewer(photos, photos.findIndex((candidate) => candidate.id === photo.id)));
@@ -2594,7 +2601,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       const card = document.createElement("article");
       card.className = "editor-photo-card";
       const image = document.createElement("img");
-      image.src = photo.thumbnailUrl || photo.previewUrl;
+      photoImages.bind(image, photo, "thumbnail");
       image.alt = photo.fileName;
       const body = document.createElement("div");
       body.className = "editor-photo-card-body";
@@ -3062,7 +3069,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     try {
       if (!photoSaverPromise) {
         photoSaverPromise = import(new URL(`diary-photo-save.js${scriptUrl.search}`, scriptUrl).href).then(module => {
-          photoSaver = module.createPhotoSaveManager({ api, dialogs, formatBytes, bindDateInput, onNotice: showToast,
+          photoSaver = module.createPhotoSaveManager({ api, fetchPhoto: (...args) => encryptionRuntime ? encryptionRuntime.fetch(...args) : fetch(...args), dialogs, formatBytes, bindDateInput, onNotice: showToast,
             getOwner: () => activeSessionContext && JSON.stringify([activeSessionContext, state.activeHouseholdId]),
             getDefaultRange: () => {
               const month = state.photoMonth || currentJapanMonth();
@@ -3234,7 +3241,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         button.dataset.photoId = photo.id;
         button.setAttribute("aria-label", `${formatDate(photo.entryDate)}「${photo.entryTitle || "無題"}」の写真を開く`);
         const image = document.createElement("img");
-        image.src = photo.thumbnailUrl;
+        photoImages.bind(image, photo, "thumbnail");
         image.alt = photo.fileName;
         image.loading = "lazy";
         const caption = document.createElement("span");
@@ -4342,6 +4349,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function resetState() {
     remoteRefreshPending=false;
+    photoImages.reset();
     encryptionRuntime?.lock();
     photoSaver?.suspend();
     cancelPositionRestoration();

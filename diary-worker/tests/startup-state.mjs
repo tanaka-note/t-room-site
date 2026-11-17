@@ -53,6 +53,7 @@ function albumFixture({ total = 5001, pageMs = 0, overReturn = 0, emptyPage = fa
   const functions = ['cancelCameraRollLoad', 'loadPhotos', 'renderCameraRoll', 'renderCameraRollStatus'].map(body).join('\n');
   const loaded = new Function('state', 'elements', 'api', 'performance', 'document', 'window', `
     ${constants}
+    const photoImages = { bind() {} };
     const createEmpty = () => ({}), formatDate = value => value, formatShortDate = value => value;
     ${functions}
     return { loadPhotos, cancelCameraRollLoad, max: CAMERA_ROLL_MAX_PHOTOS };

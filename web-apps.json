@@ -311,6 +311,10 @@
           "copy": "diary-worker/public/crypto/e2ee/media-client.mjs"
         },
         {
+          "source": "diary-worker/e2ee/photo-crypto.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/photo-crypto.mjs"
+        },
+        {
           "source": "diary-worker/src/entry-domain.js",
           "copy": "diary-worker/public/crypto/src/entry-domain.js"
         },

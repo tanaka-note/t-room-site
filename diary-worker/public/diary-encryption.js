@@ -68,7 +68,7 @@ async function createEncryptedDiary(session,authentication) {
   api=createEncryptedDiaryApi(client,{session,nativeApi,media,prepareNavigation:()=>navigation.prepareTags(),onHousehold:async household=>{
     const reply=await request('/profile');
     if(reply.profile.actor.accountId!==expectedAccount||reply.profile.webAuthnCredentialId!==expectedCredential||reply.profile.household!==household||reply.profile.directory.value.generation!==client.directory.generation){client.lock();throw new Error('パスキーでログインし直してください。');}
-    resetFirstView();
+    media.reset();resetFirstView();
     navigation.close();if(/^\/diary\/tag\//.test(location.pathname))window.history.replaceState({},'','/diary/');client.records.clear();client.albumCache=null;client.revisionFloor.clear();client.sequence=undefined;client.profile={...client.profile,household};client.background=null;navigation=await createPrivateNavigation(client);
   }});
   await rememberTrustFloor({...pin,minimumGeneration:client.directory.generation},localStorage);
@@ -114,7 +114,7 @@ async function createEncryptedDiary(session,authentication) {
         const status=Number.isInteger(error.status)&&error.status>=400&&error.status<=599?error.status:500;
         return Response.json({error:status===500?'日記を準備できませんでした。もう一度お試しください。':error.message},{status});
       }finally{if(path==='/logout')await lock({logout:true});}
-    },fetch:media.fetch,
+    },fetch:media.fetch,readPhoto:async(...args)=>{try{return await media.read(...args);}catch(error){if(error.status===401||client.closed)expire();throw error;}},
     presented:()=>releaseFirstView(),
     get storage(){return navigation.storage;},get history(){return navigation.history;},tagRoute:tag=>navigation.tagRoute(tag),tagValue:segment=>navigation.tagValue(segment),flush:()=>navigation.flush(),
     lock
