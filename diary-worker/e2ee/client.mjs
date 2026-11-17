@@ -67,6 +67,7 @@ export class EncryptedDiaryClient {
     this.pendingDeletes = new Map();
     this.preparedBindings = new WeakMap();
     this.lazy=lazy;this.documentLoads=new WeakMap();this.background=null;
+    this.indexCacheState=null;
     this.onProgress=()=>{};this.onBackgroundError=()=>{};
   }
   async unlock(prf,cachedPrivateKeys) {
@@ -83,6 +84,7 @@ export class EncryptedDiaryClient {
     this.privateKeys = null;
     this.documentLoads=new WeakMap();
     this.background=null;
+    this.indexCacheState=null;
     const state = await unlockSession({
       prf,
       cachedPrivateKeys,
@@ -107,6 +109,7 @@ export class EncryptedDiaryClient {
     this.actions.clear();
     this.privateKeys = null;
     this.documentLoads=new WeakMap();this.onProgress({phase:'locked',completed:0,total:0});
+    this.indexCacheState=null;
   }
   async check() {
     const generation=this.generation;
@@ -190,6 +193,63 @@ export class EncryptedDiaryClient {
     this.assertOpen(generation);return { row, entry: value.entry };
   }
 
+  indexBinding(sequence) {
+    const scope=preferencesScope(this.household,this.actor.accountId);
+    return {household:this.household,scope,id:`verified-index:${sequence}`,revision:1,epoch:this.directory.epochs[scope],kind:'verified-index'};
+  }
+  async indexDigest(snapshot) {
+    // IndexedDB preserves the normalized snapshot's property order. Hash its
+    // exact JSON bytes once, without recursively copying/sorting every large
+    // ciphertext object. The small authorization context stays canonical.
+    const digest=b64(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(snapshot))));
+    return b64(await crypto.subtle.digest('SHA-256',encode({snapshot:digest,actor:this.actor,directory:this.directory})));
+  }
+  async readPreparedIndex(key,snapshot) {
+    if(!this.lazy||!this.cache?.getIndex)return null;
+    let available=false;
+    try {
+      const packet=await this.cache.getIndex(key);
+      if(!packet)return null;
+      available=true;
+      if(packet.sequence!==snapshot.sequence)return false;
+      const binding=this.indexBinding(snapshot.sequence),scopeKey=this.keys.get(binding.scope);
+      if(!scopeKey)return false;
+      const value=await open(scopeKey,packet.envelope,binding);
+      if(value.version!==1||value.digest!==await this.indexDigest(snapshot)||!Array.isArray(value.summaries))return false;
+      const rows=new Map(snapshot.records.filter(row=>row.state!=='preferences').map(row=>[row.id,row]));
+      if(rows.size!==value.summaries.length)return false;
+      const result=new Map();
+      for(const pair of value.summaries) {
+        if(!Array.isArray(pair)||pair.length!==3||result.has(pair[0])||!rows.has(pair[0]))return false;
+        const row=rows.get(pair[0]),summary=pair[1];
+        if(!summary||row.state!=='investment'&&(typeof summary.entryDate!=='string'||typeof summary.title!=='string'||!Array.isArray(summary.tags)||summary.tags.some(tag=>typeof tag!=='string')||summary.photoCount!==row.photoIds.length))return false;
+        const order=pair[2];
+        if(order!==null&&(!order||Object.keys(order).join(',')!=='lastPublishedAt'||order.lastPublishedAt!==null&&typeof order.lastPublishedAt!=='string'))return false;
+        result.set(row.id,{row,summary,order});
+      }
+      return result;
+    } catch {return available?false:null;} // Missing storage is optional; a mismatched pair requires a fresh full read.
+  }
+  async persistPreparedIndex() {
+    const state=this.indexCacheState;
+    if(!state||state.ready||state.pending||!this.cache?.putIndex||this.closed)return state?.pending;
+    const generation=this.generation;
+    state.pending=(async()=>{
+      const binding=this.indexBinding(state.snapshot.sequence),key=this.keys.get(binding.scope);
+      if(!key)return;
+      const summaries=[...state.records.values()].filter(r=>r.row.state!=='preferences').map(r=>[
+        r.row.id,r.summary||(r.row.state==='investment'?{}:{entryDate:r.entry.entryDate,title:r.entry.title,tags:r.entry.tags,weather:r.entry.weather,photoCount:r.row.photoIds.length}),
+        r.entry&&Object.hasOwn(r.entry,'lastPublishedAt')?{lastPublishedAt:r.entry.lastPublishedAt}:r.order||null
+      ]);
+      const envelope=await seal(key,{version:1,digest:await this.indexDigest(state.snapshot),summaries},binding);
+      this.assertOpen(generation);
+      if(this.indexCacheState!==state)return;
+      await this.cache.putIndex(state.key,state.snapshot.sequence,envelope);
+      if(this.indexCacheState===state)state.ready=true;
+    })().catch(()=>{}); // Quota/unsupported storage cannot close a valid diary.
+    return state.pending;
+  }
+
   async syncSnapshot({sessionChecked=false}={}) {
     if(sessionChecked)this.assertOpen();else await this.check();
     const generation = this.generation;
@@ -201,7 +261,8 @@ export class EncryptedDiaryClient {
       try { checkpoint = await this.cache.checkpoint(checkpointKey) ?? 0; } catch { checkpoint = 0; }
       if (!Number.isSafeInteger(checkpoint) || checkpoint < 0) throw new Error('InvalidCache');
     }
-    const since=this.sequence??cached?.sequence??-1;
+    let since=this.sequence??cached?.sequence??-1;
+    const preparedIndex=cached?this.readPreparedIndex(cacheKey,cached):Promise.resolve(null);
     // Verify/decrypt the small summaries while the remaining pages are in
     // flight. Nothing becomes visible until the complete fixed snapshot and
     // live session have passed the same validation as the non-pipelined path.
@@ -214,6 +275,14 @@ export class EncryptedDiaryClient {
       if(this.lazy)this.onProgress({phase:'index',completed:prefetched.size,total});
     }:undefined;
     let snapshot=await this.transport.snapshot(this.household,since,{onPage});
+    const restored=await preparedIndex;
+    if(cached&&restored===false){
+      // Never repair a damaged/context-mismatched local pair by trusting a
+      // potentially incomplete cached snapshot. Retain the durable checkpoint
+      // and validate a complete authoritative snapshot under current rights.
+      this.assertOpen(generation);cached=null;since=-1;
+      snapshot=await this.transport.snapshot(this.household,since,{onPage});
+    }
     if(generation!==this.generation||this.closed)throw new Error("SessionChanged");
     validateSnapshot(snapshot);
     if(snapshot.sequence<Math.max(this.minimumSequence,checkpoint)||snapshot.sequence<since)throw new Error('RollbackDetected');
@@ -253,7 +322,15 @@ export class EncryptedDiaryClient {
         while (cursor < snapshot.records.length) {
           const row = snapshot.records[cursor++];
           const prepared=prefetched.get(row.id);
-          records.set(row.id,prepared&&equal(prepared.row,row)?prepared:await this.indexRecord(row,generation));
+          const saved=restored&&restored.get(row.id);
+          if(saved&&this.lazy&&row.state!=='preferences'&&!Object.keys(row.keyBox).length&&(saved.row===row||equal(saved.row,row))) {
+            // This encrypted index is bound to the exact previously verified
+            // ciphertext, directory and actor. Fresh deltas use normal checks;
+            // every body is signed/validated again when prioritized for display.
+            if(!canRead(this.actor,row))throw new Error('AccessDenied');
+            const key=this.keys.get(row.scope);if(!key)throw new Error('GrantDenied');
+            records.set(row.id,{row,summary:saved.summary,order:saved.order,key,verifyOnHydrate:true});
+          }else records.set(row.id,prepared&&equal(prepared.row,row)?prepared:await this.indexRecord(row,generation));
           indexed++;if(this.lazy&&indexed%25===0)this.onProgress({phase:'index',completed:indexed,total:snapshot.records.length});
         }
       }),
@@ -272,6 +349,10 @@ export class EncryptedDiaryClient {
     this.records = records;
     this.albumCache = null;
     this.sequence = snapshot.sequence;
+    // Parallel verification can change Map insertion order. When the durable
+    // snapshot was not rewritten, bind its exact existing bytes, not a newly
+    // assembled array with a different completion order.
+    if(this.lazy&&this.cache?.putIndex)this.indexCacheState={key:cacheKey,snapshot:cacheUnchanged?cached:{version:1,household:this.household,sequence:this.sequence,baseSequence:-1,delta:false,unchanged:false,removed:[],records:[...records.values()].map(r=>r.row)},records:new Map(records),ready:cacheUnchanged&&Boolean(restored)};
     if(this.lazy)this.progress();
     if(generation!==this.generation||this.closed)throw new Error("SessionChanged");
     return this.records;
@@ -287,11 +368,12 @@ export class EncryptedDiaryClient {
       if(record.entry)return record.entry;
       const generation=this.generation;
       if(!this.documentLoads.has(record))this.documentLoads.set(record,(async()=>{
+        if(record.verifyOnHydrate){await verifyRecord(record.row,this.directory);this.assertOpen(generation);record.verifyOnHydrate=false;}
         const value=await open(record.key,record.row.envelope,{...bindingOf(record.row),kind:'document'});
         if(this.closed||generation!==this.generation)throw new Error('SessionChanged');
         if(value.version!==1||!value.entry||typeof value.entry!=='object')throw new Error('UnsupportedPayload');
         if(record.row.state==='investment')investmentRecords(value.entry.records);
-        else if(typeof value.entry.title!=='string'||typeof value.entry.content!=='string'||!Array.isArray(value.entry.photos)||!equal(value.entry.photos.map(p=>p.id),record.row.photoIds)||!equal({entryDate:value.entry.entryDate,title:value.entry.title,tags:value.entry.tags,weather:value.entry.weather,photoCount:value.entry.photos.length},record.summary))throw new Error('InvalidPayload');
+        else if(typeof value.entry.title!=='string'||typeof value.entry.content!=='string'||!Array.isArray(value.entry.photos)||!equal(value.entry.photos.map(p=>p.id),record.row.photoIds)||!equal({entryDate:value.entry.entryDate,title:value.entry.title,tags:value.entry.tags,weather:value.entry.weather,photoCount:value.entry.photos.length},record.summary)||record.order&&!equal({lastPublishedAt:value.entry.lastPublishedAt},record.order))throw new Error('InvalidPayload');
         if(this.records.get(String(id))===record){record.entry=value.entry;delete record.key;this.progress();}
       })());
       await this.documentLoads.get(record);
@@ -316,14 +398,22 @@ export class EncryptedDiaryClient {
     const boundary=entries[Math.min(end,entries.length)-1]?.entryDate;
     // summary has no publication timestamp; hydrate every tie on the boundary
     // date before applying the existing stable full-document ordering.
-    await this.hydrateRecords(entries.filter(e=>!boundary||e.entryDate>=boundary).map(e=>this.records.get(String(e.id))));
+    const knownOrder=entries.filter(e=>e.entryDate===boundary).every(e=>{const r=this.records.get(String(e.id));return r.entry||r.order;});
+    await this.hydrateRecords((knownOrder?entries.slice(0,end):entries.filter(e=>!boundary||e.entryDate>=boundary)).map(e=>this.records.get(String(e.id))));
   }
   async ensureAll() {await this.hydrateRecords([...this.records.values()]);}
   startBackground() {
     if(!this.lazy||this.closed||this.background)return this.background;
     const generation=this.generation;
     const running=(async()=>{
-      await new Promise(resolve=>setTimeout(resolve,0));
+      await this.transport.backgroundReady?.();
+      if(this.closed||generation!==this.generation)return;
+      // Allow the prepared first screen to paint before optional index writes
+      // and background crypto compete with input/rendering on a mobile CPU.
+      if(typeof requestAnimationFrame==='function'&&globalThis.document?.visibilityState==='visible')await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      else await new Promise(resolve=>setTimeout(resolve,0));
+      if(this.closed||generation!==this.generation)return;
+      await this.persistPreparedIndex();
       while(!this.closed&&generation===this.generation) {
         const queue=[...this.records.values()].filter(r=>!r.entry).sort((a,b)=>String(b.summary?.entryDate||'').localeCompare(String(a.summary?.entryDate||''))).map(r=>r.row.id);
         if(!queue.length)return;
@@ -546,6 +636,7 @@ export class EncryptedDiaryClient {
     if(!record.entry&&!summaryOnly)throw new InputError(425,'EntryNotReady');
     return {
       ...(record.entry||record.summary),
+      ...(!record.entry&&record.order||{}),
       id: Number(record.row.id),
       revision: record.row.revision,
       status: record.row.state === "draft" ? "draft" : "published",

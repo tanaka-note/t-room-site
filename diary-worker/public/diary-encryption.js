@@ -40,7 +40,11 @@ async function createEncryptedDiary(session,authentication) {
   const expectedAccount=initial.profile.actor.accountId,expectedCredential=initial.profile.webAuthnCredentialId;
   let client,navigation,api,media,cache,deadline=session.expiresAt||null;
   let liveSession=session,persistDevice=async()=>{};
+  let firstView,releaseFirstView;
+  const resetFirstView=()=>{releaseFirstView?.();firstView=new Promise(resolve=>{releaseFirstView=resolve;});};
+  resetFirstView();
   const transport={
+    backgroundReady:()=>firstView,
     valid:async()=>{const generation=client.generation;try{const result=await nativeApi('/session');const valid=generation===client.generation&&!client.switching&&result.authenticated&&result.encryption?.enabled&&result.encryption.protocol===DIARY_READER_PROTOCOL&&result.encryption.accountId===expectedAccount&&result.encryption.webAuthnCredentialId===expectedCredential&&result.activeHouseholdId===client.household&&result.encryption.generation===initial.rollout.generation&&(!liveSession.keySession||JSON.stringify(liveSession.keySession)===JSON.stringify(result.keySession));if(valid){deadline=result.expiresAt||deadline;liveSession=result;await persistDevice();}return valid;}catch(error){if([401,403].includes(error.status))return false;throw error;}},
     timestamp:async()=>(await request('/time')).timestamp,
     snapshot:(household,since,{onPage}={})=>readSnapshotPages(options=>request(`/snapshot?${new URLSearchParams(Object.entries(options).filter(([,value])=>value!==null))}`),household,since,{onPage,fetchHead:h=>request(`/head?household=${encodeURIComponent(h)}`)}),
@@ -62,6 +66,7 @@ async function createEncryptedDiary(session,authentication) {
   api=createEncryptedDiaryApi(client,{session,nativeApi,media,prepareNavigation:()=>navigation.prepareTags(),onHousehold:async household=>{
     const reply=await request('/profile');
     if(reply.profile.actor.accountId!==expectedAccount||reply.profile.webAuthnCredentialId!==expectedCredential||reply.profile.household!==household||reply.profile.directory.value.generation!==client.directory.generation){client.lock();throw new Error('パスキーでログインし直してください。');}
+    resetFirstView();
     navigation.close();if(/^\/diary\/tag\//.test(location.pathname))window.history.replaceState({},'','/diary/');client.records.clear();client.albumCache=null;client.revisionFloor.clear();client.sequence=undefined;client.profile={...client.profile,household};client.background=null;navigation=await createPrivateNavigation(client);
   }});
   await rememberTrustFloor({...pin,minimumGeneration:client.directory.generation},localStorage);
@@ -92,7 +97,7 @@ async function createEncryptedDiary(session,authentication) {
   let cleanup;
   const lock=({logout=false}={})=>{
     if(cleanup)return cleanup;
-    closed=true;clearInterval(timer);signals.abort();if(!external)channel?.postMessage({type:'changed',reason:logout?'logout':'closed',session:sessionIdentity()});channel?.close();
+    closed=true;releaseFirstView();clearInterval(timer);signals.abort();if(!external)channel?.postMessage({type:'changed',reason:logout?'logout':'closed',session:sessionIdentity()});channel?.close();
     client.lock();media.close();navigation.close();cache?.close();
     cleanup=clearDevice(liveSession,{all:logout}).catch(()=>{});return cleanup;
   };
@@ -108,6 +113,7 @@ async function createEncryptedDiary(session,authentication) {
         return Response.json({error:status===500?'日記を準備できませんでした。もう一度お試しください。':error.message},{status});
       }finally{if(path==='/logout')await lock({logout:true});}
     },fetch:media.fetch,
+    presented:()=>releaseFirstView(),
     get storage(){return navigation.storage;},get history(){return navigation.history;},tagRoute:tag=>navigation.tagRoute(tag),tagValue:segment=>navigation.tagValue(segment),flush:()=>navigation.flush(),
     lock
   };

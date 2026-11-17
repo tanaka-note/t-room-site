@@ -9,6 +9,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     if (!initialSession?.authenticated || !initialSession.canManageEntries) throw new Error("日記を作成できるアカウントでログインしてください。");
     const migrationUrl = new URL(`photo-migration.js${new URL(import.meta.url).search}`, import.meta.url);
     await (await import(migrationUrl.href)).mountMigration(initialSession, Number(migrationYear), encryptionRuntime);
+    encryptionRuntime?.presented?.();
     onReady();
     return;
   }
@@ -963,6 +964,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       state.hasMore = hasMore;
       if (bootstrap || background) preserveViewport(() => renderEntries(reset ? 0 : previousEntryCount));
       else renderEntries(reset ? 0 : previousEntryCount);
+      encryptionRuntime?.presented?.();
       updateSearchStatus();
       return true;
     } catch (error) {
