@@ -43,14 +43,14 @@
     button.focus();
   }
 
-  async function api(path, body) {
+  async function api(path, body, headers={}) {
     const response = await fetch(`/diary/api${path}`, {
       method: body ? "POST" : "GET", credentials: "same-origin", cache: "no-store",
-      headers: body ? { "Content-Type": "application/json", "X-Diary-Request": "1" } : {},
+      headers: { ...headers,...(body ? { "Content-Type": "application/json", "X-Diary-Request": "1" } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {})
     });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "日記を読み込めませんでした。");
+    if (!response.ok) throw Object.assign(new Error(result.error || "日記を読み込めませんでした。"),{status:response.status});
     return result;
   }
 
@@ -67,15 +67,43 @@
     return pending;
   }
 
-  async function enterDiary(session) {
-    // A rejected load can be retried, without fetching the runtime before authentication.
+  async function prepareLogin(session,authentication) {
+    let preparationMessage;
+    if(authentication&&session.encryption) {
+      try {
+        const preparation=await import(new URL(`diary-key-preparation.js${scriptUrl.search}`,scriptUrl).href);
+        await preparation.prepareDiaryKeys((path,options={})=>api(path,options.body,options.headers),session,authentication,()=>{},progress=>{message.textContent=preparation.diaryMigrationMessage(progress);});
+      }catch(error){if(session.encryption.enabled||error.migrationPending||error.sessionChanged||[401,403].includes(error.status))throw error;preparationMessage='日記は利用できますが、暗号化の利用準備を完了できませんでした。対応するパスキーで次回ログイン時に再試行します。';}
+    }
+    return preparationMessage;
+  }
+
+  function loadRuntime() {
+    // Only enterDiary calls this, after a successful session/handoff response.
+    // Importing modules does not start protected reads or show the app.
     if (!runtimePromise) {
       runtimePromise = Promise.all([
         loadScript("dialog-navigation.js"), loadScript("troom-date-picker.js"),
         import(new URL(`diary.js${scriptUrl.search}`, scriptUrl).href)
       ]).catch(error => { runtimePromise = null; throw error; });
     }
-    const [, , runtime] = await runtimePromise;
+    return runtimePromise;
+  }
+
+  async function enterDiary(session,authentication=null) {
+    if(!authentication&&session.isGlobalOwner&&session.encryption?.phase==='migrating') {
+      showLogin('日記の暗号化を再開します。パスキーでログインしてください。');return;
+    }
+    // Start independent asset loads while preparing keys. Settle every branch
+    // before clearing PRF or accepting a retry, including when an asset fails.
+    const ready=await Promise.allSettled([
+      prepareLogin(session,authentication),loadRuntime(),
+      session.encryption?.enabled?import(new URL(`diary-encryption.js${scriptUrl.search}`,scriptUrl).href):Promise.resolve(null)
+    ]);
+    const failure=ready.find(result=>result.status==='rejected');if(failure)throw failure.reason;
+    const preparationMessage=ready[0].value,[, , runtime]=ready[1].value;
+    let encryptionRuntime=null;
+    if(session.encryption?.enabled){const encryption=ready[2].value||await import(new URL(`diary-encryption.js${scriptUrl.search}`,scriptUrl).href);encryptionRuntime=await encryption.startEncryptedDiary(session,authentication);}
     if (installDialog.open) installDialog.close();
     await runtime.startDiary(session, deferredInstallPrompt, () => {
       button.disabled = false;
@@ -83,7 +111,7 @@
       button.querySelector(".passkey-login-label").textContent = "パスキーでログイン";
       events.abort();
       return deferredInstallPrompt;
-    }, initialScrollIntent);
+    },initialScrollIntent,encryptionRuntime,preparationMessage);
   }
 
   button.addEventListener("click", async () => {
@@ -91,16 +119,19 @@
     button.setAttribute("aria-busy", "true");
     button.querySelector(".passkey-login-label").textContent = "確認中…";
     message.textContent = "";
+    let authentication;
     try {
-      const authentication = await TRoomPasskeys.authenticate("diary", links => TRoomPasskeys.chooseLinkDialog(links, "diary"));
+      authentication = await TRoomPasskeys.authenticate("diary", links => TRoomPasskeys.chooseLinkDialog(links, "diary"));
       const session = await api("/passkey/handoff", { handoffToken: authentication.handoff.handoffToken });
-      await enterDiary(session);
+      await enterDiary(session,authentication);
     } catch (error) {
       if (events.signal.aborted) return;
       showLogin(/ID・パスワード/.test(error.message)
         ? "パスキーを利用できるブラウザで開いてください。復旧が必要な場合は管理者へご相談ください。"
         : error.message);
     } finally {
+      authentication?.prfOutput?.fill(0);
+      if(authentication){authentication.diaryPrivateKeys=null;authentication.diaryPreparedKeys=null;}
       if (!events.signal.aborted) {
         button.disabled = false;
         button.removeAttribute("aria-busy");

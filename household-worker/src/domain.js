@@ -50,7 +50,7 @@ const definitions = {
 // Money Forward ME's published category order. IDs remain unchanged for existing records/backups.
 export const CATEGORY_ORDER = ['収入','食費','現金・カード','交通費','趣味・娯楽','日用品','衣服・美容','特別な支出','交際費','住宅','水道・光熱費','自動車','保険','税・社会保障','教養・教育','通信費','健康・医療','その他','未分類'];
 export function orderedCategories(categories) {
-  return [...categories].sort((a,b)=>CATEGORY_ORDER.indexOf(a.parent)-CATEGORY_ORDER.indexOf(b.parent)||Number(b.builtin)-Number(a.builtin)||(a.builtin&&b.builtin?Number(a.id.split('-').at(-1))-Number(b.id.split('-').at(-1)):a.name.localeCompare(b.name,'ja')));
+  return [...categories].sort((a,b)=>CATEGORY_ORDER.indexOf(a.parent)-CATEGORY_ORDER.indexOf(b.parent)||Number(a.name.startsWith('その他'))-Number(b.name.startsWith('その他'))||Number(b.builtin)-Number(a.builtin)||(a.builtin&&b.builtin?Number(a.id.split('-').at(-1))-Number(b.id.split('-').at(-1)):a.name.localeCompare(b.name,'ja')));
 }
 export function defaultCategories() {
   return orderedCategories(Object.entries(definitions).flatMap(([parent, names], p) => names.map((name, n) => ({ id: `builtin-${p}-${n}`, parent, name, type: parent === '収入' ? 'income' : 'expense', builtin: true }))));
@@ -101,6 +101,8 @@ export function assetHistory(data, today = jstDate()) {
       while (index+1 < balances.length && balances[index+1].date <= cutoff) index++;
       cursors.set(account.id,index);
       const selected = balances[index];
+      // Legacy archived, undated accounts keep their former projection behavior.
+      // New saves always supply a date and clear this compatibility flag.
       if (!selected) { if (!balances.length && !account.archived) missing.push(account.id); continue; }
       const value = selected.items.reduce((sum,item)=>sum+item.amount,0);
       if (!Number.isSafeInteger(value)) throw new HttpError(400, '合計金額が大きすぎます。');
@@ -124,9 +126,11 @@ export function transactionInput(input, data) {
   if (input.type === 'transfer' && (!input.accountId || !input.toAccountId || input.accountId === input.toAccountId)) throw new HttpError(400, '振替元と振替先には異なる口座を選んでください。');
   const category = data.categories.find(c => c.id === input.categoryId);
   if (input.type !== 'transfer' && (!category || category.type !== input.type)) throw new HttpError(400, '分類を確認してください。');
+  if (input.registrationOrder !== undefined && (!Number.isSafeInteger(input.registrationOrder) || input.registrationOrder < 0)) throw new HttpError(400, '明細の登録順を確認してください。');
   return { id: uuid(input.id), date: date(input.date), type: input.type, amount: amount(input.amount), description: text(input.description || '', 300, '内容', false),
     notes: text(input.notes || '', 1000, 'メモ', false), categoryId: input.type === 'transfer' ? null : category.id,
-    accountId: input.accountId || null, toAccountId: input.type === 'transfer' ? input.toAccountId : null, included: input.included !== false };
+    accountId: input.accountId || null, toAccountId: input.type === 'transfer' ? input.toAccountId : null, included: input.included !== false,
+    ...(input.registrationOrder === undefined ? {} : {registrationOrder: input.registrationOrder}) };
 }
 export function snapshotInput(input, historical = false) {
   const end = monthEnd(input?.month);
@@ -144,13 +148,18 @@ export function snapshotInput(input, historical = false) {
     ...(historical ? { source: 'moneyforward', notes: text(input.notes || '', 500, '記録メモ', false), ...(sourceAsOf ? {sourceAsOf} : {}) } : {}) };
 }
 export function mutateData(data, operation, value) {
-  const next = structuredClone(data);
+  // Retain unchanged record identities so persistence can reuse their JSON.
+  const next = Object.fromEntries(Object.entries(data).map(([kind,rows])=>[kind,[...rows]]));
   const upsert = (list, row) => { const index = list.findIndex(r => r.id === row.id); if (index < 0) list.push(row); else list[index] = row; };
   if (operation === 'transaction.save') {
     if (!['income','expense'].includes(value?.type)) throw new HttpError(400,'収入または支出を選んでください。');
     const category = next.categories.find(c=>c.id===value.categoryId);
     const categoryId = category?.parent==='未分類' ? next.categories.find(c=>c.parent==='その他'&&c.name==='その他')?.id : value.categoryId;
-    const parsed=transactionInput({...value,categoryId},next);
+    const existing = next.transactions.find(t=>t.id===value?.id);
+    // Zero represents unknown legacy order. Keep its former ID order before new registrations.
+    // Assign on the server; the revision CAS makes simultaneous registrations atomic.
+    const registrationOrder = existing ? existing.registrationOrder ?? 0 : next.transactions.reduce((max,t)=>Math.max(max,t.registrationOrder ?? 0),0)+1;
+    const parsed=transactionInput({...value,categoryId,registrationOrder},next);
     upsert(next.transactions, {...parsed,accountId:null,toAccountId:null,included:true});
   }
   else if (operation === 'transaction.delete') next.transactions = next.transactions.filter(t => t.id !== uuid(value?.id));
@@ -158,7 +167,7 @@ export function mutateData(data, operation, value) {
     const existing = next.accounts.find(a=>a.id===value?.id);
     if (value?.historyId && value.historyId !== existing?.historyId) throw new HttpError(400, '口座の対応付け機能は利用できません。');
     // Keep any legacy backup metadata intact; new account links are no longer accepted.
-    const row = accountInput({ ...value, historyId: existing?.historyId, balances: existing?.balances || [] });
+    const row = accountInput({ ...value, archived: false, historyId: existing?.historyId, balances: existing?.balances || [] });
     const asOf = balanceDate(value?.asOf);
     const submitted = accountInput({ ...value, balances: undefined }).items;
     const balances = row.balances.filter(b=>b.date!==asOf);
@@ -166,7 +175,6 @@ export function mutateData(data, operation, value) {
     row.balances = balances.sort((a,b)=>a.date.localeCompare(b.date));
     if (row.balances.length > 3600) throw new HttpError(400, '残高履歴の件数が上限に達しました。');
     row.items = structuredClone(row.balances.at(-1).items);
-    if (row.archived && row.items.some(i => i.amount !== 0)) throw new HttpError(400, '残高のある口座は保管できません。');
     if (!next.accounts.some(a => a.id === row.id) && next.accounts.length >= 200) throw new HttpError(400, '口座数の上限に達しました。');
     upsert(next.accounts, row);
   } else if (['snapshot.save','snapshot.delete','historical.save','historical.delete'].includes(operation)) throw new HttpError(400, '資産推移は自動集計です。口座画面から基準日と残高を入力してください。');
@@ -218,6 +226,11 @@ export function restoreInput(input) {
       data[key].push(parsed);
     }
   }
+  const registrationOrders = new Set();
+  for (const t of data.transactions) if (t.registrationOrder > 0) {
+    if (registrationOrders.has(t.registrationOrder)) throw new HttpError(400, '明細の登録順が重複しています。');
+    registrationOrders.add(t.registrationOrder);
+  }
   const links = new Set();
   for (const account of data.accounts) if (account.historyId) {
     if (links.has(account.historyId) || ![...data.historical,...data.snapshots].some(s=>s.accounts.some(a=>a.id===account.historyId))) throw new HttpError(400, '過去チャートの対応付けを確認してください。');
@@ -228,7 +241,7 @@ export function restoreInput(input) {
 export function csv(data) {
   const escape = value => { let s = String(value ?? ''); if (typeof value === 'string' && /^[=+\-@\t\r]/.test(s)) s = `'${s}`; return `"${s.replaceAll('"', '""')}"`; };
   const rows = [['計算対象','日付','内容','金額（円）','口座','大項目','中項目','メモ','振替','振替先','ID']];
-  for (const t of [...data.transactions].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id))) {
+  for (const t of [...data.transactions].sort((a, b) => a.date.localeCompare(b.date) || (a.registrationOrder ?? 0)-(b.registrationOrder ?? 0) || a.id.localeCompare(b.id))) {
     const c = data.categories.find(c => c.id === t.categoryId);
     rows.push([t.type==='transfer' ? 0 : 1,t.date,t.description,t.type === 'income' ? t.amount : -t.amount,data.accounts.find(a => a.id === t.accountId)?.name || '',c?.parent==='未分類'?'その他':c?.parent || '',c?.parent==='未分類'?'その他':c?.name || '',t.notes,t.type === 'transfer' ? 1 : 0,data.accounts.find(a => a.id === t.toAccountId)?.name || '',t.id]);
   }

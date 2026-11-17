@@ -1,5 +1,9 @@
 # T-lain 共通Identity・パスキー仕様
 
+## 資産運用報告のサービス連携
+
+`portfolio` は `/asset-report/` の管理者 `owner` と閲覧者 `viewer` を提供する。既存の共通パスキー・handoff・12時間rolling session・監査を使用し、認可はPortfolio側のサービスアカウントを正本とする。`owner` は `primary-admin` に限定し、閲覧用は第一管理者が複数Identityへ明示的に連携できる。同じIdentityの複数credentialも同じ有効な連携を利用できる。追加・承認・連携は第一管理者がSecurity Centerで実施し、初期化から利用者への権限を付与しない。サービス追加の `0030_portfolio_service.sql` は既存の行・外部キー・監査集計・家計簿の複数Identity共有を保持する。詳細は [Portfolio Worker](../../portfolio-worker/README.md)。
+
 ## 招待登録の完了表示
 
 一般利用者の招待登録では、`/security/api/setup/status` が有効な登録状態（`active` / `completed` / `resumable` / `needsTCloudSetup`）、`credentialStatus=pending`、`pendingApproval=true`、`tcloudReady=true`、`needsTCloudSetup=false` を返すと、専用の完了画面へ切り替える。T-Cloud連携がない場合も、サーバーの `tcloudReady` は準備不要としてtrueになる。表示は「パスキーの登録が完了しました。」「管理者の確認後、利用できるようになります。しばらくお待ちください。」のみで、サービスへの移動ボタンは設けない。再読み込み・BFCacheから戻った際も同APIを読み直し、ブラウザ保存領域の成功フラグには依存しない。setup cookieの期限や権限は延長しない。
@@ -105,6 +109,8 @@ PW、authProof、cookie、session token、生の招待token、PRF出力、秘密
 
 ## Identityとサービス連携
 
+家計簿はサービスアカウントごとに所属家計と権限を解決する。既存`owner`は`primary-admin`専用、既存`viewer`は宏知の家計だけの共有閲覧用とする。追加の独立管理用`chiharu-admin`は第一管理者が明示的に連携したIdentityから利用でき、管理用アカウントの複数Identityへの重複連携は拒否する。パスキーの登録・承認・失効は既存手順を維持し、migrationで連携やcredentialを自動作成しない。詳細は[家計簿README](../../household-worker/README.md)を参照する。
+
 Identityはサービスaccountではなく一人の人を表し、同じIdentityへ同一サービスを含む複数のservice linkを持てる。日記の管理者用・一般利用用accountを使い分ける場合もIdentityやパスキーを分けない。日記・請求書accountは原則として有効なlinkを一人だけに限定する。ただし既存の一般利用用Identityを切断せず第一管理者の同じパスキーから日記の管理者用・一般利用用accountを選べるよう、`primary-admin`の`diary/main-user`だけは狭い追加aliasとして許可し、他Identityの重複は引き続き拒否する。T-Cloudのfolder-memberは複数Identityとの共有を許可する。
 
 連携候補の正本は各サービスの`SecurityIntegration`である。Security Workerは明示的なservice registry、Service Binding、providerの候補取得・再検証を通じてだけlinkを作成する。Security Centerの通常UIでは内部account ID、role値、T-Cloudの数値folder IDを自由入力させず、人間向け表示名・role・folder pathから選択させる。候補取得失敗時に自由入力へフォールバックしない。将来サービスを追加する場合も、registry allowlist、Service Binding、provider実装、DB migrationの要否、契約テストを明示的に追加し、自動発見したサービスを信頼しない。
@@ -132,6 +138,10 @@ T-Cloudの各タブは選択済みsessionの公開識別子をsessionStorageに�
 
 member vaultの登録はcredential単位のINSERTのみとし、競合時は保存済み公開鍵・指紋・暗号文・IVを照合する。同じ内容の再送は許し、異なる内容への置換は409で拒否する。既存委譲鍵の再生成は行わない。パスキーで解除したadmin／memberのRSA秘密鍵はextractable=false・decrypt専用のCryptoKeyとして、既存tcloud-device-vault／crypto-keysへ保存できる。memberは承認済みの複数folderScopesに対応するRSA暗号化folder envelopeの集合（folder_keys_rsa）を併せて保存し、raw folder keyは復元時のメモリー内だけに保持する。cache bindingにはsessionCacheId・credential ID・Identity ID・auth method・role・service account／link・cloudScopeId・root／folderScopes・Cloud session version・passkey epoch・crypto version／作成時刻／公開鍵を含める。cacheにはserver sessionのexpiresAtを保存し、同じsession IDの正常なrolling応答で単調に更新する。起動時はserver session検証後だけ復元し、Cookie消滅・12時間超過・credential／Identity／link／scope／version／epoch等の失効が判明した現在sessionのcacheと、期限切れのpasskey cacheだけを削除する。期限は必ず署名検証済みserver sessionで判断し、cache自身から延長しない。CryptoKeyは復元時に型・非抽出性・algorithm／usagesと実際の復号を検証する。raw PRF、秘密鍵のJWK／PEM／raw、extractable秘密鍵、raw folder key、PW、SESSION_SECRETは保存しない。明示的logoutはserver session終了・Cookie削除・tab context破棄・現在sessionのcache削除を行い、他sessionのcacheは削除しない。API失効時にもメモリーを解除して現在sessionのcacheを削除する。過去に`passkey:<identityId>:<config作成時刻>`で保存された管理者秘密鍵レコードだけを起動時に削除し、PW用鍵キャッシュ・folder-sessionレコード・暗号化済みオフラインデータを削除しない。
 
+## 家計簿の複数Identity連携
+
+家計簿の追加管理用と共有閲覧用は、第一管理者の明示的な設定で同じサービスアカウントを複数Identityへ連携できる。同じIdentityの複数credentialも有効な連携を利用できる。田中宏知の既定`owner`だけは`primary-admin`に限定する。既存の5分以内の再認証・招待・credential承認・Identity／credential／link単位の失効確認を維持する。`0029_household_shared_accounts.sql`は現在の連携をIdentity＋アカウント単位で一意にし、既存の無効なlinkを復活させず、自動で権限を付与しない。詳細は[家計簿README](../../household-worker/README.md)を参照する。
+
 ## Downloaderの利用許可
 
 初期連携はprimary-adminのみ。一般Identityへの許可は、オーナーが利用者詳細の「サービス連携を追加」でDownloaderを選び、既存の再認証を通したときだけ作成する。新規招待には含めず、パスキー登録・承認・再招待では新規付与しない。追加・解除は対象link IDと操作元を監査へ記録する。既存連携は追加経路を調査して扱いを決め、判断不能を一律解除しない。過去の本番データ調査は[2026-09-09調査記録](../history/security/downloader-grants-review-20260909.md)を参照。
@@ -139,3 +149,57 @@ member vaultの登録はcredential単位のINSERTのみとし、競合時は保�
 過去のmigration、固定データ対応、当時の公開範囲は[Identity・Passkey移行記録](../history/security/passkey-migrations.md)へ分離している。
 
 Cloud専用rolling RPCを使う版はSecurity Workerの対応が必要で、将来の公開時はSecurityを先に反映してからCloudを反映する。DB migration・既存ファイルの再暗号化・credential再登録は不要。旧Cloud sessionが端末cacheを持たない場合は初回だけPRF認証へfallbackする。
+
+## ゼロ知識暗号化の共通設計
+
+今後の新規サイト、および既存サービスをゼロ知識化・改修するときの標準とする。通常利用者は、承認済みの既存パスキーによる通常ログインから暗号化データを利用できるように設計する。サービスごとの適用範囲、実装状況、本番切替と実利用者の確認結果は各README・設計書へ記録する。
+
+### 通常ログインからの自動準備
+
+既存の承認済みPRF対応パスキーを使い、本人用のサービス専用鍵が初回未準備であることを検証した場合だけ端末内で生成し、登録済みなら既存の鍵を端末内で解除する。取得失敗・破損・保存結果の未確認を未初期化と扱って、鍵を再生成・置換しない。信頼設定も本人認証済みのSecurity応答／対象サービスhandoffから自動準備し、以後は封印済み設定と既知のanchor・世代を検証する。破損・巻き戻し時の自動リセットや、未検証のサービス応答からの信頼再初期化は行わない。
+
+通常利用のためのSecurity Centerでの追加の暗号化設定、サービス独自の暗号化パスワード、公開JSONや復旧ファイルの手動受け渡し、既存パスキーの再登録を要求しない。Security Centerは引き続きIdentity・招待・承認・サービス連携・失効・監査・復旧の正本とする。新しいサービスへの利用許可や権限をログインだけで自動付与しない。第一管理者PWによる恒久復旧経路も維持する。
+
+| 実行者 | 通常ログインを起点に自動化する処理 | 守る範囲 |
+| --- | --- | --- |
+| 利用者本人 | 本人用の鍵・信頼設定の準備と解除、委譲済みのデータ鍵の解除 | 現在承認済みの本人credential・service link・サービスaccountとscope |
+| 権限を持つ管理者・所有者 | サービスの暗号化初期化、既存データの移行、準備済み利用者への鍵委譲 | 各サービスが認可した管理範囲と既存の共有先 |
+| 委譲を待つ利用者 | 本人用の準備を終えて待機し、所有者の通常利用後に有効セッション内で再開 | 管理者用の鍵・権限や他の世帯・利用者のデータを取得しない |
+
+本人の鍵準備と、管理者による全件移行・共有鍵の委譲は別の状態として管理する。通常ログインでは未準備・未完了の処理と必要な追加委譲だけを進め、完了済みの初期化や全件移行を繰り返さない。所有者による委譲が必要なら待機状態を表示し、利用者へ追加設定やログインの繰り返しを求める手順にしない。鍵の保有とAPIの編集権限は分け、サービス固有のaccount・role・scopeを認可の正本とする。
+
+### 鍵とセッションの境界
+
+鍵・信頼設定・セッション・認可はサービスごとに分離し、既存パスキーの利用を理由に他サービスの管理者鍵を一般利用者へ合成しない。既存の中央復旧基盤を使う場合も、権限を持つ管理者端末内で必要なときだけ解除し、サービス固有のデータ鍵を保護する。
+
+生のPRF出力、復号鍵、秘密鍵、署名鍵、暗号化対象の平文をCloudflare・GitHub・ログへ渡さず、端末の永続領域にも平文保存しない。必要な鍵の解除・用途分離が済んだPRFは消去する。端末に保持できる非抽出CryptoKeyと暗号化済みの中断再開情報は、既存のlive session・credential・link・account・scope・version・epoch・鍵世代の照合条件に従う。PRF非対応・未準備・失効時に平文保存へfallbackせず、理由と対応可能な環境を表示する。
+
+### 一度の通常ログインと中断再開
+
+有効な認証と必要な鍵委譲が揃う通常経路では、一度のパスキー認証から準備・解除・利用へ進むことを受入条件とする。既存の登録・承認・サービス連携が有効なら、暗号化への移行だけを理由に再登録・追加の鍵承認操作を利用者へ要求しない。
+
+通信の一時失敗や応答喪失では、同じ有効セッションと端末内の解除済み鍵を使って安全に再試行する。読み取りと同一結果を保証できる操作に限定し、回数・待機・継続期限を制限する。書き込みは操作IDと保存結果を照合して、二重投稿や鍵・暗号文の置換を防ぐ。再試行のためにraw PRFを保持し続けたり、認証・再認証・継続許可の期限を延長したりしない。期限切れ・失効・本人確認が必要な重要操作では、理由を明示して既存の再認証条件を適用する。
+
+途中の失敗で、継続可能な認証・準備済み鍵を一律に破棄してログイン画面へ戻す設計にしない。端末変更やブラウザ保存領域の喪失でも、承認済みの本人認証・鍵・世代を検証し、保存済み暗号文と固定した元データを端末内で照合して安全に再開する。世代・権限・内容が一致しない場合は停止し、元データと保存済みの移行情報を保持する。
+
+### 既存データの移行と完了確認
+
+移行対象、既存データの保護、書込停止範囲、中断再開、復旧・rollback、切替条件をサービスの正本文書で定義する。投稿を止める前に、権限と必要な本人鍵・復旧鍵を確認する。認証・暗号方式・鍵管理の変更承認はAGENTS.mdの既存条件に従う。
+
+暗号文の保存件数だけで完了とせず、元データと保存結果の全件照合、実際のバックアップの隔離復元、端末内での全件復号と照合を通してから切り替える。未検証の元データを削除・上書きせず、切替と元データの整理は対象サービスの競合・世代・署名検証を維持して確定する。D1・写真本体など複数の対象がある場合は段階を分け、各段階の本番確認後に次へ進む。具体的な順序は各サービスの移行計画へ記載する。
+
+画面では準備中・移行中・委譲待ち・利用可能・失敗を区別し、大量処理には段階と件数を表示する。エラーは秘密情報を含まない段階・再開方法で示す。公開・CI成功、鍵準備、暗号文保存、復元検証、本番切替、実利用者のログイン・投稿確認はそれぞれ記録し、未確認の段階を完了扱いにしない。旧バックアップ・履歴・写真本体を含む保護範囲も明示する。
+
+受入確認では、通常ログイン一回での利用、新しい端末、本人用の鍵の初回準備、準備後の自動委譲、応答喪失・通信失敗・中断再開、失効・権限縮小の拒否、既存データの保存、実復元・切替、暗号化後の投稿を対象とする。合成試験、実端末確認、本番移行結果を区別する。家計簿・日記の個別方式と移行手順は以下および各サービスの正本文書を参照する。
+
+## 家計簿の端末側暗号化
+
+家計簿の通常ログインでも既存credentialのPRFを要求する。既存のHousehold用鍵、または同じcredentialのT-Cloud用暗号化済み秘密鍵を端末内で解除し、いずれもなければHousehold用鍵を自動準備する。所有者は家計鍵の初期化・同じ家計の承認済み共有先への委譲・既存データの暗号化を通常ログインから自動実行する。別のSecurity Center準備・家計鍵承認は不要。既存の利用者鍵がない閲覧者への初回委譲だけは、本人の自動準備後に所有者の次の通常利用を必要とする。新規・追加パスキーの招待・承認、role、失効を維持する。他の家計には委譲せず、復号鍵の保有とAPIの編集権限は分ける。
+
+暗号化済み利用者秘密鍵・家計鍵の委譲envelope・T-Cloud管理者公開鍵で包んだ復旧用家計鍵の正本はHousehold D1。通常の自動準備は内部 `SECURITY.getHouseholdAutomaticContext` と `HOUSEHOLD_AUTH.describeKeyScope` で現在のsession・Identity／credential／連携と家計scopeを照合する。T-Cloudからは暗号化済みenvelopeと公開鍵だけを再利用し、Household D1に解除方式と共に保持する。既存の `HOUSEHOLD_AUTH.cryptoKeys` による第一管理者の復旧操作も維持する。公開API本文の家計ID・roleを採用しない。生のPRF・秘密鍵・家計鍵は渡さない。既存T-Cloud管理者鍵、登録・承認・失効の方式は変更しない。バックアップ・移行・PRF非対応と実端末確認の境界は[家計簿README](../../household-worker/README.md#cloudflareに内容を渡さない端末側暗号化)を正本とする。
+
+## 日記の端末側暗号化と通常利用
+
+日記も初期登録・連携・失効・復旧をSecurity Centerへ集約し、通常は同じ登録済みパスキーでサービス専用鍵と信頼設定を自動解除する。公開JSONの保管・読込は要求しない。初回信頼はSecurityの本人認証済み応答／handoffから確立し、以後はPRF封印済み設定と端末内pinを検証する。Diary profileからの再初期化や、破損・巻き戻し時の自動リセットはしない。
+
+第一管理者かつ日記global ownerの通常ログインでは、既存T-Cloud管理者envelopeを必要時だけ端末内で解除し、承認済みの連携・権限内で日記専用鍵を委譲する。一般利用用アカウントに管理者復旧鍵を合成しない。T-Cloudの鍵・復旧方式を変更せず、データ鍵・セッション・認可はサービスごとに分離する。同じlive sessionの再訪は非抽出CryptoKeyの端末cacheで再開する。詳細は[日記D1暗号化](diary-encryption.md)を正本とする。

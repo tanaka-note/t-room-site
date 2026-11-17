@@ -1,0 +1,251 @@
+{
+  "base_commit": "2629fa12e88d9445557249d6b1c27a3f3369e1f2",
+  "snapshot_tree": "1d30b69a3e7053dc03ace9c258566a271b9a1f1f",
+  "patch_sha256": "ff7f8462e33f0d2a5eaaa0dc2a21477e5169d233bb69a881c7175c093bdcc266",
+  "patch_bytes": 361538,
+  "file_count": 60,
+  "files": [
+    {
+      "path": "diary-worker/e2ee/backup.mjs",
+      "sha256": "757e66870b98a702c7a5c2f49ea7e9748a1950cdef69b998297ffd2c3fa18064"
+    },
+    {
+      "path": "diary-worker/e2ee/cache.mjs",
+      "sha256": "4b5469e02e6300f10ed6b06d35c3a07061c2885c39e6dfda4ec1f1f2416b6f03"
+    },
+    {
+      "path": "diary-worker/e2ee/client.mjs",
+      "sha256": "b9f38937e09d72cdb88056cbfa7279946ee1358cf55f111808ad522f81f68cda"
+    },
+    {
+      "path": "diary-worker/e2ee/codec.mjs",
+      "sha256": "834bf729dbc6fcde0024f1bf7d090f7e44527a28219ac2c89ef2ce031adb0383"
+    },
+    {
+      "path": "diary-worker/e2ee/crypto.mjs",
+      "sha256": "75dac65ccf43420cf7c6e2c1731f34299df592c845e9c4d206134a9f6128b2f4"
+    },
+    {
+      "path": "diary-worker/e2ee/http.mjs",
+      "sha256": "18601751725d0b5b6067a2545d44e2a155508ffdf9b9be1f83d15bf84ac2f2a5"
+    },
+    {
+      "path": "diary-worker/e2ee/legacy-fences.sql",
+      "sha256": "a7838e4e17bc71d962cfb6c7cb9756713ec7115cd66a3f2f9ef113b61872f425"
+    },
+    {
+      "path": "diary-worker/e2ee/media-client.mjs",
+      "sha256": "d42201c55224e6f6d583705caaca08098d7a852b1a8bd0811ce7b39df8634696"
+    },
+    {
+      "path": "diary-worker/e2ee/media.mjs",
+      "sha256": "3ebe52257dce0cb0c059054c40197b597e27ef213aa0572fb84bf80d80196013"
+    },
+    {
+      "path": "diary-worker/e2ee/origin.mjs",
+      "sha256": "ca64a2b2fb51a21b716808dece46bdc91abef72b10577a0cbf9a2883cdb3f8e1"
+    },
+    {
+      "path": "diary-worker/e2ee/privacy.mjs",
+      "sha256": "21820fd43a7bc7ac6f555d970c6ebd136d69912383ddcf94aac6cec521241422"
+    },
+    {
+      "path": "diary-worker/e2ee/record.mjs",
+      "sha256": "2321a0cba91af85c855e9379a0af94ca8aef499e8ae85e728264f8f572b37f3c"
+    },
+    {
+      "path": "diary-worker/e2ee/rollout.mjs",
+      "sha256": "3cddf600fcae5bddca895ad44a38d1856b15ffcc70c481a5680ad8d9a46e5dfc"
+    },
+    {
+      "path": "diary-worker/e2ee/schema.sql",
+      "sha256": "35324db7993f645e51cf8fbc9f97a1484bde42850cf277fb5e61be36b87b176c"
+    },
+    {
+      "path": "diary-worker/e2ee/session.mjs",
+      "sha256": "6c5c8e9d88b9fb091e4a4d9852d4dec6fa86234e59eb0c53faebbee1b7154d5f"
+    },
+    {
+      "path": "diary-worker/e2ee/setup.mjs",
+      "sha256": "11741d5185cb25312dc89dbee9a713800b5dcd26e683f9b0d68e3a4e38d4ae40"
+    },
+    {
+      "path": "diary-worker/e2ee/snapshot.mjs",
+      "sha256": "392e4cce556f57cdbe8e4707c9a9e2d7fe5bf34b77de477ff4e69604f5925f10"
+    },
+    {
+      "path": "diary-worker/e2ee/store.mjs",
+      "sha256": "92a4f98efb1552d45626ec6bc1d003ec85adb99df744935bda9182254ca6b89a"
+    },
+    {
+      "path": "diary-worker/e2ee/ui-api.mjs",
+      "sha256": "2a8f5e33f78d60a78a2d7aa0b2a6301970bf7e465576e5c73e80f31abd7f190a"
+    },
+    {
+      "path": "diary-worker/public/crypto/e2ee/cache.mjs",
+      "sha256": "1bd0b42268ea9b5326ae0eb78a82f1df085f51a3b3494c7df48df0df3577dcb6"
+    },
+    {
+      "path": "diary-worker/public/crypto/e2ee/client.mjs",
+      "sha256": "b9f38937e09d72cdb88056cbfa7279946ee1358cf55f111808ad522f81f68cda"
+    },
+    {
+      "path": "diary-worker/public/crypto/e2ee/codec.mjs",
+      "sha256": "834bf729dbc6fcde0024f1bf7d090f7e44527a28219ac2c89ef2ce031adb0383"
+    },
+    {
+      "path": "diary-worker/public/crypto/e2ee/crypto.mjs",
+      "sha256": "75dac65ccf43420cf7c6e2c1731f34299df592c845e9c4d206134a9f6128b2f4"
+    },
+    {
+      "path": "diary-worker/public/crypto/e2ee/media-client.mjs",
+      "sha256": "d42201c55224e6f6d583705caaca08098d7a852b1a8bd0811ce7b39df8634696"
+    },
+    {
+      "path": "diary-worker/public/crypto/e2ee/policy.mjs",
+      "sha256": "1a0dd4129111e87089e6c40aad6178c0b7184bcfafc184a274209aa10f513ffc"
+    },
+    {
+      "path": "diary-worker/public/crypto/e2ee/privacy.mjs",
+      "sha256": "21820fd43a7bc7ac6f555d970c6ebd136d69912383ddcf94aac6cec521241422"
+    },
+    {
+      "path": "diary-worker/public/crypto/e2ee/record.mjs",
+      "sha256": "2321a0cba91af85c855e9379a0af94ca8aef499e8ae85e728264f8f572b37f3c"
+    },
+    {
+      "path": "diary-worker/public/crypto/e2ee/session.mjs",
+      "sha256": "6c5c8e9d88b9fb091e4a4d9852d4dec6fa86234e59eb0c53faebbee1b7154d5f"
+    },
+    {
+      "path": "diary-worker/public/crypto/e2ee/snapshot.mjs",
+      "sha256": "022eec54eae59533f1b9b765233bd8e90b9ed0ff519533e7081d6602839bff72"
+    },
+    {
+      "path": "diary-worker/public/crypto/e2ee/ui-api.mjs",
+      "sha256": "0db38290ff7f21c7925b33ddd50c90df0091923c0809124c474d8a0f6eafe814"
+    },
+    {
+      "path": "diary-worker/public/crypto/public/diary-rich-text.js",
+      "sha256": "30ffeba84098c95987250178044fbd7885750b279ae28cf62da09b5133303fc8"
+    },
+    {
+      "path": "diary-worker/public/crypto/public/diary-search.js",
+      "sha256": "c8b85ae38240ca0fa372de382a5b346469422cfc96717c1a7e29ab4173fbff55"
+    },
+    {
+      "path": "diary-worker/public/crypto/src/entry-domain.js",
+      "sha256": "71c42a4e855dfb0197e2e27d1649f5403a5c1bd13046ed4ff62374d61145f174"
+    },
+    {
+      "path": "diary-worker/public/diary-bootstrap.js",
+      "sha256": "f346899f37d19ff423a415452119c5100815d5ff96d715aa0d1464ca1656495e"
+    },
+    {
+      "path": "diary-worker/public/diary-encryption.js",
+      "sha256": "ef2cf9c0fcf2904e147b1ee3d8af4f0c13588d39c3304ed431e9531ca5982068"
+    },
+    {
+      "path": "diary-worker/public/diary-photo-upload.js",
+      "sha256": "118e331e84f57dad74ee3506c019b2f53c4d1ae5de28a514181a0e42aed3239b"
+    },
+    {
+      "path": "diary-worker/public/diary.js",
+      "sha256": "1f4d251644c94feacb21dfa7d204b5067eafa4205d126b2ec42be5fd35495ea8"
+    },
+    {
+      "path": "diary-worker/public/index.html",
+      "sha256": "7a7cc373754e9bde61b2ddb118d0e1bab62d1ad584561152f18b5ea27dde3310"
+    },
+    {
+      "path": "diary-worker/public/investment.html",
+      "sha256": "9443112a659bc3b5e7e85c6a16966a170a94ad62344dae289c607e932a03d53a"
+    },
+    {
+      "path": "diary-worker/public/origin-assets/pwa-auto-update.js",
+      "sha256": "936f4980f668ebca5885bf5275f61af510e0af1d243607c2d87ecf2c7ce9ca73"
+    },
+    {
+      "path": "diary-worker/public/service-worker.js",
+      "sha256": "191aceac80ecc55860c7bb0bd3bdc861bea7e6e3d7feae7934af74ce5418a79c"
+    },
+    {
+      "path": "diary-worker/src/index.js",
+      "sha256": "9b61e90c49e4c58853f425a9f9a22b08126dae6c52c22ad2de792815e9752882"
+    },
+    {
+      "path": "diary-worker/tests/e2ee/cache-codec.test.mjs",
+      "sha256": "571e5b68910ded06d52adfa75ede560858fb966a7dfa937a9e09128a3dd8cad8"
+    },
+    {
+      "path": "diary-worker/tests/e2ee/http.test.mjs",
+      "sha256": "6361cd3166660be948f452c775864b3c24a1fa5fce1e8dc632ee2c06b27c6007"
+    },
+    {
+      "path": "diary-worker/tests/e2ee/rollout.test.mjs",
+      "sha256": "0c77472041412a2ad0cd0e33253002a4661b3619c0b00521652a3b09008c59c0"
+    },
+    {
+      "path": "diary-worker/tests/e2ee/sqlite.mjs",
+      "sha256": "fa4c4e6edf63c8727575715aed01cffff54b4d1daf8c55f3c12ad5c7f099d1af"
+    },
+    {
+      "path": "diary-worker/tests/e2ee/system-fixture.mjs",
+      "sha256": "791b893dc11d8f6ccee69b060761ab61056ab442411bb7448ad849d2fc95f6fe"
+    },
+    {
+      "path": "security-worker/e2ee/diary-keys.sql",
+      "sha256": "d92f8c28c92086cc9bde094a9af8dc222f96a5678de09c92b246e3b0331a2e91"
+    },
+    {
+      "path": "security-worker/public/diary-crypto/e2ee/codec.mjs",
+      "sha256": "834bf729dbc6fcde0024f1bf7d090f7e44527a28219ac2c89ef2ce031adb0383"
+    },
+    {
+      "path": "security-worker/public/diary-crypto/e2ee/crypto.mjs",
+      "sha256": "75dac65ccf43420cf7c6e2c1731f34299df592c845e9c4d206134a9f6128b2f4"
+    },
+    {
+      "path": "security-worker/public/diary-crypto/e2ee/policy.mjs",
+      "sha256": "1a0dd4129111e87089e6c40aad6178c0b7184bcfafc184a274209aa10f513ffc"
+    },
+    {
+      "path": "security-worker/public/diary-crypto/e2ee/record.mjs",
+      "sha256": "2321a0cba91af85c855e9379a0af94ca8aef499e8ae85e728264f8f572b37f3c"
+    },
+    {
+      "path": "security-worker/public/diary-crypto/e2ee/recovery.mjs",
+      "sha256": "9fcf8a59a135103620e74f8ff91931935697e37c5634e78d0e3c68490a176e1f"
+    },
+    {
+      "path": "security-worker/public/diary-crypto/e2ee/setup.mjs",
+      "sha256": "11741d5185cb25312dc89dbee9a713800b5dcd26e683f9b0d68e3a4e38d4ae40"
+    },
+    {
+      "path": "security-worker/public/diary-setup.mjs",
+      "sha256": "3a2bd2149b5d78b7ab8f850affcae11dc8e8ed9f6433718cc71851f1378847f8"
+    },
+    {
+      "path": "security-worker/public/index.html",
+      "sha256": "9187d129762dfba5898039eb0e2f10f742a08f6818c0303a9ffad204fed6d79c"
+    },
+    {
+      "path": "security-worker/public/security.js",
+      "sha256": "f3c440ad9e2b8108488e4c004c2cf57806c60be10c1320ca4d1412827d22a06d"
+    },
+    {
+      "path": "security-worker/src/diary-keys.js",
+      "sha256": "e1cf24c7ba8f6f2285f3b989eabd834da6163a729936123bb36f16a1efe16787"
+    },
+    {
+      "path": "security-worker/src/index.js",
+      "sha256": "137eafe5aed0a62fd7f63c459fb8cd767226ac74cc315a328df542d4c14a54ad"
+    },
+    {
+      "path": "web-apps.json",
+      "sha256": "740781f528144baeed202bed98317859be64fa24d36a20acf10c8499a5b30eee"
+    }
+  ],
+  "verification": "git apply --cached --check succeeded; applied tree equals snapshot tree; actual worktree and index unchanged",
+  "status": "Recovered WIP; not implementation-complete or fully tested"
+}

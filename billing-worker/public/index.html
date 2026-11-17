@@ -62,35 +62,38 @@
   <title>請求書管理システム</title>
   <meta name="application-name" content="請求書管理システム">
   <meta name="theme-color" content="#577263">
-  <link rel="manifest" href="/billing/manifest.webmanifest?v=billing-b581e8e1c144">
-  <link rel="stylesheet" href="./billing.css?v=billing-b581e8e1c144">
-  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-b581e8e1c144">
-  <script src="./troom-date-picker.js?v=billing-b581e8e1c144" defer></script>
-  <script src="/diary/dialog-navigation.js?v=billing-b581e8e1c144" defer></script>
-  <script src="./billing.js?v=billing-b581e8e1c144" defer></script>
-  <meta name="troom-app-build" content="billing-b581e8e1c144">
+  <link rel="manifest" href="/billing/manifest.webmanifest?v=billing-d5f32d93ec0f">
+  <script src="./pwa-install.js?v=billing-d5f32d93ec0f"></script>
+  <link rel="stylesheet" href="./billing.css?v=billing-d5f32d93ec0f">
+  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-d5f32d93ec0f">
+  <script src="./troom-date-picker.js?v=billing-d5f32d93ec0f" defer></script>
+  <script src="/diary/dialog-navigation.js?v=billing-d5f32d93ec0f" defer></script>
+  <script src="./billing.js?v=billing-d5f32d93ec0f" defer></script>
+  <meta name="troom-app-build" content="billing-d5f32d93ec0f">
   <meta name="troom-auto-update" content="enabled">
+  <link rel="stylesheet" href="/billing/tlain-login.css?v=billing-d5f32d93ec0f">
+  <script src="/billing/tlain-login.js?v=billing-d5f32d93ec0f" defer></script>
 </head>
 <body>
   <main>
-    <section id="boot-view" class="login-view" aria-label="請求書管理システムを準備中" aria-busy="true">
-      <div class="login-card">
+    <section id="boot-view" class="login-view tlain-login-view" aria-label="請求書管理システムを準備中" aria-busy="true">
+      <div class="login-card tlain-login-card">
         <p class="eyebrow">T-lain PRIVATE</p>
         <h1>請求書管理システム</h1>
         <p class="login-copy">安全なログイン状態を確認しています…</p>
       </div>
     </section>
 
-    <section id="login-view" class="login-view" aria-labelledby="login-title" hidden>
-      <div class="login-card">
+    <section id="login-view" class="login-view tlain-login-view" aria-labelledby="login-title" hidden>
+      <div class="login-card tlain-login-card">
         <p class="eyebrow">T-lain PRIVATE</p>
         <h1 id="login-title">請求書管理システム</h1>
-        <p class="login-copy">登録済みのパスキーでログインしてください。</p>
+        <p class="login-copy tlain-login-guidance">パスキーを使ってログインしてください。</p>
         <div class="login-actions">
         <p id="login-operation-note" class="form-note" role="alert" hidden></p>
         <p id="login-error" class="error-message" role="alert"></p>
           <button id="passkey-login" class="button primary full passkey-login-button" type="button"><svg class="passkey-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg><span id="passkey-login-label" class="passkey-login-label">パスキーでログイン</span></button>
-          <p class="login-note">パスキーの登録・利用準備は<a href="/security/">Security Center</a>で行ってください。</p>
+          <a href="/security/">パスキーの登録・利用準備</a>
         </div>
       </div>
     </section>
@@ -125,10 +128,13 @@
             <option value="payment_notice">支払通知書</option>
           </select>
         </label>
-        <button id="print-button" class="button secondary" type="button">この月をPDF保存</button>
+        <button id="install-app-button" class="button secondary" data-pwa-install type="button">ホームへ追加</button>
+        <button id="print-button" class="button secondary" type="button" hidden>この月をPDF保存</button>
         <button id="new-entry-button" class="button primary owner-only" type="button" hidden>明細を追加</button>
         <button id="logs-button" class="button ghost owner-only" type="button" hidden>アカウント管理</button>
       </div>
+
+      <p id="install-app-message" class="install-message no-print" data-pwa-install-status role="status" aria-live="polite" hidden></p>
 
       <section id="report" class="report" aria-live="polite" aria-busy="false">
         <p id="summary-status" class="empty-message" role="status" hidden></p>
@@ -190,7 +196,7 @@
         </span>
       </div>
       <label>区分<select id="entry-category" required></select></label>
-      <label id="entry-description-label">内容<input id="entry-description" type="text" maxlength="100" required></label>
+      <label>金額（1円単位）<input id="entry-amount" type="text" inputmode="numeric" maxlength="16" autocomplete="off" required></label>
       <label id="settlement-direction-label" hidden>入金者
         <select id="settlement-direction">
           <option value="incoming">相手（発行先の本人）</option>
@@ -205,7 +211,7 @@
         </select>
       </label>
       <label id="other-direction-label" hidden>その他の扱い<select id="other-direction"><option value="plus">請求</option><option value="minus">減額</option></select></label>
-      <label>金額（1円単位）<input id="entry-amount" type="text" inputmode="numeric" maxlength="16" autocomplete="off" required></label>
+      <label id="entry-description-label">内容<input id="entry-description" type="text" maxlength="100" required></label>
       <label>備考<textarea id="entry-note" rows="3" maxlength="500"></textarea></label>
       <p id="entry-error" class="error-message" role="alert"></p>
       <div class="dialog-actions"><button class="button secondary" type="button" data-close-dialog="entry-dialog">キャンセル</button><button class="button primary" type="submit">保存</button></div>
@@ -258,7 +264,7 @@
       <div class="logs-wrap"><table><thead><tr><th>日時</th><th>操作</th><th>操作した人</th><th>対象者</th></tr></thead><tbody id="logs-body"></tbody></table></div>
     </div>
   </dialog>
-  <script src="/security/passkey-client.js?v=billing-b581e8e1c144" defer></script>
-  <script src="/assets/pwa-auto-update.js?v=billing-b581e8e1c144" defer></script>
+  <script src="/security/passkey-client.js?v=billing-d5f32d93ec0f" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=billing-d5f32d93ec0f" defer></script>
 </body>
 </html>

@@ -19,8 +19,10 @@ const response = (status, value, headers) => new Response(JSON.stringify(value),
 function fixture(handler) {
   waits = []; diagnostics = []; timers.clear();
   const state = { photoUploadActiveTasks: new Set(), photoUploadPendingCount: 0, editorPhotos: [] };
-  const manager = createPhotoUploadManager({ state, basePath: '/diary', getTargetEntryId: () => null,
-    api: async () => ({ uploadSession: { id: crypto.randomUUID() } }) });
+  const manager = createPhotoUploadManager({ state, basePath: '/diary', getTargetEntryId: () => null, fetchPhoto:(...args)=>globalThis.fetch(...args),
+    api: async (path, options) => path.endsWith('/commit')
+      ? { photos: options.body.photoIds.map(id => ({ id })) }
+      : { uploadSession: { id: crypto.randomUUID() } } });
   globalThis.fetch = handler;
   const photo = (bytes = 16) => ({ id: crypto.randomUUID(), fileName: 'private-name.jpg',
     originalFile: new File([new Uint8Array(bytes)], 'private-name.jpg', { type: 'image/jpeg' }),
@@ -113,6 +115,22 @@ try {
     };
     await manager.ensurePhotosUploaded([p]);
     assert.equal(p.uploadState, 'uploaded');
+  }
+  {
+    const posted = [];
+    const { manager, state, photo } = fixture(async (url, init) => {
+      posted.push(url); return response(200, { photo: { id: init.body.get('id') } });
+    });
+    const first = photo(); await manager.queueBackgroundPhotoUpload(first);
+    const firstSession = state.photoUploadSessionId;
+    await manager.commitStagedPhotos(7, [first]); assert.equal(state.photoUploadCommitted, true);
+    const more = [photo(), photo(), photo()];
+    await Promise.all(more.map(value => manager.queueBackgroundPhotoUpload(value)));
+    assert.notEqual(state.photoUploadSessionId, firstSession);
+    assert.ok(posted.slice(1).every(url => url.includes(state.photoUploadSessionId)));
+    assert.equal(new Set(posted.slice(1)).size, 1, 'concurrent new files share one new session');
+    await manager.ensurePhotosUploaded([first, ...more]); assert.equal(posted.length, 4, 'completed files are not sent again');
+    assert.equal(state.photoUploadPendingCount, 0); assert.equal(state.photoUploadActiveTasks.size, 0);
   }
   for (const [sizes, expected] of [
     [[16, 16, 16], 3],

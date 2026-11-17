@@ -41,11 +41,26 @@ const first = selected[0];
 const last = selected.at(-1);
 console.log(`records=${selected.length}`);
 console.log(`period=${first.date}..${last.date}`);
-console.log(`latest_total=${last.total}`);
+if(args.jsonOutput) {
+  if(args.local||args.remote)fail('--json-output と --local/--remote は同時に指定できません。');
+  const output={records:selected.map(({priority,...record})=>record)};
+  await writeFile(args.jsonOutput,JSON.stringify(output),'utf8');
+  console.log('暗号化取り込み用ファイルを作成しました。Security Centerで読み込んでください。');
+  process.exit(0);
+}
 
 if (!args.local && !args.remote) {
   console.log("dry-run: D1は変更していません。--local または --remote を指定すると取り込みます。");
   process.exit(0);
+}
+
+if(args.remote) {
+  const wrangler=path.resolve('node_modules/wrangler/bin/wrangler.js');
+  const check=spawnSync(process.execPath,[wrangler,'d1','execute','diary-db','--remote','--command',"SELECT name FROM sqlite_schema WHERE type='table' AND name='diary_e2ee_control'",'--json'],{cwd:process.cwd(),encoding:'utf8',shell:false});
+  if(check.status!==0)fail('暗号化移行の準備状態を確認できないため、平文の送信を停止しました。');
+  let state;try{state=JSON.parse(check.stdout);}catch{fail('暗号化移行の準備状態を確認できないため、平文の送信を停止しました。');}
+  if(!Array.isArray(state)||state.some(result=>result.success===false||!Array.isArray(result.results)))fail('暗号化移行の準備状態を確認できません。');
+  if(state.some(result=>result.results.length))fail('このDBは暗号化移行を準備済みです。--json-output でファイルを作成し、Security Centerから暗号化して取り込んでください。');
 }
 
 const temporaryDirectory = await mkdtemp(path.join(tmpdir(), "troom-investment-"));
@@ -175,6 +190,7 @@ function parseArgs(values) {
     else if (value === "--monthly") parsed.monthly = values[++index];
     else if (value === "--daily-dir") parsed.dailyDir = values[++index];
     else if (value === "--through") parsed.through = values[++index];
+    else if (value === "--json-output") parsed.jsonOutput = values[++index];
   }
   return parsed;
 }

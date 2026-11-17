@@ -1,10 +1,39 @@
 // Explicit durable-data allowlist. Schema drift fails closed until reviewed.
 export const SERVICES = {
+  "portfolio": {
+    "label": "資産運用報告",
+    "binding": "PORTFOLIO_DB",
+    "database": "portfolio-db",
+    "migration": "0001_portfolio.sql",
+    "tables": [
+      {
+        "name": "portfolio_accounts",
+        "columns": ["id", "display_name", "role", "is_active", "session_version"],
+        "sourceColumns": "id,display_name,role,is_active,session_version"
+      },
+      {
+        "name": "portfolio_state",
+        "columns": ["id", "revision", "metadata"],
+        "sourceColumns": "id,revision,metadata"
+      },
+      {
+        "name": "portfolio_records",
+        "columns": ["period", "time", "raw_market_value", "assets", "updated_at", "updated_by"],
+        "sourceColumns": "period,time,raw_market_value,assets,updated_at,updated_by"
+      },
+      {
+        "name": "portfolio_changes",
+        "columns": ["revision", "request_id", "fingerprint", "period", "previous_record", "saved_record", "updated_at", "account_id"],
+        "sourceColumns": "revision,request_id,fingerprint,period,previous_record,saved_record,updated_at,account_id"
+      }
+    ],
+    "knownTables": ["portfolio_accounts", "portfolio_state", "portfolio_records", "portfolio_changes"]
+  },
   "household": {
     "label": "家計簿",
     "binding": "HOUSEHOLD_DB",
     "database": "household-db",
-    "migration": "0004_asset_history_start.sql",
+    "migration": "0007_client_encryption.sql",
     "tables": [
       {
         "name": "household_accounts",
@@ -13,9 +42,10 @@ export const SERVICES = {
           "display_name",
           "role",
           "is_active",
-          "session_version"
+          "session_version",
+          "household_id"
         ],
-        "sourceColumns": "id,display_name,role,is_active,session_version"
+        "sourceColumns": "id,display_name,role,is_active,session_version,household_id"
       },
       {
         "name": "household_state",
@@ -42,16 +72,66 @@ export const SERVICES = {
           "request_id",
           "fingerprint",
           "response_json",
-          "created_at"
+          "created_at",
+          "household_id"
         ],
-        "sourceColumns": "request_id,fingerprint,response_json,created_at"
+        "sourceColumns": "request_id,fingerprint,response_json,created_at,household_id"
+      },
+      {
+        "name": "household_datasets",
+        "columns": [
+          "id",
+          "created_at",
+          "activated_at",
+          "retired_at",
+          "lease_expires_at",
+          "household_id",
+          "crypto_version"
+        ],
+        "sourceColumns": "id,created_at,activated_at,retired_at,lease_expires_at,household_id,crypto_version"
+      },
+      {
+        "name": "household_crypto_config",
+        "columns": [
+          "household_id",
+          "key_id",
+          "recovery_wrapped_key",
+          "recovery_public_key"
+        ],
+        "sourceColumns": "household_id,key_id,recovery_wrapped_key,recovery_public_key"
+      },
+      {
+        "name": "household_crypto_vaults",
+        "columns": [
+          "credential_id",
+          "identity_id",
+          "public_key_json",
+          "iv",
+          "ciphertext"
+        ],
+        "sourceColumns": "credential_id,identity_id,public_key_json,iv,ciphertext"
+      },
+      {
+        "name": "household_crypto_grants",
+        "columns": [
+          "household_id",
+          "credential_id",
+          "identity_id",
+          "service_link_id",
+          "wrapped_key"
+        ],
+        "sourceColumns": "household_id,credential_id,identity_id,service_link_id,wrapped_key"
       }
     ],
     "knownTables": [
       "household_accounts",
       "household_state",
       "household_records",
-      "household_requests"
+      "household_requests",
+      "household_datasets",
+      "household_crypto_config",
+      "household_crypto_vaults",
+      "household_crypto_grants"
     ]
   },
   "cloud": {
@@ -212,7 +292,7 @@ export const SERVICES = {
     "label": "Security Center",
     "binding": "SECURITY_DB",
     "database": "security-db",
-    "migration": "0027_calendar_service.sql",
+    "migration": "0030_portfolio_service.sql",
     "tables": [
       {
         "name": "security_identities",
@@ -959,3 +1039,13 @@ export const SERVICES = {
     ]
   }
 };
+
+// Archived plaintext Household generations remain readable for isolated
+// recovery. This specification is never used to capture a live database.
+export function archiveSpec(service,migration) {
+  const spec=SERVICES[service];
+  if(service!=='household'||migration!=='0006_independent_households.sql')return spec;
+  const tables=spec.tables.filter(t=>!t.name.startsWith('household_crypto_')).map(t=>t.name==='household_datasets'
+    ? {...t,columns:t.columns.filter(c=>c!=='crypto_version'),sourceColumns:t.sourceColumns.replace(',crypto_version','')} : t);
+  return {...spec,migration,tables,knownTables:tables.map(t=>t.name)};
+}

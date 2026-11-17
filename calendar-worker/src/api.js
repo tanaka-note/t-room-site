@@ -101,6 +101,7 @@ export async function calendarRequest(request,env){
     const url=new URL(request.url),path=url.pathname.slice('/calendar'.length);
     if(!url.pathname.startsWith('/calendar/api/'))throw new HttpError(404,'ページが見つかりません。');
     if(path==='/api/version'&&request.method==='GET')return json({service:'calendar',version:'0.1.0',build:env.BUILD_ID||'development'});
+  if(path==='/api/deployment-status'&&request.method==='GET'){const migrations=(await env.DB.prepare('SELECT name FROM d1_migrations ORDER BY id').all()).results.map(r=>r.name);return json({migrations});}
     requireSessionSecret(env.SESSION_SECRET,HttpError);
     if(request.method!=='GET'&&(request.method!=='POST'||request.headers.get('Origin')!==url.origin||!/^application\/json(?:;|$)/i.test(request.headers.get('Content-Type')||'')))throw new HttpError(403,'操作元を確認できません。');
     if(path==='/api/passkey/handoff'&&request.method==='POST')return await handoff(request,env);

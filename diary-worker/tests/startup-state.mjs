@@ -4,6 +4,32 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 const source = readFileSync(new URL('../public/diary.js', import.meta.url), 'utf8');
 
+test('album month filter retains selection and the total/monthly photo counts', async () => {
+  for (const [months, labels] of [
+    [[], ['すべて（0枚）']],
+    [[{ value: '2026-10', count: 0 }], ['すべて（0枚）', '2026年10月（0枚）']],
+    [[{ value: '2026-10', count: 999 }], ['すべて（999枚）', '2026年10月（999枚）']],
+    [[{ value: '2026-10', count: 1000 }], ['すべて（1,000枚）', '2026年10月（1,000枚）']],
+    [[{ value: '2026-10', count: '1234' }, { value: '2026-09', count: 423 }],
+      ['すべて（1,657枚）', '2026年10月（1,234枚）', '2026年9月（423枚）']]
+  ]) {
+    const state = { photoMonth: months[0]?.value || '', photoOrder: 'oldest' };
+    const elements = {
+      photoMonthFilter: {}, dateWheelDialog: { open: false },
+      photoSortButton: { setAttribute() {} }
+    };
+    const api = async path => { assert.equal(path, '/photos/meta'); return { months }; };
+    const load = new Function('state', 'elements', 'api', 'document', 'sessionGeneration',
+      ['loadPhotoMeta', 'renderPhotoMonthFilter', 'photoCountLabel', 'formatMonth', 'updatePhotoSortButton'].map(body).join('\n')
+        + '\nreturn loadPhotoMeta;')(state, elements, api, { createElement: () => ({}) }, 0);
+    await load();
+    assert.equal(elements.photoMonthFilter.textContent, labels[months.length ? 1 : 0]);
+    assert.deepEqual([...state.photoMonthCounts], months.map(item => [item.value, Number(item.count)]));
+    assert.equal(elements.photoMonthFilter.value, state.photoMonth);
+    assert.equal(elements.photoSortButton.hidden, !state.photoMonth);
+  }
+});
+
 function albumFixture({ total = 5001, pageMs = 0, overReturn = 0, emptyPage = false } = {}) {
   const state = { photos: [], photoOffset: 0, photoHasMore: false, photoLoading: false, photoRequestId: 0 };
   const node = () => ({ children: [], dataset: {}, setAttribute() {},
@@ -24,7 +50,7 @@ function albumFixture({ total = 5001, pageMs = 0, overReturn = 0, emptyPage = fa
     return { photos, hasMore: emptyPage || offset + photos.length < total };
   };
   const constants = [...source.matchAll(/  const CAMERA_ROLL_\w+ = \d+;/g)].map(match => match[0]).join('\n');
-  const functions = ['cancelCameraRollLoad', 'loadPhotos', 'renderCameraRoll'].map(body).join('\n');
+  const functions = ['cancelCameraRollLoad', 'loadPhotos', 'renderCameraRoll', 'renderCameraRollStatus'].map(body).join('\n');
   const loaded = new Function('state', 'elements', 'api', 'performance', 'document', 'window', `
     ${constants}
     const createEmpty = () => ({}), formatDate = value => value, formatShortDate = value => value;
@@ -57,11 +83,11 @@ test('album opens with 48 photos, expands to the total cap and cannot grow on re
 
 test('album month and search results share the cap, and reset frees the old list', async () => {
   const f = albumFixture();
-  f.state.photoMonth = '2026-10'; f.state.photoEntryQuery = 'tag'; f.state.photoFileNameQuery = 'file';
+  f.state.photoMonth = '2026-10'; f.state.photoEntryQuery = 'tag';
   await f.loadPhotos(true); await f.loadPhotos(false);
   assert.equal(f.state.photos.length, f.max);
   assert.ok(f.requests.every(r => r.url.searchParams.get('month') === '2026-10'
-    && r.url.searchParams.get('entryQuery') === 'tag' && r.url.searchParams.get('fileName') === 'file'));
+    && r.url.searchParams.get('entryQuery') === 'tag' && !r.url.searchParams.has('fileName')));
   const oldPhotos = f.state.photos;
   await f.loadPhotos(true);
   assert.notEqual(f.state.photos, oldPhotos);
@@ -120,6 +146,71 @@ test('album empty pages terminate even with hasMore; oversized pages cannot exce
   assert.equal(oversized.state.photos.length, oversized.max);
   assert.equal(new Set(oversized.state.photos.map(p => p.id)).size, oversized.max);
 });
+// Additional regression coverage for PR #131: edge counts, stale failures,
+// and the exact 8-second stop/resume boundary.
+test('album handles empty, tiny and page-boundary result sets without duplicate offsets', async () => {
+  for (const total of [0, 1, 47, 48, 49, 95, 96, 97, 143, 144, 145, 4799, 4800, 4801]) {
+    const f = albumFixture({ total });
+    await f.loadPhotos(true);
+    assert.equal(f.state.photos.length, Math.min(total, 48), 'initial count for ' + total);
+    assert.equal(f.requests[0].offset, 0);
+    assert.equal(f.requests[0].limit, 48);
+    if (!f.elements.cameraRollMore.hidden) await f.loadPhotos(false);
+    const expected = Math.min(total, f.max);
+    assert.equal(f.state.photos.length, expected, 'final count for ' + total);
+    assert.equal(f.state.photoOffset, expected, 'offset for ' + total);
+    assert.equal(f.state.photoHasMore, total > f.max, 'hasMore for ' + total);
+    assert.equal(f.elements.cameraRollMore.hidden, true, 'more hidden for ' + total);
+    assert.deepEqual(f.state.photos.map(p => p.id), Array.from({ length: expected }, (_, i) => i), 'photo IDs for ' + total);
+    assert.ok(f.requests.every(r => r.limit > 0 && r.limit <= 96 && r.offset + r.limit <= f.max),
+      'request limits for ' + total);
+    const count = f.requests.length;
+    if (total >= f.max) {
+      await f.loadPhotos(false);
+      assert.equal(f.requests.length, count, 'no request at the cap for ' + total);
+    }
+  }
+});
+
+test('an old album request rejection cannot overwrite the newly reset search state', async () => {
+  const f = albumFixture();
+  await f.loadPhotos(true);
+  f.pauseAt(48);
+  const oldLoad = f.loadPhotos(false);
+  assert.equal(f.pending.length, 1);
+  f.state.photoMonth = '2026-09';
+  f.pauseAt(-1);
+  f.failAt(48);
+  await f.loadPhotos(true);
+  assert.equal(f.state.photos.length, 48);
+  const freshStatus = f.elements.cameraRollStatus.textContent;
+  const requestCount = f.requests.length;
+  f.pending.shift()();
+  await oldLoad;
+  assert.equal(f.state.photos.length, 48);
+  assert.equal(f.state.photoOffset, 48);
+  assert.equal(f.elements.cameraRollStatus.textContent, freshStatus);
+  assert.equal(f.elements.cameraRollMore.disabled, false);
+  assert.equal(f.requests.length, requestCount, 'stale failed request must not continue pagination');
+  assert.equal(f.requests.at(-1).url.searchParams.get('month'), '2026-09');
+});
+
+test('album resumes exactly after the 8-second loading boundary', async () => {
+  for (const pageMs of [7999, 8000, 8001]) {
+    const f = albumFixture({ pageMs });
+    await f.loadPhotos(true);
+    await f.loadPhotos(false);
+    const expectedOffsets = pageMs < 8000 ? [0, 48, 144] : [0, 48];
+    assert.deepEqual(f.requests.map(r => r.offset), expectedOffsets, 'request offsets at ' + pageMs + 'ms');
+    const resumeAt = f.state.photoOffset;
+    assert.equal(f.elements.cameraRollMore.hidden, false);
+    assert.equal(f.elements.cameraRollMore.disabled, false);
+    await f.loadPhotos(false);
+    assert.equal(f.requests[expectedOffsets.length].offset, resumeAt, 'resume offset at ' + pageMs + 'ms');
+    assert.equal(new Set(f.state.photos.map(p => p.id)).size, f.state.photos.length, 'no duplicates at ' + pageMs + 'ms');
+  }
+});
+
 function body(name) {
   const start = source.indexOf(`  function ${name}(`);
   const asyncStart = source.indexOf(`  async function ${name}(`);
@@ -141,7 +232,7 @@ function positionFixture() {
   const elements = { appView: { hidden: false }, entryList: { querySelector: () => null },
     tagList: { scrollTo() {}, scrollBy() {} } };
   const controller = source.slice(source.indexOf('  let positionVersion ='), source.indexOf('  await boot();'));
-  const api = new Function('window', 'document', 'elements', `${controller}
+  const api = new Function('window', 'document', 'elements', `const diaryHistory=window.history; ${controller}
     function resetHeaderVisibilityTracking() {}
     ${body('restoreEntryListPosition')}
     ${body('restoreTagListPosition')}
@@ -190,8 +281,8 @@ test('synchronous list commit retains the latest user position', () => {
 function entriesFixture({ count = 120, monthly = false, expanded = false, hook = () => {} } = {}) {
   const state = { entries: [], entryMap: new Map(), requestId: 0, monthExpanded: expanded, month: '2026-10',
     query: 'keyword', tag: 'tag', dateFrom: '2026-10-01', dateTo: '2026-10-31', favoritePage: true };
-  const requests = [], renders = [];
-  const elements = { entryList: { replaceChildren() {} }, loadMore: {}, searchStatus: {} };
+  const requests = [], renders = [], placeholders = [];
+  const elements = { entryList: { replaceChildren(value) { placeholders.push(value); } }, loadMore: {}, searchStatus: {} };
   const api = async (path, options) => {
     requests.push({ path, options });
     const url = new URL(path, 'https://fixture.test');
@@ -202,7 +293,7 @@ function entriesFixture({ count = 120, monthly = false, expanded = false, hook =
     return path.startsWith('/bootstrap') ? { session: { authenticated: true }, households: {}, meta: {}, entries: result } : result;
   };
   const load = new Function('state', 'elements', 'api', 'renders', `
-    let sessionGeneration = 1;
+    let sessionGeneration = 1, remoteRefreshPending = false;
     const activeSessionContext = 'fixture', readingToolsReady = Promise.resolve();
     const window = { clearTimeout() {} };
     const isMonthlyView = () => ${monthly};
@@ -210,10 +301,10 @@ function entriesFixture({ count = 120, monthly = false, expanded = false, hook =
     const createEmpty = value => value, setBusy = () => {}, updateListHeading = () => {}, updateSearchStatus = () => {};
     const sessionContext = () => 'fixture', applyHouseholds = () => {}, applyMeta = () => {};
     const preserveViewport = render => render(), renderEntries = () => renders.push(state.entries.map(e => e.id));
-    const resetState = () => {}, showLogin = () => {};
+    const resetState = () => {}, showLogin = () => {}, showToast = () => {};
     ${body('loadEntries')}
     return { load: loadEntries, invalidateSession: () => { sessionGeneration++; } };`)(state, elements, api, renders);
-  return { state, requests, renders, ...load };
+  return { state, requests, renders, placeholders, ...load };
 }
 test('return fetches 50/50/20 once each and commits the complete list once', async () => {
   const f = entriesFixture({ count: 140 });
@@ -263,8 +354,8 @@ test('new navigation starts at zero before any wait; reload/history leave positi
     if (type === 'navigate') assert.equal(calls[0].behavior, 'instant');
     else assert.equal(window.history.scrollRestoration, 'manual');
   }
-  assert.match(bootstrap, /}, initialScrollIntent\);/);
-  assert.match(body('enterDiary'), /initialScrollIntent\.interrupted \? -1 : positionVersion/);
+  assert.match(bootstrap, /},\s*initialScrollIntent,\s*encryptionRuntime,\s*preparationMessage\);/);
+  assert.match(body('enterDiary'), /initialScrollIntent\.interrupted\s*&&\s*!encryptedNavigationType\s*\? -1 : positionVersion/);
   const style = readFileSync(new URL('../public/diary.css', import.meta.url), 'utf8');
   assert.match(style, /html \{[^}]*scroll-behavior: auto/);
 });
@@ -292,6 +383,8 @@ function returnViewFixture() {
   const pagehide = source.slice(source.indexOf('    window.addEventListener("pagehide",'),
     source.indexOf('    document.querySelector("#passkey-login")'));
   const api = new Function('window', 'document', 'state', 'elements', 'cancelPositionRestoration', `
+    const diaryHistory=window.history, diaryStorage=window.sessionStorage, encryptionRuntime=null;
+    const encryptedNavigationType=null, encryptedReferrer='';
     const BASE_PATH = '/diary', RETURN_VIEW_STORAGE_KEY = 'troom-diary-return-view-v1';
     const RETURN_VIEW_HISTORY_KEY = 'troomDiaryReturnView', RETURN_NAVIGATION_KEY = 'troomDiaryReturnNavigation';
     const RETURN_VIEW_MAX_AGE_MS = 1800000, RETURN_NAVIGATION_MAX_AGE_MS = 30000;
@@ -306,6 +399,7 @@ function returnViewFixture() {
     ${body('hasDiaryReturnNavigation')}
     ${body('isOwnedDiaryReturnView')}
     ${body('updateDiaryReturnNavigation')}
+    ${body('diaryListHref')}
     ${body('configureDiaryReturnNavigation')}
     ${body('isDiaryListPath')}
     let hide;
@@ -481,4 +575,12 @@ test('interrupted handoff survives pagehide but is rejected after visiting anoth
   assert.equal(f.take('household-a'), null);
   assert.equal(f.has('/diary/'), false);
   assert.equal(f.storage.get('troom-diary-return-view-v1'), snapshot);
+});
+
+test('remote refresh preserves the loaded page and its DOM until the complete replacement is ready',async()=>{
+ let observed;
+ const f=entriesFixture({count:80,hook:({state})=>{observed=state.entries.length;}});
+ f.state.entries=Array.from({length:50},(_,i)=>({id:i+1}));
+ await f.load(true,false,50,true);
+ assert.equal(observed,50);assert.equal(f.state.entries.length,50);assert.equal(f.renders.length,1);assert.deepEqual(f.placeholders,[]);
 });

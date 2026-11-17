@@ -1,0 +1,65 @@
+// Opaque account IDs and role flags are trusted session claims, never body input.
+export const publishedScope = (household) => `${household}:published`;
+export const investmentScope = household => `${household}:investment`;
+export const draftScope = (household) => `${household}:drafts`;
+export const preferencesScope = (household, account) =>
+  `${household}:preferences:${account}`;
+export function assertActor(actor, household) {
+  if (
+    !actor?.active ||
+    !actor.credentialId ||
+    !actor.accountId ||
+    !actor.households?.includes(household)
+  )
+    throw Object.assign(new Error("AccessDenied"), { status: 403 });
+}
+export function canRead(actor, row) {
+  if (!actor?.active || !actor.households?.includes(row.household))
+    return false;
+  if (row.state === "investment") return Boolean(actor.canViewInvestment);
+  if (row.state === "published") return true;
+  if (row.state === "draft") return Boolean(actor.canManageEntries);
+  if (row.state === "preferences") return row.author === actor.accountId;
+  if (row.state === "trash")
+    return Boolean(
+      actor.canViewTrash &&
+        retentionIds(actor, row.household).some((id) =>
+          row.retainedFor.includes(id),
+        ),
+    );
+  return false;
+}
+export const retentionIds = (actor, household) => [
+  actor.accountId,
+  ...(actor.trashAliases?.[household] || []),
+];
+export function trashAudience(actor, row, ownerAccount, independent = false) {
+  // Independent household owner is explicitly supplied by the trusted registry.
+  const result = [ownerAccount];
+  if (!independent && !actor.isGlobalOwner && row.author === actor.accountId)
+    result.push(actor.accountId);
+  return [...new Set(result)].sort();
+}
+export function trashScope(household, accounts) {
+  return `${household}:trash:${[...accounts].sort().join(":")}`;
+}
+export function assertWrite(actor, row) {
+  assertActor(actor, row.household);
+  if (
+    row.state === "investment"
+      ? !actor.isGlobalOwner || !canRead(actor,row)
+      : row.state === "preferences"
+      ? row.author !== actor.accountId
+      : !actor.canManageEntries || !canRead(actor, row)
+  )
+    throw Object.assign(new Error("AccessDenied"), { status: 403 });
+}
+
+export function scopeDefinition(scope,households) {
+  const household=Object.keys(households).find(id=>scope.startsWith(id+':'));
+  if(!household)throw new Error('UnknownScope');
+  const [kind,...ids]=scope.slice(household.length+1).split(':');
+  const state={published:'published',drafts:'draft',preferences:'preferences',trash:'trash',investment:'investment'}[kind];
+  if(!state||state==='preferences'&&ids.length!==1||state==='trash'&&!ids.length||['published','draft','investment'].includes(state)&&ids.length)throw new Error('UnknownScope');
+  return {household,scope,state,author:state==='preferences'?ids[0]:state==='investment'?households[household].owner:'',retainedFor:state==='trash'?ids:[]};
+}

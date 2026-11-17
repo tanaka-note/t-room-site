@@ -7,12 +7,15 @@ import { sessionCookieValue, sessionPolicyForAuthMethod } from '../../assets/ses
 import { recordSecurityAudit } from '../../assets/security-audit-worker.js';
 import { HttpError, text } from './domain.js';
 import { ledgerApi } from './api.js';
+import { keyBundle,keyConfig,manageKeys } from './keys.js';
+import { encryptedApi } from './encrypted-api.js';
+import {automaticKeysApi} from './automatic-keys.js';
 const BASE = '/household', SERVICE = 'household', COOKIE = 'troom_household_session';
 const encoder = new TextEncoder();
 const authorized = new WeakMap();
 const sessionVersion = (env, account) => `${env.SESSION_VERSION || '1'}:${account.session_version}`;
 const enabled = env => String(env.PASSKEY_ENABLED || 'false') === 'true';
-const accountRecord = (env,id) => ['owner','viewer'].includes(id) ? env.DB.prepare('SELECT * FROM household_accounts WHERE id=? AND is_active=1').bind(id).first() : null;
+const accountRecord = (env,id) => typeof id === 'string' && id.length <= 100 ? env.DB.prepare('SELECT * FROM household_accounts WHERE id=? AND is_active=1').bind(id).first() : null;
 
 export default class HouseholdWorker extends WorkerEntrypoint {
   async fetch(request) {
@@ -31,6 +34,14 @@ export default class HouseholdWorker extends WorkerEntrypoint {
 }
 
 export class SecurityIntegration extends WorkerEntrypoint {
+  async describeKeyScope(input) {
+    const account=await accountRecord(this.env,input?.serviceAccountId);
+    return account?{valid:true,householdId:account.household_id,role:account.role}:{valid:false};
+  }
+  async cryptoKeys(action,input) {
+    try { return await manageKeys(this.env.DB,action,input); }
+    catch(error) { if(error instanceof HttpError)return {error:error.message,status:error.status}; throw new Error('HouseholdKeyOperationFailed'); }
+  }
   async getSessionRuntimeState(input) {
     const account = await accountRecord(this.env,input?.serviceAccountId);
     return account ? { sessionVersion: sessionVersion(this.env, account), passkeyEnabled: enabled(this.env) } : null;
@@ -45,7 +56,7 @@ export class SecurityIntegration extends WorkerEntrypoint {
   }
 }
 function linkTarget(account) {
-  return { accountId: account.id, displayLabel: account.display_name, role: account.role, roleLabel: account.role === 'owner' ? 'オーナー' : '閲覧専用', privileged: account.role === 'owner', exclusive: account.role === 'owner', shared: account.role === 'viewer', rootFolderId: null };
+  return { accountId: account.id, displayLabel: account.display_name, role: account.role, roleLabel: account.role === 'owner' ? 'オーナー' : '閲覧専用', privileged: account.role === 'owner', exclusive: account.id === 'owner', shared: account.id !== 'owner', rootFolderId: null };
 }
 
 export async function handleRequest(request, env, context) {
@@ -56,26 +67,43 @@ export async function handleRequest(request, env, context) {
   const path = url.pathname.slice(BASE.length);
   if (!path.startsWith('/api/')) {
     if (!['GET', 'HEAD'].includes(request.method)) throw new HttpError(405, 'この操作は利用できません。');
-    if (!['/', '/index.html', '/household.css', '/household.js', '/asset-chart.js', '/dialog-navigation.js', '/troom-date-picker.js', '/troom-date-picker.css', '/date-wheel.js', '/date-wheel.css', '/manifest.webmanifest', '/icons/icon-32.png', '/icons/icon-180.png', '/icons/icon-192.png', '/icons/icon-512.png'].includes(path)) throw new HttpError(404, 'ページが見つかりません。');
+    if (!['/', '/index.html', '/tlain-login.css', '/tlain-login.js', '/household.css', '/household.js', '/household-crypto.mjs', '/household-domain.mjs', '/automatic-keys.mjs', '/encrypted-ledger.mjs', '/asset-chart.js', '/dialog-navigation.js', '/troom-date-picker.js', '/troom-date-picker.css', '/date-wheel.js', '/date-wheel.css', '/manifest.webmanifest', '/icons/icon-32.png', '/icons/icon-180.png', '/icons/icon-192.png', '/icons/icon-512.png'].includes(path)) throw new HttpError(404, 'ページが見つかりません。');
     const response = await env.ASSETS.fetch(new Request(new URL(path === '/index.html' ? '/' : path, url.origin), request));
     const headers = new Headers(response.headers); headers.set('Cache-Control', 'no-store');
     return new Response(response.body, { status: response.status, headers });
   }
+  if(path==='/api/deployment-status'&&request.method==='GET'){const migrations=(await env.DB.prepare('SELECT name FROM d1_migrations ORDER BY id').all()).results.map(r=>r.name);return json({migrations});}
   requireSessionSecret(env.SESSION_SECRET, HttpError);
   if (request.method !== 'GET') mutationGuard(request, url);
   if (path === '/api/passkey/handoff' && request.method === 'POST') return handoff(request, env, url);
   const session = await requireSession(request, env);
+  const sessionContext = request.headers.get('X-Household-Session');
+  // Bootstrap may discover the cookie, but an open page must remain bound to
+  // its session when another tab logs into a different household or role.
+  const legacyMain = session.contextVersion == null && session.householdId === 'main' && sessionContext === null;
+  if ((path !== '/api/session' || sessionContext !== null) && sessionContext !== session.sessionId && !legacyMain) throw new HttpError(401, 'ログイン状態が変わりました。再読み込みしてアカウントを確認してください。');
   authorized.set(request, session);
   if (path === '/api/session' && request.method === 'GET') {
     await audit(env, request, session, 'session_resume');
-    return json({ authenticated: true, displayName: (await accountRecord(env,session.serviceAccountId)).display_name, role: session.role });
+    return json({ authenticated: true, displayName: (await accountRecord(env,session.serviceAccountId)).display_name, role: session.role, expiresAt: session.expiresAt, sessionContext: session.sessionId,...await cryptoSession(env,session) });
   }
   if (path === '/api/logout' && request.method === 'POST') {
     if (!(await serviceRollingSession(env, SERVICE, session, 'end')).valid) throw new HttpError(503, 'ログアウトを完了できませんでした。');
     await audit(env, request, session, 'logout');
     return json({ ok: true }, 200, { 'Set-Cookie': `${COOKIE}=; Path=${BASE}; Max-Age=0; HttpOnly; SameSite=Strict${url.protocol === 'https:' ? '; Secure' : ''}` });
   }
+  if(path.startsWith('/api/keys/automatic'))return automaticKeysApi(request,env,path,session,readJson,audit);
+  if(env.ENCRYPTION_REQUIRED!=='false' || await keyConfig(env.DB,session.householdId))return encryptedApi(request,env,path,session,readJson,audit);
   return ledgerApi(request,env,path,session,readJson,audit);
+}
+
+async function cryptoSession(env,session) {
+  const bundle=await keyBundle(env.DB,session);
+  const cryptoRequired=env.ENCRYPTION_REQUIRED!=='false'||Boolean(await keyConfig(env.DB,session.householdId));
+  // Check every retained generation in the live, authorized Household scope.
+  // A fresh bootstrap can then skip a separate migration request on warm opens.
+  const encryptionMigrationRequired=Boolean(cryptoRequired&&session.role==='owner'&&(await env.DB.prepare('SELECT EXISTS(SELECT 1 FROM household_datasets WHERE household_id=? AND crypto_version=0) AS required').bind(session.householdId).first()).required);
+  return {cryptoRequired,keyBundle:bundle,encryptionMigrationRequired};
 }
 
 async function handoff(request, env, url) {
@@ -83,13 +111,13 @@ async function handoff(request, env, url) {
   const body = await readJson(request);
   const value = await env.SECURITY.redeemHandoff(text(body.handoffToken, 200, '認証情報'), SERVICE);
   const account = value ? await accountRecord(env,value.serviceAccountId) : null;
-  if (!value || !account || (account.role === 'owner' && value.identityId !== 'primary-admin') || value.cloudRootFolderId != null) throw new HttpError(401, '利用できるパスキーを確認できませんでした。');
+  if (!value || !account || (account.id === 'owner' && value.identityId !== 'primary-admin') || value.cloudRootFolderId != null) throw new HttpError(401, '利用できるパスキーを確認できませんでした。');
   const session = { service: SERVICE, identityId: value.identityId, credentialId: value.credentialId, serviceLinkId: value.serviceLinkId,
     serviceAccountId: account.id, role: account.role, passkeySessionEpoch: value.sessionEpoch, authMethod: 'passkey', rollingSessionVersion: ROLLING_SESSION_VERSION,
-    sessionId: crypto.randomUUID(), startedAt: new Date().toISOString(), sessionVersion: sessionVersion(env, account), expiresAt: Math.floor(Date.now() / 1000) + sessionPolicyForAuthMethod(env, 'passkey').ttlSeconds };
+    sessionId: crypto.randomUUID(), contextVersion: 1, startedAt: new Date().toISOString(), sessionVersion: sessionVersion(env, account), expiresAt: Math.floor(Date.now() / 1000) + sessionPolicyForAuthMethod(env, 'passkey').ttlSeconds };
   if (!(await serviceRollingSession(env, SERVICE, session, 'register')).valid) throw new HttpError(503, 'セッションを開始できませんでした。');
   await audit(env, request, session, 'passkey_login_success');
-  return json({ authenticated: true, displayName: account.display_name, role: account.role }, 200, { 'Set-Cookie': cookie(await signSession(session, env), url, env) });
+  return json({ authenticated: true, displayName: account.display_name, role: account.role, expiresAt: session.expiresAt, sessionContext: session.sessionId,...await cryptoSession(env,{...session,householdId:account.household_id}) }, 200, { 'Set-Cookie': cookie(await signSession(session, env), url, env) });
 }
 async function requireSession(request, env) {
   const raw = (request.headers.get('Cookie') || '').split(';').map(s => s.trim()).find(s => s.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
@@ -100,10 +128,11 @@ async function requireSession(request, env) {
   } catch { /* Invalid cookies never authorize. */ }
   const account = session ? await accountRecord(env,session.serviceAccountId) : null;
   if (!account || !enabled(env) || session.service !== SERVICE || session.authMethod !== 'passkey' || session.role !== account.role
-    || (account.role === 'owner' && session.identityId !== 'primary-admin') || session.sessionVersion !== sessionVersion(env, account)
+    || (account.id === 'owner' && session.identityId !== 'primary-admin') || session.sessionVersion !== sessionVersion(env, account)
     || !Number.isSafeInteger(session.expiresAt) || session.expiresAt <= Math.floor(Date.now() / 1000)
     || session.rollingSessionVersion !== ROLLING_SESSION_VERSION || !(await serviceRollingSession(env, SERVICE, session, 'read')).valid) throw new HttpError(401, 'パスキーでログインしてください。');
-  return session;
+  // Resolve the data scope from the current server-side service account only.
+  return { ...session, householdId: account.household_id };
 }
 async function audit(env, request, session, eventType) {
   await recordSecurityAudit(env, request, { service: SERVICE, eventType, outcome: 'success', identityId: session.identityId,
@@ -130,7 +159,7 @@ function mutationGuard(request, url) {
 async function readJson(request) {
   const reader = request.body?.getReader(); if (!reader) throw new HttpError(400, '入力内容を確認してください。');
   const chunks = []; let size = 0;
-  for (;;) { const { done, value } = await reader.read(); if (done) break; size += value.byteLength; if (size > 16 * 1024 * 1024) { await reader.cancel(); throw new HttpError(413, '入力内容が大きすぎます。'); } chunks.push(value); }
+  for (;;) { const { done, value } = await reader.read(); if (done) break; size += value.byteLength; if (size > 26 * 1024 * 1024) { await reader.cancel(); throw new HttpError(413, '入力内容が大きすぎます。'); } chunks.push(value); }
   try { const all = new Uint8Array(size); let offset = 0; for (const chunk of chunks) { all.set(chunk, offset); offset += chunk.length; }
     const value = JSON.parse(new TextDecoder().decode(all)); if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error(); return value;
   } catch { throw new HttpError(400, '入力内容を確認してください。'); }

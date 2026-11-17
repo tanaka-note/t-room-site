@@ -1,6 +1,9 @@
+import { diaryAutomaticVault,diaryAutomaticManagement,diaryLoginTrust,diaryKeyBundle,handleDiaryKeys,diaryKeysEnabled,diaryAuthenticationOrigins } from "./diary-keys.js";
 import { runState } from '../../backup-worker/src/monitor.js';
 import { archiveAuditEvents, archiveIfPending } from './audit-archive.js';
 import { healthKeyBundle, handleHealthKeys, healthMembershipStatement, assertHealthMemberAvailable } from './health-keys.js';
+import {handleHouseholdKeys} from './household-keys.js';
+import {householdAutomaticContext} from './household-automatic.js';
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName, identityDisplayName, auditDisplayNames, OWNER_DISPLAY_NAME } from "../../assets/account-display.mjs";
@@ -59,7 +62,8 @@ const SERVICE_REGISTRY = Object.freeze({
   payments: Object.freeze({ displayName: "支払明細", binding: "PAYMENTS_AUTH" }),
   household: Object.freeze({ displayName: "家計簿", binding: "HOUSEHOLD_AUTH" }),
   health: Object.freeze({ displayName: "体調管理", binding: "HEALTH_AUTH" }),
-  calendar: Object.freeze({ displayName: "カレンダー", binding: "CALENDAR_AUTH" })
+  calendar: Object.freeze({ displayName: "カレンダー", binding: "CALENDAR_AUTH" }),
+  portfolio: Object.freeze({ displayName: "資産運用報告", binding: "PORTFOLIO_AUTH" })
 });
 const PRIMARY_ADMIN_CORE_LINKS = new Set([
   "cloud\u0000admin\u0000",
@@ -78,7 +82,7 @@ const REGISTERED_IDENTITY_AUDIT_EVENTS = Object.freeze([
   "session_resume"
 ]);
 const ACTIVE_SESSION_START_EVENTS = new Set(["password_login_success", "passkey_login_success"]);
-const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "health", "payments", "household", "calendar"]);
+const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "health", "payments", "household", "calendar", "portfolio"]);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -161,13 +165,27 @@ export default class SecurityWorker extends WorkerEntrypoint {
   }
 
   async getBackupStatus(service) {
-    if (!['diary', 'security-audit'].includes(service)) throw new Error('UnknownBackup');
+    if (!['diary', 'diary-photos', 'diary-photo-verification', 'security-audit'].includes(service)) throw new Error('UnknownBackup');
     const result = await this.env.DB.prepare("SELECT event_id, occurred_at, event_type, details_json FROM security_audit_events WHERE target_type = 'backup' AND target_id = ? AND event_type LIKE 'backup_%' ORDER BY occurred_at DESC, event_id DESC LIMIT 40").bind(service).all();
-    return runState(result.results || [], { minute: service === 'diary' ? 25 : 41 });
+    return runState(result.results || [], { hour: service === 'diary-photo-verification' ? 11 : 3, minute: service === 'diary' ? 25 : service === 'diary-photos' ? 55 : service === 'diary-photo-verification' ? 45 : 41 });
+  }
+
+  async getDiaryKeyBundle(input) { return diaryKeyBundle(this.env,input); }
+
+  async prepareDiaryVault(input) {
+    return diaryAutomaticVault(this.env,input,validatePasskeySession,(eventType,identityId)=>storeAuditEvent(this.env,{service:'diary',eventType,outcome:'success',identityId,credentialId:input.credentialId,serviceLinkId:input.serviceLinkId,serviceAccountId:input.serviceAccountId,authMethod:'passkey',sessionId:input.sessionId}));
+  }
+
+  async manageDiaryKeys(input) {
+    return diaryAutomaticManagement(this.env,input,validatePasskeySession,(eventType,identityId)=>storeAuditEvent(this.env,{service:'diary',eventType,outcome:'success',identityId,credentialId:input.credentialId,serviceLinkId:input.serviceLinkId,serviceAccountId:input.serviceAccountId,authMethod:'passkey',sessionId:input.sessionId}));
   }
 
   async getHealthKeyBundle(input) {
     return healthKeyBundle(this.env, input);
+  }
+
+  async getHouseholdAutomaticContext(input) {
+    return householdAutomaticContext(this.env,input,validatePasskeySession);
   }
 
   async getAiBudgetPolicy(identityId) {
@@ -261,6 +279,29 @@ async function handleApi(request, env, url, path, context = null) {
   if (path === "/api/tcloud/envelope" && request.method === "POST") {
     requireMutation(request, url);
     return saveOwnTCloudEnvelope(request, env);
+  }
+  if(path.startsWith('/api/diary/')) {
+    if(!diaryKeysEnabled(env))throw new HttpError(404,'この機能はまだ有効になっていません。');
+    if(request.method!=='GET')requireMutation(request,url);
+    const actor=await requireActiveIdentitySession(request,env);
+    if(!['/api/diary/own','/api/diary/vault','/api/diary/trust'].includes(path)) {
+      const admin=await requireSecurityAdmin(request,env);
+      if(admin.identityId!==actor.identityId||admin.credentialId!==actor.credentialId)throw new HttpError(403,'管理者の本人確認が一致しません。');
+      requireFreshSecurityAdmin(admin);
+    }
+    try{return await handleDiaryKeys(path,request,env,actor,{readJson,json,audit:(eventType,identityId)=>writeLocalAudit(env,{eventType,identityId,service:'diary',outcome:'success',authMethod:'passkey'},request)});}
+    catch(error){if([400,403,404,409,423,428].includes(error.status))throw new HttpError(error.status,'日記の暗号鍵を確認できません。本人確認と承認状態を確認してください。');throw error;}
+  }
+  if (path.startsWith("/api/household/")) {
+    if(request.method!=="GET")requireMutation(request,url);
+    const actor=await requireActiveIdentitySession(request,env);
+    if(!["/api/household/own","/api/household/vault"].includes(path)) {
+      const admin=await requireSecurityAdmin(request,env);
+      if(admin.identityId!==actor.identityId||admin.credentialId!==actor.credentialId)throw new HttpError(403,"管理者の本人確認が一致しません。");
+      requireFreshSecurityAdmin(admin);
+    }
+    return handleHouseholdKeys(path,request,env,actor,{HttpError,readJson,json,
+      audit:(eventType,identityId)=>writeLocalAudit(env,{eventType,identityId,service:'household',outcome:'success',authMethod:'passkey'},request)});
   }
   if (path.startsWith("/api/health/")) {
     if (request.method !== "GET") requireMutation(request, url);
@@ -476,7 +517,7 @@ async function authenticationOptions(request, env) {
     ORDER BY c.registered_at ASC`);
   const rows = await (["security", "cloud"].includes(service) ? statement.all() : statement.bind(service).all());
   if (!(rows.results || []).length) throw new HttpError(404, "パスキーが登録されていません。管理者からの招待を確認してください。");
-  const extensions = ["security", "cloud", "health"].includes(service)
+  const extensions = (["security", "cloud", "health", "household"].includes(service)||(service==="diary"&&diaryKeysEnabled(env)))
     ? prfAuthenticationExtensions(rows.results)
     : undefined;
   const options = await generateAuthenticationOptions({
@@ -502,7 +543,7 @@ async function authenticationVerify(request, env, url) {
   }
   let verification;
   try {
-    verification = await verifyAuthentication(body.response, challenge.challenge, credential, env);
+    verification = await verifyAuthentication(body.response, challenge.challenge, credential, env,service);
   } catch (error) {
     await writeLocalAudit(env, { eventType: "passkey_authentication_failure", outcome: "failure", identityId: credential.identity_id, authMethod: "passkey", service }, request);
     throw error;
@@ -521,7 +562,7 @@ async function authenticationVerify(request, env, url) {
     outcome: "success", identityId: credential.identity_id, authMethod: "passkey", service
   }, request);
   const headers = await securitySessionHeaders(env, url, credential.identity_id, credentialId, Boolean(credential.is_security_admin));
-  return json({ authenticated: true, credentialId, prfSalt: credential.prf_salt, links: await Promise.all(links.map((link) => publicLink(env, link))) }, 200, headers);
+  return json({ authenticated: true, credentialId, prfSalt: credential.prf_salt, links: await Promise.all(links.map((link) => publicLink(env, link))),...(['security','diary'].includes(service)&&diaryKeysEnabled(env)?{diaryTrust:await diaryLoginTrust(env,credential.identity_id,credentialId)}:{}) }, 200, headers);
 }
 
 async function createHandoff(request, env) {
@@ -565,7 +606,7 @@ async function createHandoff(request, env) {
     (id, token_hash, identity_id, service_link_id, credential_id, session_epoch, expires_at, cloud_folder_scopes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(crypto.randomUUID(), await sha256(rawToken), identitySession.identityId, selected.id, identitySession.credentialId, runtime.epoch, nowSeconds() + HANDOFF_TTL_SECONDS, folderScopes ? JSON.stringify(folderScopes) : null).run();
-  return json({ handoffToken: rawToken, link: await publicLink(env, selected), tcloudKey: envelopes });
+  return json({ handoffToken: rawToken, link: await publicLink(env, selected), tcloudKey: envelopes,...(service==='diary'&&diaryKeysEnabled(env)?{diaryTrust:await diaryLoginTrust(env,identitySession.identityId,identitySession.credentialId)}:{}) });
 }
 
 async function setupStatus(request, env) {
@@ -1099,6 +1140,7 @@ async function identityDetail(id, env) {
   const firstCandidate = approvalCandidates[0] || null;
   const sessionState = await activeSessionState(env, id);
   return json({
+    diaryEncryptionEnabled:diaryKeysEnabled(env),
     identity: { id: identity.id, displayName: identityDisplayName(identity.id, identity.display_name), status: identity.status, isSecurityAdmin: Boolean(identity.is_security_admin), lastLoginAt: normalizeUtcTimestamp(identity.last_login_at), lastSeenAt: normalizeUtcTimestamp(identity.last_seen_at) },
     links: linkDetails,
     credentials: credentialRows.map((row) => ({ ...withUtcTimes(row), backed_up: Boolean(row.backed_up), prf_enabled: Boolean(row.prf_enabled) })),
@@ -1683,10 +1725,10 @@ async function verifyRegistration(response, expectedChallenge, env) {
   }
 }
 
-async function verifyAuthentication(response, expectedChallenge, credential, env) {
+async function verifyAuthentication(response, expectedChallenge, credential, env,service) {
   try {
     return await verifyAuthenticationResponse({
-      response, expectedChallenge, expectedOrigin: expectedOrigins(env), expectedRPID: rpId(env), requireUserVerification: true,
+      response, expectedChallenge, expectedOrigin: [...expectedOrigins(env),...diaryAuthenticationOrigins(env,service)], expectedRPID: rpId(env), requireUserVerification: true,
       credential: { id: credential.credential_id, publicKey: base64UrlToBytes(credential.public_key), counter: Number(credential.counter || 0), transports: parseJson(credential.transports_json, []) }
     });
   } catch (error) {
@@ -1809,10 +1851,10 @@ async function validateServiceLinks(env, input, { identityId = null, admin = nul
       }
       requireFreshSecurityAdmin(admin);
     }
-    if (service === "household") {
-      if (admin?.identityId !== PRIMARY_ADMIN_ID || !["owner", "viewer"].includes(accountId)
+    if (["household", "portfolio"].includes(service)) {
+      if (admin?.identityId !== PRIMARY_ADMIN_ID
         || (accountId === "owner" && (invitation || identityId !== PRIMARY_ADMIN_ID))) {
-        throw new HttpError(403, "家計簿の連携は第一管理者が設定し、編集用は本人だけが利用できます。");
+        throw new HttpError(403, `${SERVICE_REGISTRY[service].displayName}の連携は第一管理者が設定し、元の編集用は本人だけが利用できます。`);
       }
       requireFreshSecurityAdmin(admin);
     }
@@ -2317,7 +2359,7 @@ function endActiveSessionsStatement(env, reason, filter) {
 }
 
 function normalizeAuditEvent(input) {
-  const service = ["security", "cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "health", "payments", "household", "calendar"].includes(input?.service) ? input.service : "security";
+  const service = ["security", "cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "health", "payments", "household", "calendar", "portfolio"].includes(input?.service) ? input.service : "security";
   const outcome = ["success", "failure", "blocked", "cancelled", "info"].includes(input?.outcome) ? input.outcome : "info";
   const authMethod = ["password", "passkey", "system"].includes(input?.authMethod) ? input.authMethod : null;
   return {

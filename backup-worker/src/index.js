@@ -2,6 +2,8 @@ import { WorkerEntrypoint } from 'cloudflare:workers';
 import { SERVICES } from './registry.js';
 import { backupService } from './backup.js';
 import { getBackupSnapshot } from './browser.js';
+import { dispatchServices } from './dispatch.js';
+export { D1BackupWorkflow } from './workflow.js';
 
 export class BackupBrowserIntegration extends WorkerEntrypoint {
   async getSnapshot(options) { return getBackupSnapshot(this.env, options); }
@@ -10,6 +12,7 @@ export default {
   fetch() { return new Response('Not found', { status: 404 }); },
   async scheduled(controller, env) {
     const now = Number(controller?.scheduledTime) || Date.now();
+    if (env.D1_BACKUPS) return dispatchServices(env, now);
     const runId = crypto.randomUUID();
     const knownStates = new Set(['ok', 'failed', 'audit_unavailable', 'prune_failed']);
     const results = [];

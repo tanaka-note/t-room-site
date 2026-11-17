@@ -34,7 +34,8 @@
     { "binding": "PAYMENTS_AUTH", "service": "t-room-payments", "entrypoint": "SecurityIntegration" },
     { "binding": "HOUSEHOLD_AUTH", "service": "t-room-household", "entrypoint": "SecurityIntegration" },
     { "binding": "HEALTH_AUTH", "service": "t-room-health", "entrypoint": "SecurityIntegration" },
-    { "binding": "CALENDAR_AUTH", "service": "t-room-calendar", "entrypoint": "SecurityIntegration" }
+    { "binding": "CALENDAR_AUTH", "service": "t-room-calendar", "entrypoint": "SecurityIntegration" },
+    { "binding": "PORTFOLIO_AUTH", "service": "t-room-portfolio", "entrypoint": "SecurityIntegration" }
   ],
   "queues": {
     "consumers": [
@@ -51,6 +52,8 @@
     "crons": ["41 18 * * *", "17 * * * *"]
   },
   "vars": {
+    "DIARY_ENCRYPTION_ENABLED": "true",
+    "DIARY_ENCRYPTION_ORIGIN": "https://diary.tanaka-note.com",
     "RP_ID": "tanaka-note.com",
     "RP_NAME": "T-ROOM",
     "EXPECTED_ORIGIN": "https://tanaka-note.com,android:apk-key-hash:NMjpYcsdNTFmflccwgJaOy4a_EgajHQS3t4SiP_lBVY",

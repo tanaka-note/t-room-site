@@ -1,4 +1,18 @@
-export async function startDiary(initialSession, deferredInstallPrompt = null, onReady = () => deferredInstallPrompt, initialScrollIntent = {}) {
+export async function startDiary(initialSession, deferredInstallPrompt = null, onReady = () => deferredInstallPrompt, initialScrollIntent = {}, encryptionRuntime = null, initialNotice = '') {
+  const diaryStorage={getItem:key=>encryptionRuntime?encryptionRuntime.storage.getItem(key):window.sessionStorage.getItem(key),setItem:(key,value)=>encryptionRuntime?encryptionRuntime.storage.setItem(key,value):window.sessionStorage.setItem(key,value),removeItem:key=>encryptionRuntime?encryptionRuntime.storage.removeItem(key):window.sessionStorage.removeItem(key)};
+  const diaryHistory=encryptionRuntime?{get state(){return encryptionRuntime.history.state;},get scrollRestoration(){return encryptionRuntime.history.scrollRestoration;},set scrollRestoration(value){encryptionRuntime.history.scrollRestoration=value;},replaceState:(...args)=>encryptionRuntime.history.replaceState(...args),back:()=>encryptionRuntime.history.back()}:window.history;
+  let encryptedNavigationType=null,encryptedReferrer='',lastEncryptedSession=initialSession;
+  let encryptedRoute=location.pathname;
+  let remoteRefreshPending=false,remoteRefreshRunning=false;
+  const migrationYear = new URL(location.href).searchParams.get("takeout-migration");
+  if (["2023", "2024", "2025"].includes(migrationYear)) {
+    if (!initialSession?.authenticated || !initialSession.canManageEntries) throw new Error("日記を作成できるアカウントでログインしてください。");
+    const migrationUrl = new URL(`photo-migration.js${new URL(import.meta.url).search}`, import.meta.url);
+    await (await import(migrationUrl.href)).mountMigration(initialSession, Number(migrationYear), encryptionRuntime);
+    encryptionRuntime?.presented?.();
+    onReady();
+    return;
+  }
   // Keep the shared module on the same build URL as this app shell, including offline fallback.
   const scriptUrl = new URL(import.meta.url);
   let splitSearchTerms, createSearchExcerpt, highlightSearchTerms;
@@ -7,6 +21,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     replaceTextInRichDocument, sameTextMarks, tokenizeEditorDocument, tokenizeEntryTextWithLinks, withoutPhotoMarkers;
   let WEATHER_LABELS, createWeatherIcon, createUnsetWeatherIcon;
   let photoViewer, photoViewerPromise;
+  let photoSaver, photoSaverPromise;
   let viewerOpenRequest = 0;
   const readingToolsReady = Promise.all([
     import(new URL(`diary-search.js${scriptUrl.search}`, scriptUrl).href),
@@ -68,6 +83,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     query: "",
     month: japanDateString().slice(0, 7),
     monthExpanded: false,
+    archiveMonths: [],
+    archiveYear: "",
+    archiveMonth: "",
     dateFrom: "",
     dateTo: "",
     tag: "",
@@ -89,17 +107,24 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     editorToolbarOpen: false,
     dateDraft: null,
     dateWheelTarget: null,
+    dateWheelMode: "date",
     dateWheelTimers: {},
+    dateWheelScrollVersion: 0,
     searchTimer: null,
     searchComposing: false,
     entriesAbortController: null,
     requestId: 0,
     deleteMode: null,
+    photoDeleteTarget: null,
+    photoDeleteBusy: false,
+    deletedPhotoIds: new Set(),
+    photoDeletionUpdates: new Map(),
     editorPhotos: [],
     editorDeletedPhotoIds: new Set(),
     editorPendingPhotoDeletionIds: new Set(),
     photoPreparing: false,
     photoPreparationPromise: null,
+    pendingPhotoSave: null,
     photoUploading: false,
     photoUploadPendingCount: 0,
     photoUploadActiveTasks: new Set(),
@@ -113,8 +138,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     photoHasMore: false,
     photoEntryQuery: "",
     photoMonth: "",
+    photoMonthCounts: null,
+    albumVisit: 0,
     photoOrder: "newest",
-    photoFileNameQuery: "",
     photoRequestId: 0,
     photoLoading: false,
     photoSearchTimer: null,
@@ -236,6 +262,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     dateWheelCancel: document.querySelector("#date-wheel-cancel"),
     dateWheelDone: document.querySelector("#date-wheel-done"),
     dateWheelValue: document.querySelector("#date-wheel-value"),
+    dateWheelTitle: document.querySelector("#date-wheel-title"),
+    dateWheelAll: document.querySelector("#date-wheel-all"),
     dateWheelYear: document.querySelector("#date-wheel-year"),
     dateWheelMonth: document.querySelector("#date-wheel-month"),
     dateWheelDay: document.querySelector("#date-wheel-day"),
@@ -243,7 +271,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     photoEntrySearch: document.querySelector("#photo-entry-search"),
     photoMonthFilter: document.querySelector("#photo-month-filter"),
     photoSortButton: document.querySelector("#photo-sort-button"),
-    photoFileNameSearch: document.querySelector("#photo-file-name-search"),
     cameraRollStatus: document.querySelector("#camera-roll-status"),
     cameraRollGrid: document.querySelector("#camera-roll-grid"),
     cameraRollMore: document.querySelector("#camera-roll-more"),
@@ -255,7 +282,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     photoViewerStatus: document.querySelector("#photo-viewer-status"),
     photoViewerFile: document.querySelector("#photo-viewer-file"),
     photoOpenEntry: document.querySelector("#photo-open-entry"),
-    photoDownloadLow: document.querySelector("#photo-download-low"),
+    photoDelete: document.querySelector("#photo-delete"),
     photoDownloadOriginal: document.querySelector("#photo-download-original"),
     toast: document.querySelector("#toast")
   };
@@ -268,7 +295,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         import(new URL(`diary-photo-processing.js${scriptUrl.search}`, scriptUrl).href),
         import(new URL(`diary-photo-upload.js${scriptUrl.search}`, scriptUrl).href)
       ]).then(([processing, upload]) => {
-        photoUploadManager = upload.createPhotoUploadManager({ state, api, basePath: BASE_PATH,
+        photoUploadManager = upload.createPhotoUploadManager({ state, api,basePath:BASE_PATH,fetchPhoto:(...args)=>encryptionRuntime?encryptionRuntime.fetch(...args):globalThis.fetch(...args), onSessionExpired:()=>{resetState();showLogin("ログインの有効期限が切れました。");},
           getTargetEntryId: () => Number(elements.entryId.value || 0) || null });
         return processing;
       }).catch(error => { photoToolsPromise = null; throw error; });
@@ -329,6 +356,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     updateInstallButtonVisibility();
     elements.appView.inert = false;
     await startup;
+    if(initialNotice)showToast(initialNotice);
   }
 
   function loadPhotoViewer() {
@@ -344,14 +372,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
             get image() { return elements.photoViewerImage; },
             set image(value) { elements.photoViewerImage = value; },
             status: elements.photoViewerStatus, file: elements.photoViewerFile,
-            downloadLow: elements.photoDownloadLow, downloadOriginal: elements.photoDownloadOriginal
+            deleteButton: elements.photoDelete, downloadOriginal: elements.photoDownloadOriginal
           },
           selection: {
             get photos() { return state.viewerPhotos; },
             get index() { return state.viewerIndex; },
             set index(value) { state.viewerIndex = value; }
           },
-          formatDate, formatBytes
+          formatDate, formatBytes, canDelete: canDeleteViewerPhoto,
+          canNavigate: () => !state.photoDeleteBusy
         });
         photoViewer.bind();
         return photoViewer;
@@ -360,9 +389,36 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     return photoViewerPromise;
   }
 
+  async function openEncryptedRoute() {
+    encryptedRoute=location.pathname;
+    Object.assign(state,{query:'',month:japanDateString().slice(0,7),monthExpanded:false,archiveYear:'',archiveMonth:'',dateFrom:'',dateTo:'',tagQuery:'',trash:false,drafts:false,entries:[],offset:0,hasMore:false});
+    elements.searchInput.value='';elements.tagSearchInput.value='';
+    applyRouteState();await enterDiary(lastEncryptedSession);
+  }
   function bindEvents() {
+    if(encryptionRuntime){
+      window.addEventListener('troom-session-expired',()=>{resetState();showLogin('ログイン状態が変わりました。パスキーでログインし直してください。');});
+      window.addEventListener('troom-diary-data-changed',()=>{
+        if(!state.role)return;
+        remoteRefreshPending=true;void refreshRemoteView();
+      });
+      window.addEventListener('popstate',()=>{if(encryptedRoute===location.pathname||!isDiaryListPath(location.pathname))return;encryptedReferrer=encryptedRoute;encryptedNavigationType='back';void openEncryptedRoute().catch(error=>showToast(error.message));});
+      let snapshotTimer;
+      window.addEventListener('scroll',()=>{clearTimeout(snapshotTimer);snapshotTimer=setTimeout(()=>{if(!elements.appView.hidden&&!document.querySelector('dialog[open]'))storeDiaryReturnView('',{historyOnly:true});},150);},{passive:true});
+    }
+    const compactArchive = window.matchMedia("(max-width: 860px)");
+    const placeArchive = () => {
+      const parent = compactArchive.matches ? elements.diaryMain : elements.tagPanel.parentElement;
+      const next = compactArchive.matches ? elements.entryList.closest("section") : elements.tagPanel;
+      if (elements.archivePanel.parentElement === parent) return;
+      const position = !elements.appView.hidden ? captureEntryListPosition() : null;
+      parent.insertBefore(elements.archivePanel, next);
+      if (position) restoreEntryListPosition(position);
+    };
+    placeArchive();
+    compactArchive.addEventListener("change", placeArchive);
     document.addEventListener("troom:before-auto-update", (event) => {
-      if (hasEditorChanges() || state.editorComposing || state.photoPreparing || state.photoUploading || state.photoPickerActive || document.querySelector("dialog[open]")) {
+      if (hasEditorChanges() || state.editorComposing || state.photoPreparing || state.photoUploading || state.photoPickerActive || photoSaver?.busy || document.querySelector("dialog[open]")) {
         event.preventDefault();
       }
     });
@@ -374,7 +430,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         storeDiaryReturnView("", { historyOnly: true });
       }
       cancelPositionRestoration();
-      if ("scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
+      if ("scrollRestoration" in diaryHistory) diaryHistory.scrollRestoration = "auto";
     });
     document.querySelector("#passkey-login")?.addEventListener("click", handlePasskeyLogin);
     elements.householdSwitcher.addEventListener("change", changeActiveHousehold);
@@ -435,6 +491,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     });
     elements.entryList.addEventListener("click", handleEntryListClick);
     elements.archiveList.addEventListener("click", handleArchiveClick);
+    elements.archiveList.addEventListener("change", (event) => {
+      if (event.target.id !== "archive-year-select") return;
+      state.archiveYear = event.target.value;
+      renderArchive(state.archiveMonths);
+      if (!state.entriesAbortController) storeDiaryReturnView("", { historyOnly: true });
+    });
     elements.editEntryButton.addEventListener("click", () => {
       if (state.activeEntry) {
         const entry = state.activeEntry;
@@ -489,6 +551,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     bindDateInput(elements.entryDate);
     elements.dateWheelCancel.addEventListener("click", closeDateWheel);
     elements.dateWheelDone.addEventListener("click", applyDateWheel);
+    elements.dateWheelAll.addEventListener("click", () => {
+      if (state.dateWheelMode !== "month") return;
+      setPhotoMonth("");
+      closeDateWheel();
+    });
+    elements.photoMonthFilter.addEventListener("click", () => openDateWheel(elements.photoMonthFilter));
 
     bindDateWheel(elements.dateWheelYear, "year");
     bindDateWheel(elements.dateWheelMonth, "month");
@@ -508,8 +576,11 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.cameraRollMore.addEventListener("click", () => loadPhotos(false));
     elements.cameraRollGrid.addEventListener("click", handleCameraRollClick);
     elements.photoMonthFilter.addEventListener("change", () => {
+      const previousMonth = state.photoMonth;
       state.photoMonth = elements.photoMonthFilter.value;
+      renderPhotoMonthFilter();
       if (!state.photoMonth) state.photoOrder = "newest";
+      else if (!previousMonth) state.photoOrder = "oldest";
       updatePhotoSortButton();
       loadPhotos(true);
     });
@@ -525,13 +596,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       state.photoEntryQuery = elements.photoEntrySearch.value.trim();
       state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
     });
-    elements.photoFileNameSearch.addEventListener("input", () => {
-      cancelCameraRollLoad();
-      elements.cameraRollMore.disabled = true;
-      state.photoFileNameQuery = elements.photoFileNameSearch.value.trim();
-      state.photoSearchTimer = window.setTimeout(() => loadPhotos(true), 300);
-    });
+    document.querySelector("#photo-save-button").addEventListener("click", openPhotoSave);
     elements.photoOpenEntry.addEventListener("click", openViewerEntry);
+    elements.photoDelete.addEventListener("click", requestPhotoDeletion);
 
     document.querySelectorAll("[data-close-dialog]").forEach((button) => {
       button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
@@ -633,18 +700,32 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     const button = document.querySelector("#passkey-login");
     setBusy(button, true, "確認中…");
     elements.loginMessage.textContent = "";
+    let authentication;
     try {
-      const authentication = await TRoomPasskeys.authenticate("diary", choosePasskeyLink);
+      authentication = await TRoomPasskeys.authenticate("diary", choosePasskeyLink);
       if (attempt !== loginAttempt) return;
       const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
       if (attempt !== loginAttempt) return;
+      encryptionRuntime?.lock();encryptionRuntime=null;
+      let preparationMessage;
+      if(session.encryption) {
+        try {
+          const preparation=await import(new URL(`diary-key-preparation.js${scriptUrl.search}`,scriptUrl).href);
+          await preparation.prepareDiaryKeys(api,session,authentication,()=>{if(attempt!==loginAttempt)throw new Error('ログイン状態が変わりました。');},progress=>{elements.loginMessage.textContent=preparation.diaryMigrationMessage(progress);});
+        }catch(error){if(session.encryption.enabled||error.migrationPending||error.sessionChanged||[401,403].includes(error.status))throw error;preparationMessage='日記は利用できますが、暗号化の利用準備を完了できませんでした。対応するパスキーで次回ログイン時に再試行します。';}
+        if(session.encryption.enabled){const encryption=await import(new URL(`diary-encryption.js${scriptUrl.search}`,scriptUrl).href);encryptionRuntime=await encryption.startEncryptedDiary(session,authentication);}
+      }
+      if(attempt!==loginAttempt)return;
       await enterDiary(session);
+      if(preparationMessage)showToast(preparationMessage);
     } catch (error) {
       if (attempt !== loginAttempt) return;
       elements.loginMessage.textContent = /ID・パスワード/.test(error.message)
         ? "パスキーを利用できるブラウザで開いてください。復旧が必要な場合は管理者へご相談ください。"
         : error.message;
     } finally {
+      authentication?.prfOutput?.fill(0);
+      if(authentication){authentication.diaryPrivateKeys=null;authentication.diaryPreparedKeys=null;}
       if (attempt === loginAttempt) setBusy(button, false, "パスキーでログイン");
     }
   }
@@ -666,8 +747,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function enterDiary(session) {
+    if(encryptionRuntime)lastEncryptedSession=session;
+    photoSaver?.suspend();
     cancelPositionRestoration();
-    const restoreVersion = initialScrollIntent.interrupted ? -1 : positionVersion;
+    const restoreVersion = initialScrollIntent.interrupted&&!encryptedNavigationType ? -1 : positionVersion;
     const generation = ++sessionGeneration;
     activeSessionContext = sessionContext(session);
     state.role = session.role;
@@ -680,10 +763,11 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.canViewTrash = Boolean(session.canViewTrash);
     state.canPermanentlyDelete = Boolean(session.canPermanentlyDelete);
     state.canViewInvestment = Boolean(session.canViewInvestment);
-    const returnView = takeDiaryReturnView(state.activeHouseholdId);
-    if (!returnView && "scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
+    clearArchive();
+    const returnView = takeDiaryReturnView(state.activeHouseholdId,encryptedNavigationType==='back');
+    if (!returnView && "scrollRestoration" in diaryHistory) diaryHistory.scrollRestoration = "auto";
     if (returnView) {
-      if ("scrollRestoration" in window.history) window.history.scrollRestoration = "manual";
+      if ("scrollRestoration" in diaryHistory) diaryHistory.scrollRestoration = "manual";
       await readingToolsReady;
       if (generation !== sessionGeneration) return;
       applyDiaryReturnView(returnView);
@@ -699,7 +783,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.householdSwitcherWrap.hidden = true;
     elements.householdSwitcher.replaceChildren();
     elements.entryList.replaceChildren(createEmpty("読み込んでいます..."));
-    elements.archiveList.replaceChildren();
     elements.tagList.replaceChildren();
     elements.bootView.hidden = true;
     elements.loginView.hidden = true;
@@ -731,6 +814,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function changeActiveHousehold() {
+    photoSaver?.suspend();
     const householdId = elements.householdSwitcher.value;
     elements.householdSwitcher.disabled = true;
     try {
@@ -740,7 +824,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       state.activeHouseholdId = householdId;
       updateDiaryReturnNavigation();
       state.availableTags = [];
-      elements.archiveList.replaceChildren();
+      clearArchive();
       elements.tagList.replaceChildren();
       state.trash = false;
       state.drafts = false;
@@ -751,6 +835,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       state.dateTo = "";
       state.tag = "";
       state.tagQuery = "";
+      elements.searchInput.value = "";
       elements.dateFrom.value = "";
       elements.dateTo.value = "";
       elements.tagSearchInput.value = "";
@@ -798,8 +883,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       ...["isGlobalOwner", "canManageEntries", "canViewTrash", "canPermanentlyDelete", "canViewInvestment"].map(key => Boolean(session[key]))]);
   }
 
-  async function loadEntries(reset, bootstrap = false, returnEntryCount = 0) {
-    if (!bootstrap) cancelPositionRestoration();
+  async function refreshRemoteView() {
+    if(!remoteRefreshPending||remoteRefreshRunning||!state.role||state.entriesAbortController||state.searchTimer||state.searchComposing)return;
+    remoteRefreshPending=false;remoteRefreshRunning=true;
+    try{await Promise.all([loadMeta(true),loadEntries(true,false,Math.max(state.entries.length,isMonthlyView()?5:20),true)]);}
+    finally{remoteRefreshRunning=false;if(remoteRefreshPending)window.setTimeout(()=>void refreshRemoteView(),0);}
+  }
+
+  async function loadEntries(reset, bootstrap = false, returnEntryCount = 0, background = false) {
+    if (!bootstrap && !background) cancelPositionRestoration();
     const generation = sessionGeneration;
     window.clearTimeout(state.searchTimer);
     state.searchTimer = null;
@@ -816,7 +908,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     let nextOffset = reset ? 0 : state.offset;
     let hasMore = true;
     let pageGuard = 0;
-    if (reset) {
+    if (reset && !background) {
       state.offset = 0;
       state.entries = [];
       state.entryMap.clear();
@@ -871,16 +963,19 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       for (const entry of state.entries) state.entryMap.set(entry.id, entry);
       state.offset = state.entries.length;
       state.hasMore = hasMore;
-      if (bootstrap) preserveViewport(() => renderEntries(reset ? 0 : previousEntryCount));
+      if (bootstrap || background) preserveViewport(() => renderEntries(reset ? 0 : previousEntryCount));
       else renderEntries(reset ? 0 : previousEntryCount);
+      encryptionRuntime?.presented?.();
       updateSearchStatus();
       return true;
     } catch (error) {
       if (requestId !== state.requestId) return;
+      if(background){showToast(error.message);return false;}
       elements.entryList.replaceChildren(createEmpty(error.message));
       elements.searchStatus.textContent = error.message;
     } finally {
       if (state.entriesAbortController === abortController) state.entriesAbortController = null;
+      if(remoteRefreshPending)window.setTimeout(()=>void refreshRemoteView(),0);
       if (requestId === state.requestId) {
         elements.loadMore.hidden = monthlyView ? state.monthExpanded || !state.hasMore : !state.hasMore;
         setBusy(elements.loadMore, false, monthlyView ? "もっと見る" : "さらに表示");
@@ -923,7 +1018,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     resetHeaderVisibilityTracking();
   }
 
-  function rememberDiaryReturnViewFromNavigation(event) {
+  async function rememberDiaryReturnViewFromNavigation(event) {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     if (!isDiaryListRoute() || elements.appView.hidden) return;
     const link = event.target.closest("a[href]");
@@ -939,7 +1034,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     if ((link === elements.tagPageBack || (link === elements.favoritesLink && state.favoritePage))
       && hasDiaryReturnNavigation(destination.pathname)) {
       event.preventDefault();
-      window.history.back();
+      diaryHistory.back();
       return;
     }
     if (destination.pathname === window.location.pathname) return;
@@ -947,6 +1042,11 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     // need their source path to validate the one-shot return handoff.
     link.referrerPolicy = "same-origin";
     storeDiaryReturnView(destination.pathname);
+    if(encryptionRuntime){
+      event.preventDefault();await encryptionRuntime.flush();
+      if(isDiaryListPath(destination.pathname)){encryptedReferrer=location.pathname;encryptedNavigationType='forward';window.history.pushState({},'',destination.href);await openEncryptedRoute();}
+      else window.location.assign(destination.href);
+    }
   }
 
   function storeDiaryReturnView(destinationPath = "", { historyOnly = false } = {}) {
@@ -961,6 +1061,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       query: state.query,
       month: state.month,
       monthExpanded: state.monthExpanded,
+      archiveYear: state.archiveYear,
       dateFrom: state.dateFrom,
       dateTo: state.dateTo,
       tagQuery: state.tagQuery,
@@ -972,8 +1073,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       tagListPosition: captureTagListPosition()
     };
     try {
-      window.history.replaceState({
-        ...(window.history.state || {}),
+      diaryHistory.replaceState({
+        ...(diaryHistory.state || {}),
         [RETURN_VIEW_HISTORY_KEY]: returnView
       }, "", window.location.href);
     } catch {
@@ -983,8 +1084,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     // navigation may replace the shared source snapshot and navigation token.
     if (historyOnly) return;
     try {
-      window.sessionStorage.setItem(RETURN_VIEW_STORAGE_KEY, JSON.stringify(returnView));
-      window.sessionStorage.setItem(RETURN_NAVIGATION_KEY, JSON.stringify({
+      diaryStorage.setItem(RETURN_VIEW_STORAGE_KEY, JSON.stringify(returnView));
+      diaryStorage.setItem(RETURN_NAVIGATION_KEY, JSON.stringify({
         savedAt: returnView.savedAt, sourcePath: returnView.routePath, destinationPath
       }));
     } catch {
@@ -993,6 +1094,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function isNewDiaryNavigation() {
+    if(encryptionRuntime&&encryptedNavigationType)return encryptedNavigationType==='forward';
     const navigationType = window.performance.getEntriesByType("navigation")[0]?.type;
     return navigationType !== "back_forward" && navigationType !== "reload";
   }
@@ -1002,26 +1104,26 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       // Reopening the same start URL can retain the previous history.state.
       // Discard only this page's return snapshot; child pages still need the source snapshot.
       try {
-        if (window.history.state?.[RETURN_VIEW_HISTORY_KEY]) {
-          const historyState = { ...window.history.state };
+        if (diaryHistory.state?.[RETURN_VIEW_HISTORY_KEY]) {
+          const historyState = { ...diaryHistory.state };
           delete historyState[RETURN_VIEW_HISTORY_KEY];
-          window.history.replaceState(historyState, "", window.location.href);
+          diaryHistory.replaceState(historyState, "", window.location.href);
         }
-        const storedView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+        const storedView = JSON.parse(diaryStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
         const routePath = storedView?.version === 1 ? `${BASE_PATH}/` : storedView?.routePath;
-        if (routePath === window.location.pathname) window.sessionStorage.removeItem(RETURN_VIEW_STORAGE_KEY);
+        if (routePath === window.location.pathname) diaryStorage.removeItem(RETURN_VIEW_STORAGE_KEY);
       } catch {
         // A fresh opening must not restore a position even when storage is unavailable.
       }
       return null;
     }
-    const historyView = window.history.state?.[RETURN_VIEW_HISTORY_KEY];
+    const historyView = diaryHistory.state?.[RETURN_VIEW_HISTORY_KEY];
     if (isUsableDiaryReturnView(historyView, householdId, window.location.pathname)) {
       return historyView;
     }
     let returnView = null;
     try {
-      returnView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+      returnView = JSON.parse(diaryStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
     } catch {
       return null;
     }
@@ -1029,7 +1131,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     if (!isUsableDiaryReturnView(returnView, householdId, expectedRoute)) return null;
     if (returnView.version === 2 && !isDiaryReturnReferrer(returnView.destinationPath)) return null;
     try {
-      window.sessionStorage.removeItem(RETURN_VIEW_STORAGE_KEY);
+      diaryStorage.removeItem(RETURN_VIEW_STORAGE_KEY);
     } catch {
       // 読み取り済み状態を消せなくても、期限とrouteで誤適用を防ぎます。
     }
@@ -1045,6 +1147,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function isDiaryReturnReferrer(destinationPath) {
+    if(encryptionRuntime&&encryptedReferrer)return encryptedReferrer===destinationPath;
     try {
       const referrer = new URL(document.referrer);
       return referrer.origin === window.location.origin && referrer.pathname === destinationPath;
@@ -1057,6 +1160,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.query = splitSearchTerms(returnView.query).join(" ");
     state.month = /^\d{4}-\d{2}$/.test(returnView.month) ? returnView.month : currentJapanMonth();
     state.monthExpanded = Boolean(returnView.monthExpanded);
+    state.archiveYear = /^\d{4}$/.test(returnView.archiveYear) ? returnView.archiveYear : "";
     state.dateFrom = /^\d{4}-\d{2}-\d{2}$/.test(returnView.dateFrom) ? returnView.dateFrom : "";
     state.dateTo = /^\d{4}-\d{2}-\d{2}$/.test(returnView.dateTo) ? returnView.dateTo : "";
     state.tagQuery = String(returnView.tagQuery || "").normalize("NFKC").trim().toLocaleLowerCase("ja-JP").slice(0, 100);
@@ -1118,7 +1222,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     cancelPositionRestoration();
     // BFCache retains the complete DOM, filters and scroll position. Let the
     // browser restore that live page instead of replaying an older snapshot.
-    if ("scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
+    if ("scrollRestoration" in diaryHistory) diaryHistory.scrollRestoration = "auto";
     resetHeaderVisibilityTracking();
   }
 
@@ -1133,15 +1237,16 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function hasDiaryReturnNavigation(destinationPath) {
     let returnView = null;
     try {
-      returnView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+      returnView = JSON.parse(diaryStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
     } catch {
       return false;
     }
-    return returnView?.version === 2
+    const href = diaryListHref(destinationPath);
+    return Boolean(href) && returnView?.version === 2
       && returnView.destinationPath === window.location.pathname
-      && returnView.routePath === destinationPath
+      && diaryListHref(returnView.routePath) === href
       && isOwnedDiaryReturnView(returnView)
-      && window.history.state?.[RETURN_NAVIGATION_KEY] === returnView.savedAt
+      && diaryHistory.state?.[RETURN_NAVIGATION_KEY] === returnView.savedAt
       && Date.now() - returnView.savedAt <= RETURN_VIEW_MAX_AGE_MS;
   }
 
@@ -1164,13 +1269,14 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     await loadEntries(false);
   }
 
-  async function loadMeta() {
+  async function loadMeta(background = false) {
     const generation = sessionGeneration;
     try {
       const result = await api("/meta");
-      if (generation === sessionGeneration) applyMeta(result);
+      if (generation === sessionGeneration) preserveViewport(()=>applyMeta(result));
     } catch (error) {
       if (generation !== sessionGeneration) return;
+      if(background){showToast(error.message);return;}
       elements.archiveList.replaceChildren(createEmpty(error.message));
       elements.tagList.replaceChildren(createEmpty(error.message));
     }
@@ -1269,24 +1375,65 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.entryList.replaceChildren(...cards);
   }
 
+  function clearArchive() {
+    state.archiveMonths = [];
+    state.archiveYear = "";
+    state.archiveMonth = "";
+    elements.archiveList.replaceChildren();
+  }
+
   function renderArchive(months) {
+    const monthChanged = state.archiveMonth && state.archiveMonth !== state.month;
+    state.archiveMonths = months;
+    state.archiveMonth = state.month;
     if (!months.length) {
+      state.archiveYear = "";
       elements.archiveList.replaceChildren(createEmpty("年月別の記録はまだありません。"));
       return;
     }
-    elements.archiveList.replaceChildren(...months.map((item) => {
+    const years = [...new Set(months.map(item => item.value.slice(0, 4)))].sort().reverse();
+    const selectedYear = state.month.slice(0, 4);
+    if (monthChanged || !years.includes(state.archiveYear)) {
+      state.archiveYear = years.includes(selectedYear) ? selectedYear : years[0];
+    }
+    const heading = document.createElement(years.length > 1 ? "label" : "p");
+    heading.className = "archive-year";
+    if (years.length > 1) {
+      const label = document.createElement("span");
+      label.textContent = "年を選ぶ";
+      const select = document.createElement("select");
+      select.id = "archive-year-select";
+      select.replaceChildren(...years.map(year => {
+        const option = document.createElement("option");
+        option.value = year;
+        option.textContent = `${year}年`;
+        option.selected = year === state.archiveYear;
+        return option;
+      }));
+      heading.append(label, select);
+    } else heading.textContent = `${state.archiveYear}年`;
+    const grid = document.createElement("div");
+    grid.className = "archive-month-grid";
+    grid.setAttribute("role", "group");
+    grid.setAttribute("aria-label", `${state.archiveYear}年の記録がある月`);
+    grid.replaceChildren(...months.filter(item => item.value.startsWith(`${state.archiveYear}-`))
+      .sort((a, b) => a.value.localeCompare(b.value)).map((item) => {
       const button = document.createElement("button");
       button.className = "archive-button";
       button.type = "button";
       button.dataset.month = item.value;
-      button.setAttribute("aria-pressed", String(state.month === item.value));
+      button.setAttribute("aria-pressed", String(isMonthlyView() && state.month === item.value));
+      button.setAttribute("aria-label", `${formatMonth(item.value)}、${item.count}件`);
       const label = document.createElement("span");
-      label.textContent = formatMonth(item.value);
+      label.textContent = `${Number(item.value.slice(5))}月`;
       const count = document.createElement("small");
       count.textContent = `${item.count}件`;
       button.append(label, count);
       return button;
     }));
+    const focusedYear = document.activeElement?.id === "archive-year-select";
+    elements.archiveList.replaceChildren(heading, grid);
+    if (focusedYear) elements.archiveList.querySelector("select")?.focus({ preventScroll: true });
   }
 
   function renderTags(tags) {
@@ -1489,7 +1636,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.drafts = false;
     state.favoritePage = false;
     if (window.location.pathname !== `${BASE_PATH}/`) {
-      window.history.replaceState({}, "", `${BASE_PATH}/`);
+      diaryHistory.replaceState({}, "", `${BASE_PATH}/`);
       applyRouteState();
     }
     updateFilterControls();
@@ -1533,19 +1680,40 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       capture: () => state.activeEntry,
       restore: entry => {
         if (!canView() || !entry || !state.entryMap.has(entry.id)) return false;
+        applyPhotoDeletionToEntry(entry);
         state.activeEntry = entry;
         renderEntryDetail(entry);
       },
       onClose: finishEntryClose
     });
-    dialogs.register("camera-roll-dialog", { scrollRoots: () => [], restore: canView, onClose: finishCameraRollClose });
+    dialogs.register("camera-roll-dialog", {
+      scrollRoots: () => [],
+      restore: () => {
+        if (!canView()) return false;
+        void loadCameraRoll();
+        window.requestAnimationFrame(() => { elements.cameraRollDialog.scrollTop = 0; });
+        return true;
+      },
+      onClose: finishCameraRollClose
+    });
+    dialogs.register("photo-save-dialog", {
+      guard: () => photoSaver?.canClose() ?? true,
+      restore: () => canView() && Boolean(photoSaver?.restore()),
+      onClose: () => photoSaver?.onClose()
+    });
     dialogs.register("photo-viewer-dialog", {
       scrollRoots: () => [],
-      capture: () => ({ photos: state.viewerPhotos, index: state.viewerIndex }),
+      guard: () => !state.photoDeleteBusy,
+      capture: () => ({ photos: state.viewerPhotos, index: state.viewerIndex, photoId: state.viewerPhotos[state.viewerIndex]?.id,
+        albumVisit: elements.cameraRollDialog.open ? state.albumVisit : null }),
       restore: saved => {
-        if (!canView() || !photoViewer || !saved.photos[saved.index]) return false;
+        if (!canView() || !photoViewer) return false;
+        if (saved.albumVisit != null && saved.albumVisit !== state.albumVisit) return false;
+        removeDeletedPhotos(saved.photos);
+        if (!saved.photos.length) return false;
         state.viewerPhotos = saved.photos;
-        state.viewerIndex = saved.index;
+        const index = saved.photos.findIndex(photo => photo.id === saved.photoId);
+        state.viewerIndex = index < 0 ? Math.min(saved.index, saved.photos.length - 1) : index;
         photoViewer.render();
       },
       onClose: finishPhotoViewerClose
@@ -1564,8 +1732,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       onClose: finishEditorClose
     });
     dialogs.register("editor-leave-dialog", { guard: () => !state.editorSaving });
-    dialogs.register("delete-confirm-dialog", { onClose: () => { state.deleteMode = null; } });
-    dialogs.register("date-wheel-dialog", { backdrop: applyDateWheel, onClose: () => { state.dateWheelTarget = null; } });
+    dialogs.register("delete-confirm-dialog", {
+      guard: () => !state.photoDeleteBusy,
+      onClose: () => { state.deleteMode = null; state.photoDeleteTarget = null; }
+    });
+    dialogs.register("date-wheel-dialog", { backdrop: applyDateWheel, onClose: () => {
+      for (const timer of Object.values(state.dateWheelTimers)) window.clearTimeout(timer);
+      state.dateWheelTarget = null;
+      state.dateDraft = null;
+    } });
   }
 
   function requestEditorClose() {
@@ -1778,6 +1953,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       window.requestAnimationFrame(finishPhotoPickerInteraction);
     };
     window.addEventListener("focus", photoPickerReturnHandler, { once: true });
+    // Start loading while the OS picker is open, before its File references
+    // need reading. Keep the click synchronous to preserve user activation.
+    void loadPhotoTools().catch(() => {});
     try {
       elements.photoInput.click();
     } catch (error) {
@@ -1855,7 +2033,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
           state.editorPhotos.push(photo);
           preparedPhotos.push(photo);
           preparedCount += 1;
-          queueBackgroundPhotoUpload(photo);
+          // A failed commit may already have attached photos server-side.
+          // Keep new payloads locally until that session is safely completed.
+          if (!state.pendingPhotoSave) queueBackgroundPhotoUpload(photo);
         }
       }
       await waitForEditorCompositionEnd();
@@ -2463,6 +2643,11 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         state.editorDeletedPhotoIds.add(photo.id);
         state.editorPendingPhotoDeletionIds.add(photo.id);
       }
+      else if (state.pendingPhotoSave?.photos.includes(photo)) {
+        // Finish the already-submitted attachment before applying this removal.
+        // Its original upload is still needed if that attachment is retried.
+        photo.removed = true;
+      }
       else void deleteStagedPhotoUpload(photo).catch(() => {
         elements.photoPreparationStatus.textContent = "一時保存した画像は後ほど自動的に削除されます。";
       });
@@ -2475,6 +2660,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function clearEditorPhotos() {
     for (const photo of state.editorPhotos) {
       if (photo.previewUrl) URL.revokeObjectURL(photo.previewUrl);
+      photo.removed=true;photo.originalFile=photo.displayBlob=photo.thumbnailBlob=null;photo.fileName="";
     }
     state.editorPhotos = [];
     state.editorDeletedPhotoIds.clear();
@@ -2484,6 +2670,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.photoUploadSessionPromise = null;
     state.photoUploadTargetEntryId = null;
     state.photoUploadCommitted = false;
+    state.pendingPhotoSave = null;
     state.photoUploadPendingCount = 0;
     state.photoUploading = false;
     state.photoUploadActiveTasks.clear();
@@ -2491,14 +2678,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function deletePhoto(photoId) {
-    const response = await fetch(`${BASE_PATH}/api/photos/${photoId}`, {
-      method: "DELETE",
-      headers: { "X-Diary-Request": "1" },
-      credentials: "same-origin"
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || "画像を削除できませんでした。");
-    return result;
+    return api(`/photos/${photoId}`, { method: "DELETE" });
   }
 
   function hasEditorChanges() {
@@ -2635,6 +2815,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     setEditorSaveBusy(true, targetStatus === "draft" ? "下書き保存中..." : "投稿中...");
     try {
       await measure("prepare", () => waitForPhotoPreparation());
+      if (state.pendingPhotoSave) {
+        setEditorSaveBusy(true, "前回の写真保存を再開しています...");
+        await measure("photoRecovery", () => completePendingPhotoSave());
+      }
       const id = Number(elements.entryId.value || 0);
       const editorDocument = serializeRichEditor(true);
       const body = {
@@ -2707,22 +2891,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         }
       }
       if (state.photoUploadSessionId && !state.photoUploadCommitted) {
-        setEditorSaveBusy(true, "写真を日記へ反映しています...");
+        state.pendingPhotoSave = {
+          entry: structuredClone(saved.entry), body: structuredClone(body), photos: [...pendingPhotos],
+          sessionId: state.photoUploadSessionId, generation: sessionGeneration
+        };
         try {
-          const committedPhotos = await measure("photoCommit", () => commitStagedPhotos(saved.entry.id, pendingPhotos));
-          const committedById = new Map(committedPhotos.map((photo) => [photo.id, photo]));
-          for (const photo of pendingPhotos) {
-            photo.existing = true;
-            Object.assign(photo, committedById.get(photo.id) || {});
-            releaseUploadedPhotoPayload(photo, { releasePreview: Boolean(photo.thumbnailUrl) });
-          }
-          if (pendingPhotos.length) {
-            setEditorSaveBusy(true, "写真を本文へ反映しています...");
-            saved = await measure("finalize", () => finalizeCommittedPhotoEntry(saved.entry.id, body, saved.entry));
-            elements.entryRevision.value = String(saved.entry.revision);
-            elements.entryStatus.value = saved.entry.status;
-            state.editorSourceEntry = saved.entry;
-          }
+          saved = await completePendingPhotoSave(measure);
         } catch (error) {
           failures.push(`写真の反映：${error.message}`);
         }
@@ -2761,6 +2935,38 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         photos: timing.photos.map((photo) => ({ preparationMs: photo.preparationMs, ...photo.uploadMetrics }))
       }));
     }
+  }
+
+  async function completePendingPhotoSave(measure = async (_stage, operation) => operation()) {
+    const pending = state.pendingPhotoSave;
+    if (!pending || pending.generation !== sessionGeneration || pending.sessionId !== state.photoUploadSessionId) {
+      throw new Error("写真の保存状態を確認できませんでした。編集内容を確認してください。");
+    }
+    if (!state.photoUploadCommitted) {
+      setEditorSaveBusy(true, "写真を日記へ反映しています...");
+      const committed = await measure("photoCommit", () => commitStagedPhotos(pending.entry.id, pending.photos));
+      const committedById = new Map(committed.map(photo => [photo.id, photo]));
+      for (const photo of pending.photos) {
+        photo.existing = true;
+        Object.assign(photo, committedById.get(photo.id) || {});
+        if (photo.removed) {
+          state.editorDeletedPhotoIds.add(photo.id);
+          state.editorPendingPhotoDeletionIds.add(photo.id);
+        }
+        releaseUploadedPhotoPayload(photo, { releasePreview: Boolean(photo.thumbnailUrl) });
+      }
+    }
+    let saved = { entry: pending.entry };
+    if (pending.photos.length) {
+      setEditorSaveBusy(true, "写真を本文へ反映しています...");
+      saved = await measure("finalize", () => finalizeCommittedPhotoEntry(pending.entry.id, pending.body, pending.entry));
+    }
+    elements.entryId.value = String(saved.entry.id);
+    elements.entryRevision.value = String(saved.entry.revision);
+    elements.entryStatus.value = saved.entry.status;
+    state.editorSourceEntry = saved.entry;
+    state.pendingPhotoSave = null;
+    return saved;
   }
 
   async function createEntryIdempotently(body) {
@@ -2851,27 +3057,90 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.saveDraftButton.textContent = "下書き保存";
   }
 
+  async function openPhotoSave() {
+    const generation = sessionGeneration;
+    try {
+      if (!photoSaverPromise) {
+        photoSaverPromise = import(new URL(`diary-photo-save.js${scriptUrl.search}`, scriptUrl).href).then(module => {
+          photoSaver = module.createPhotoSaveManager({ api, dialogs, formatBytes, bindDateInput, onNotice: showToast,
+            getOwner: () => activeSessionContext && JSON.stringify([activeSessionContext, state.activeHouseholdId]),
+            getDefaultRange: () => {
+              const month = state.photoMonth || currentJapanMonth();
+              const [year, number] = month.split("-").map(Number);
+              return { from: `${month}-01`, to: `${month}-${new Date(Date.UTC(year, number, 0)).getUTCDate()}` };
+            },
+            onSessionExpired: () => { resetState(); showLogin("ログインして未完了分を再開してください。"); }
+          });
+          return photoSaver;
+        }).catch(error => { photoSaverPromise = null; throw error; });
+      }
+      const saver = await photoSaverPromise;
+      if (generation === sessionGeneration && !elements.appView.hidden) await saver.open();
+    } catch (error) { if (generation === sessionGeneration) showToast(error.message); }
+  }
+
   async function openCameraRoll() {
-    updatePhotoSortButton();
     dialogs.open("camera-roll-dialog");
+    elements.cameraRollDialog.scrollTop = 0;
+    await loadCameraRoll();
+  }
+
+  async function loadCameraRoll() {
+    const visit = state.albumVisit;
+    updatePhotoSortButton();
     elements.cameraRollStatus.textContent = "写真を読み込んでいます...";
     try {
       await Promise.all([loadPhotoMeta(), loadPhotos(true)]);
     } catch (error) {
-      elements.cameraRollStatus.textContent = error.message;
+      if (visit === state.albumVisit && elements.cameraRollDialog.open) elements.cameraRollStatus.textContent = error.message;
     }
   }
 
   async function loadPhotoMeta() {
+    const generation = sessionGeneration;
+    const visit = state.albumVisit;
     const result = await api("/photos/meta");
-    const monthValue = state.photoMonth;
-    const months = result.months || [];
-    const totalCount = months.reduce((total, item) => total + Number(item.count || 0), 0);
-    elements.photoMonthFilter.replaceChildren(createOption("", `すべて（${totalCount}）`), ...months.map((item) => (
-      createOption(item.value, `${formatMonth(item.value)}（${item.count}）`)
-    )));
-    elements.photoMonthFilter.value = monthValue;
+    if (generation !== sessionGeneration || visit !== state.albumVisit) return;
+    state.photoMonthCounts = new Map((result.months || []).map(item => [item.value, Number(item.count || 0)]));
+    renderPhotoMonthFilter();
+    if (elements.dateWheelDialog.open && state.dateWheelMode === "month") renderPhotoMonthCounts();
     updatePhotoSortButton();
+  }
+
+  function photoCountLabel(month = "") {
+    if (!state.photoMonthCounts) return "";
+    const count = month ? state.photoMonthCounts.get(month) || 0
+      : [...state.photoMonthCounts.values()].reduce((total, value) => total + value, 0);
+    return `${count.toLocaleString("ja-JP")}枚`;
+  }
+
+  function renderPhotoMonthFilter() {
+    const label = state.photoMonth ? formatMonth(state.photoMonth) : "すべて";
+    const count = photoCountLabel(state.photoMonth);
+    elements.photoMonthFilter.value = state.photoMonth;
+    elements.photoMonthFilter.textContent = label + (count ? `（${count}）` : "");
+  }
+
+  function setPhotoMonth(value) {
+    if (elements.photoMonthFilter.value === value) return;
+    elements.photoMonthFilter.value = value;
+    elements.photoMonthFilter.dispatchEvent(new Event("input", { bubbles: true }));
+    elements.photoMonthFilter.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function renderPhotoMonthCounts() {
+    const year = state.dateDraft.year;
+    elements.dateWheelMonth.dataset.countYear = String(year);
+    for (const option of elements.dateWheelMonth.querySelectorAll(".date-wheel-option")) {
+      const month = Number(option.dataset.value);
+      const value = `${year}-${String(month).padStart(2, "0")}`;
+      const count = photoCountLabel(value);
+      option.querySelector(".date-wheel-count").textContent = count;
+      option.dataset.empty = String(!state.photoMonthCounts?.get(value));
+      option.setAttribute("aria-label", `${year}年${month}月` + (count ? `、${count}` : ""));
+    }
+    const total = photoCountLabel();
+    elements.dateWheelAll.textContent = "すべて" + (total ? `（${total}）` : "");
   }
 
   function updatePhotoSortButton() {
@@ -2923,7 +3192,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       parameters.set("month", state.photoMonth);
       parameters.set("order", state.photoOrder);
     }
-    if (state.photoFileNameQuery) parameters.set("fileName", state.photoFileNameQuery);
     let added = 0;
     const started = performance.now();
     try {
@@ -2963,6 +3231,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         button.className = "camera-roll-item";
         button.type = "button";
         button.dataset.photoIndex = String(index);
+        button.dataset.photoId = photo.id;
         button.setAttribute("aria-label", `${formatDate(photo.entryDate)}「${photo.entryTitle || "無題"}」の写真を開く`);
         const image = document.createElement("img");
         image.src = photo.thumbnailUrl;
@@ -2983,8 +3252,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       });
       elements.cameraRollGrid.append(...cards);
     }
+    renderCameraRollStatus();
+  }
+
+  function renderCameraRollStatus() {
     const atLimit = state.photos.length >= CAMERA_ROLL_MAX_PHOTOS;
-    elements.cameraRollStatus.textContent = `${state.photos.length}件の写真を表示しています。`
+    elements.cameraRollStatus.textContent = `${state.photos.length.toLocaleString("ja-JP")}件の写真を表示しています。`
       + (atLimit && state.photoHasMore ? "表示上限に達しました。年月や検索条件で絞り込んでください。" : "");
     elements.cameraRollMore.hidden = !state.photoHasMore || atLimit;
   }
@@ -3009,6 +3282,119 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     dialogs.open("photo-viewer-dialog");
   }
 
+  function canDeleteViewerPhoto(photo) {
+    if (!state.canManageEntries || elements.editorDialog.open || state.deletedPhotoIds.has(photo.id)) return false;
+    return state.viewerPhotos === state.photos || (state.viewerPhotos === state.activeEntry?.photos
+      && state.activeEntry.status === "published" && !state.activeEntry.deletedAt);
+  }
+
+  async function requestPhotoDeletion() {
+    const photo = state.viewerPhotos[state.viewerIndex];
+    if (!photo || state.photoDeleteBusy || !canDeleteViewerPhoto(photo)) return;
+    const generation = sessionGeneration;
+    const request = viewerOpenRequest;
+    state.photoDeleteBusy = true;
+    elements.photoDelete.disabled = true;
+    try {
+      const { entry } = await api(`/entries/${photo.entryId}`);
+      if (generation !== sessionGeneration || request !== viewerOpenRequest || !elements.photoViewerDialog.open) return;
+      if (entry.deletedAt || entry.status !== "published" || !entry.photos.some(item => item.id === photo.id)) {
+        throw new Error("写真の状態が変わっています。写真を開き直してください。");
+      }
+      state.photoDeleteTarget = { id: photo.id, entryId: entry.id, revision: entry.revision };
+      state.deleteMode = "photo";
+      elements.deleteConfirmTitle.textContent = "この写真を削除しますか？";
+      elements.deleteConfirmMessage.textContent = `「${photo.fileName}」を日記本文からも削除します。この操作は取り消せません。`;
+      elements.deleteConfirmYes.textContent = "削除";
+      dialogs.open("delete-confirm-dialog");
+    } catch (error) {
+      if (generation === sessionGeneration) showToast(error.message);
+    } finally {
+      if (generation === sessionGeneration) {
+        state.photoDeleteBusy = false;
+        elements.photoDelete.disabled = false;
+      }
+    }
+  }
+
+  function removeDeletedPhotos(photos) {
+    if (!photos) return;
+    for (let index = photos.length - 1; index >= 0; index--) {
+      if (state.deletedPhotoIds.has(photos[index].id)) photos.splice(index, 1);
+    }
+  }
+
+  function applyPhotoDeletionToEntry(entry) {
+    if (!entry) return;
+    const update = state.photoDeletionUpdates.get(entry.id);
+    if (update && entry.revision <= update.revision) {
+      Object.assign(entry, { content: update.content, contentFormat: update.contentFormat, revision: update.revision });
+    }
+    removeDeletedPhotos(entry.photos);
+  }
+
+  function removePhotoFromCameraRoll(id) {
+    const index = state.photos.findIndex(photo => photo.id === id);
+    if (index < 0) return;
+    const dialog = elements.cameraRollDialog;
+    const buttons = [...elements.cameraRollGrid.querySelectorAll("[data-photo-id]")];
+    const top = dialog.getBoundingClientRect().top;
+    const visible = buttons.find(button => button.getBoundingClientRect().bottom > top);
+    const anchor = visible?.dataset.photoId === id
+      ? buttons[index + 1] || buttons[index - 1] : visible;
+    const anchorTop = anchor?.getBoundingClientRect().top;
+    const scrollTop = dialog.scrollTop;
+    state.photos.splice(index, 1);
+    state.photoOffset = Math.max(0, state.photoOffset - 1);
+    buttons[index]?.remove();
+    [...elements.cameraRollGrid.querySelectorAll("[data-photo-index]")].forEach((button, offset) => {
+      button.dataset.photoIndex = String(offset);
+    });
+    if (!state.photos.length) elements.cameraRollGrid.replaceChildren(createEmpty("該当する写真はありません。"));
+    dialog.scrollTop = scrollTop + (anchor?.isConnected ? anchor.getBoundingClientRect().top - anchorTop : 0);
+    renderCameraRollStatus();
+  }
+
+  async function confirmPhotoDeletion() {
+    const target = state.photoDeleteTarget;
+    if (!target || state.photoDeleteBusy) return;
+    const generation = sessionGeneration;
+    state.photoDeleteBusy = true;
+    elements.deleteConfirmYes.disabled = true;
+    elements.deleteConfirmNo.disabled = true;
+    cancelCameraRollLoad();
+    let deleted = false;
+    try {
+      const result = await api(`/photos/${target.id}`, { method: "DELETE", body: { revision: target.revision } });
+      if (generation !== sessionGeneration) return;
+      state.deletedPhotoIds.add(target.id);
+      state.photoDeletionUpdates.set(result.entryId, result);
+      removePhotoFromCameraRoll(target.id);
+      removeDeletedPhotos(state.viewerPhotos);
+      state.viewerIndex = Math.min(state.viewerIndex, state.viewerPhotos.length - 1);
+      applyPhotoDeletionToEntry(state.activeEntry);
+      applyPhotoDeletionToEntry(state.entryMap.get(result.entryId));
+      if (state.activeEntry?.id === result.entryId && elements.entryDialog.open) renderEntryDetail(state.activeEntry);
+      deleted = true;
+    } catch (error) {
+      if (generation === sessionGeneration) showToast(error.message);
+    } finally {
+      if (generation === sessionGeneration) {
+        state.photoDeleteBusy = false;
+        elements.deleteConfirmYes.disabled = false;
+        elements.deleteConfirmNo.disabled = false;
+      }
+    }
+    if (generation !== sessionGeneration) return;
+    await closeDeleteConfirmation();
+    if (generation !== sessionGeneration) return;
+    if (!deleted) return;
+    if (state.viewerPhotos.length) photoViewer.render();
+    else await closePhotoViewerDialog();
+    showToast("写真を削除しました。");
+    try { await loadPhotoMeta(); } catch { showToast("写真は削除済みですが、件数を取得できませんでした。アルバムを開き直してください。"); }
+  }
+
   function closeCameraRollDialog(afterClose = null) {
     return dialogs.close("camera-roll-dialog", { after: typeof afterClose === "function" ? afterClose : undefined });
   }
@@ -3016,8 +3402,21 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function finishCameraRollClose() {
     viewerOpenRequest += 1;
     cancelCameraRollLoad();
+    state.albumVisit++;
+    state.photoMonth = "";
+    state.photoEntryQuery = "";
+    state.photoOrder = "newest";
+    state.photos = [];
+    state.photoOffset = 0;
+    state.photoHasMore = false;
+    elements.photoEntrySearch.value = "";
+    renderPhotoMonthFilter();
+    updatePhotoSortButton();
+    elements.cameraRollGrid.replaceChildren();
+    elements.cameraRollStatus.textContent = "";
+    elements.cameraRollMore.hidden = true;
+    elements.cameraRollDialog.scrollTop = 0;
     if (elements.cameraRollDialog.open) elements.cameraRollDialog.close();
-
   }
 
   function closePhotoViewerDialog(afterClose = null) {
@@ -3047,7 +3446,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function formatShortDate(value) {
     const [year, month, day] = String(value || "").split("-").map(Number);
-    return year && month && day ? `${year}.${month}.${day}` : "";
+    if (!year || !month || !day) return "";
+    const weekday = ["日", "月", "火", "水", "木", "金", "土"][new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+    return `${year}.${month}.${day}（${weekday}）`;
   }
 
   function formatBytes(value) {
@@ -3100,6 +3501,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function openDateWheel(target = elements.entryDate) {
     if (elements.dateWheelDialog.open) return;
     state.dateWheelTarget = target;
+    state.dateWheelMode = target === elements.photoMonthFilter ? "month" : "date";
     setDateDraft(target.value || japanDateString());
     renderDateWheel();
     dialogs.open("date-wheel-dialog");
@@ -3111,7 +3513,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function applyDateWheel() {
     if (!state.dateDraft) return closeDateWheel();
-    const nextValue = datePartsToString(state.dateDraft);
+    if (state.dateWheelMode === "month") {
+      // Commit the visible month even if a touch scroll's debounce is still pending.
+      for (const [column, key] of [[elements.dateWheelYear, "year"], [elements.dateWheelMonth, "month"]]) {
+        window.clearTimeout(state.dateWheelTimers[key]);
+        if (column.dataset.settingScroll !== "true") updateDateWheelFromScroll(column, key);
+      }
+    }
+    const nextValue = state.dateWheelMode === "month"
+      ? TRoomDatePicker.formatValue(state.dateDraft, "month") : datePartsToString(state.dateDraft);
     const target = state.dateWheelTarget || elements.entryDate;
     if (target.value !== nextValue) {
       target.value = nextValue;
@@ -3133,9 +3543,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function renderDateWheel() {
     if (!state.dateDraft) return;
+    const monthOnly = state.dateWheelMode === "month";
+    elements.dateWheelTitle.textContent = monthOnly ? "年月を選択" : "日付を選択";
+    elements.dateWheelDialog.querySelector(".date-wheel-window").dataset.mode = state.dateWheelMode;
+    elements.dateWheelDay.parentElement.hidden = monthOnly;
+    elements.dateWheelAll.hidden = !monthOnly;
     fillDateWheel(elements.dateWheelYear, range(1900, 2100), state.dateDraft.year, "年");
     fillDateWheel(elements.dateWheelMonth, range(1, 12), state.dateDraft.month, "月");
-    renderDayWheel();
+    if (monthOnly) renderPhotoMonthCounts();
+    else renderDayWheel();
     updateDateWheelValue();
   }
 
@@ -3146,7 +3562,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function fillDateWheel(column, values, selected, suffix) {
-    const scrollToken = String((Number(column.dataset.settingScrollToken) || 0) + 1);
+    const scrollToken = String(++state.dateWheelScrollVersion);
     column.dataset.settingScroll = "true";
     column.dataset.settingScrollToken = scrollToken;
     column.replaceChildren(...values.map((value, index) => {
@@ -3157,13 +3573,19 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       button.dataset.index = String(index);
       button.setAttribute("role", "option");
       button.setAttribute("aria-selected", String(value === selected));
-      button.textContent = `${value}${suffix}`;
+      if (state.dateWheelMode === "month" && column === elements.dateWheelMonth) {
+        const label = document.createElement("span");
+        label.textContent = `${value}${suffix}`;
+        const count = document.createElement("small");
+        count.className = "date-wheel-count";
+        button.append(label, count);
+      } else button.textContent = `${value}${suffix}`;
       return button;
     }));
     const selectedIndex = Math.max(0, values.indexOf(selected));
     window.requestAnimationFrame(() => {
       if (column.dataset.settingScrollToken !== scrollToken) return;
-      column.scrollTop = selectedIndex * 44;
+      column.scrollTo({ top: selectedIndex * 44, behavior: "instant" });
       window.setTimeout(() => {
         if (column.dataset.settingScrollToken !== scrollToken) return;
         delete column.dataset.settingScroll;
@@ -3176,16 +3598,23 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     column.addEventListener("click", (event) => {
       const option = event.target.closest(".date-wheel-option");
       if (!option) return;
+      window.clearTimeout(state.dateWheelTimers[key]);
+      // A delayed initial position or smooth-scroll intermediate value must not
+      // replace a tapped day before the user presses Done.
+      delete column.dataset.settingScrollToken;
+      delete column.dataset.settingScroll;
       const value = Number(option.dataset.value);
       if (state.dateDraft) {
         state.dateDraft[key] = value;
-        if (key === "year" || key === "month") renderDayWheel();
+        if (state.dateWheelMode === "month") {
+          if (key === "year") renderPhotoMonthCounts();
+        } else if (key === "year" || key === "month") renderDayWheel();
         updateDateWheelValue();
       }
       column.querySelectorAll(".date-wheel-option").forEach((item) => {
         item.setAttribute("aria-selected", String(item === option));
       });
-      column.scrollTo({ top: Number(option.dataset.index) * 44, behavior: "smooth" });
+      column.scrollTo({ top: Number(option.dataset.index) * 44, behavior: "instant" });
     });
     column.addEventListener("wheel", (event) => {
       if (!event.deltaY) return;
@@ -3212,13 +3641,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     if (state.dateDraft[key] === value) return;
     state.dateDraft[key] = value;
     options.forEach((item, itemIndex) => item.setAttribute("aria-selected", String(itemIndex === index)));
-    if (key === "year" || key === "month") renderDayWheel();
+    if (state.dateWheelMode === "month") {
+      if (key === "year") renderPhotoMonthCounts();
+    } else if (key === "year" || key === "month") renderDayWheel();
     updateDateWheelValue();
   }
 
   function updateDateWheelValue() {
     const { year, month, day } = state.dateDraft;
-    elements.dateWheelValue.textContent = `${year}年${month}月${day}日`;
+    elements.dateWheelValue.textContent = `${year}年${month}月` + (state.dateWheelMode === "month" ? "" : `${day}日`);
   }
 
   function datePartsToString({ year, month, day }) {
@@ -3273,6 +3704,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   async function confirmEntryDeletion() {
     const mode = state.deleteMode;
+    if (mode === "photo") return confirmPhotoDeletion();
     if (!await closeDeleteConfirmation()) return;
     if (mode === "draft") await deleteActiveDraft();
     else if (mode === "permanent") await permanentlyDeleteActiveEntry();
@@ -3421,6 +3853,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function updateFilterControls() {
+    if (state.archiveMonth && state.archiveMonth !== state.month) renderArchive(state.archiveMonths);
     const active = Boolean(state.query || state.dateFrom || state.dateTo || state.tag || state.trash || state.drafts || state.favoritePage);
     elements.searchClear.hidden = !state.query;
     elements.dateReset.hidden = !state.dateFrom && !state.dateTo;
@@ -3435,7 +3868,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.monthNavigation.hidden = !isMonthlyView();
     elements.currentMonth.disabled = state.month === currentJapanMonth();
     document.querySelectorAll("[data-month]").forEach((button) => {
-      button.setAttribute("aria-pressed", String(button.dataset.month === state.month));
+      button.setAttribute("aria-pressed", String(isMonthlyView() && button.dataset.month === state.month));
     });
     document.querySelectorAll("[data-tag]").forEach((button) => {
       if (button.dataset.tag === state.tag) button.setAttribute("aria-current", "page");
@@ -3567,6 +4000,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       closeCameraRollDialog();
       return;
     }
+    if (id === "photo-save-dialog") return dialogs.close(id);
     if (id === "photo-viewer-dialog") {
       closePhotoViewerDialog();
       return;
@@ -3594,7 +4028,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     let response;
     try {
       try {
-        response = await fetch(`${BASE_PATH}/api${path}`, init);
+        response = await (encryptionRuntime?encryptionRuntime.api(path,init):fetch(`${BASE_PATH}/api${path}`,init));
       } catch (cause) {
         if (options.signal?.aborted) throw cause;
         const error = new Error("通信結果を確認できませんでした。通信状態を確認して、もう一度お試しください。");
@@ -3617,16 +4051,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       }
       if (!response.ok) {
         if (response.status === 401 && generation === sessionGeneration && path !== "/login" && path !== "/passkey/handoff"
-            && !options.preserveEditor && !elements.editorDialog.open) {
+            ) {
           resetState();
           showLogin("ログインの有効期限が切れました。");
         }
-        const error = new Error(response.status === 401 && elements.editorDialog.open
-          ? "ログインの有効期限が切れました。編集内容を保持しています。別のタブで再ログインしてから再試行してください。"
-          : result.error || "処理を完了できませんでした。");
+        const error = new Error(result.error || "処理を完了できませんでした。");
         error.status = response.status;
         throw error;
       }
+      if (generation !== sessionGeneration) throw Object.assign(new Error("ログイン状態が変わりました。"),{sessionChanged:true});
       return result;
     } finally {
       if (timing || options.onTiming) {
@@ -3671,7 +4104,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     const link = document.createElement("a");
     link.className = "diary-tag";
     link.dataset.tag = tag;
-    link.href = `${BASE_PATH}/tag/${encodeURIComponent(tag)}/`;
+    link.href=encryptionRuntime?encryptionRuntime.tagRoute(tag):`${BASE_PATH}/tag/${encodeURIComponent(tag)}/`;
     link.textContent = label;
     return link;
   }
@@ -3683,7 +4116,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     let tag = "";
     if (match) {
       try {
-        tag = decodeURIComponent(match[1]).normalize("NFKC").trim().slice(0, 100);
+        tag=(encryptionRuntime?encryptionRuntime.tagValue(match[1]):decodeURIComponent(match[1])).normalize("NFKC").trim().slice(0,100);
       } catch {
         tag = "";
       }
@@ -3717,15 +4150,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     // Reload and history navigation keep the token owned by their current entry.
     try {
       const newNavigation = isNewDiaryNavigation();
-      if (newNavigation && window.history.state?.[RETURN_NAVIGATION_KEY] !== undefined) {
-        const historyState = { ...window.history.state };
+      if (newNavigation && diaryHistory.state?.[RETURN_NAVIGATION_KEY] !== undefined) {
+        const historyState = { ...diaryHistory.state };
         delete historyState[RETURN_NAVIGATION_KEY];
-        window.history.replaceState(historyState, "", window.location.href);
+        diaryHistory.replaceState(historyState, "", window.location.href);
       }
-      const storedNavigation = window.sessionStorage.getItem(RETURN_NAVIGATION_KEY);
-      window.sessionStorage.removeItem(RETURN_NAVIGATION_KEY);
+      const storedNavigation = diaryStorage.getItem(RETURN_NAVIGATION_KEY);
+      diaryStorage.removeItem(RETURN_NAVIGATION_KEY);
       const navigation = JSON.parse(storedNavigation || "null");
-      const returnView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+      const returnView = JSON.parse(diaryStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
       // Measure at navigation start so a slow bootstrap cannot expire a valid handoff.
       const navigationAge = window.performance.timeOrigin - navigation?.savedAt;
       if (newNavigation && navigation?.destinationPath === window.location.pathname
@@ -3733,8 +4166,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         && Number.isFinite(navigation.savedAt) && navigationAge >= 0 && navigationAge <= RETURN_NAVIGATION_MAX_AGE_MS
         && returnView?.version === 2 && returnView.savedAt === navigation.savedAt
         && returnView.routePath === navigation.sourcePath && returnView.destinationPath === navigation.destinationPath) {
-        window.history.replaceState({
-          ...(window.history.state || {}),
+        diaryHistory.replaceState({
+          ...(diaryHistory.state || {}),
           [RETURN_NAVIGATION_KEY]: navigation.savedAt
         }, "", window.location.href);
       }
@@ -3756,7 +4189,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     if (elements.tagPageBack.hidden) return;
     let returnView = null;
     try {
-      returnView = JSON.parse(window.sessionStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
+      returnView = JSON.parse(diaryStorage.getItem(RETURN_VIEW_STORAGE_KEY) || "null");
     } catch {
       return;
     }
@@ -3764,10 +4197,28 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       || !isOwnedDiaryReturnView(returnView)) return;
     // Display a source only when this history entry owns the accepted navigation.
     if (!Number.isFinite(returnView.savedAt)
-      || window.history.state?.[RETURN_NAVIGATION_KEY] !== returnView.savedAt) return;
-    if (!isDiaryListPath(returnView.routePath) || Date.now() - returnView.savedAt > RETURN_VIEW_MAX_AGE_MS) return;
-    elements.tagPageBack.href = returnView.routePath;
+      || diaryHistory.state?.[RETURN_NAVIGATION_KEY] !== returnView.savedAt) return;
+    const href = diaryListHref(returnView.routePath);
+    if (!href || Date.now() - returnView.savedAt > RETURN_VIEW_MAX_AGE_MS) return;
+    elements.tagPageBack.href = href;
     elements.tagPageBack.textContent = "← 前の画面へ戻る";
+  }
+
+  function diaryListHref(pathname) {
+    // Rebuild links from fixed routes and an encoded tag, never a stored URL.
+    switch (pathname) {
+      case "/diary": case "/diary/": return `${BASE_PATH}/`;
+      case "/diary/tags": case "/diary/tags/": return `${BASE_PATH}/tags/`;
+      case "/diary/favorites": case "/diary/favorites/": return `${BASE_PATH}/favorites/`;
+    }
+    if (typeof pathname !== "string") return "";
+    const match = /^\/diary\/tag\/([^/]+)\/?$/.exec(pathname);
+    if (!match) return "";
+    try {
+      return `${BASE_PATH}/tag/${encodeURIComponent(decodeURIComponent(match[1]))}/`;
+    } catch {
+      return "";
+    }
   }
 
   function isDiaryListPath(pathname) {
@@ -3890,31 +4341,37 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function resetState() {
+    remoteRefreshPending=false;
+    encryptionRuntime?.lock();
+    photoSaver?.suspend();
     cancelPositionRestoration();
     elements.tagPageBack.href = `${BASE_PATH}/`;
     elements.tagPageBack.textContent = "← 日記へ戻る";
     for (const key of [RETURN_VIEW_STORAGE_KEY, RETURN_NAVIGATION_KEY]) {
       try {
-        window.sessionStorage.removeItem(key);
+        diaryStorage.removeItem(key);
       } catch {
         // Storage may be unavailable; ownership checks still reject the old source.
       }
     }
     try {
-      const historyState = { ...(window.history.state || {}) };
+      const historyState = { ...(diaryHistory.state || {}) };
       delete historyState[RETURN_VIEW_HISTORY_KEY];
       delete historyState[RETURN_NAVIGATION_KEY];
-      window.history.replaceState(historyState, "", window.location.href);
+      diaryHistory.replaceState(historyState, "", window.location.href);
     } catch {
       // A retained history snapshot is still checked against the next session.
     }
-    if ("scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
+    if ("scrollRestoration" in diaryHistory) diaryHistory.scrollRestoration = "auto";
     loginAttempt += 1;
     setBusy(document.querySelector("#passkey-login"), false, "パスキーでログイン");
     sessionGeneration += 1;
     activeSessionContext = "";
+    elements.entryForm.reset();elements.entryContent.replaceChildren();
+    for(const input of document.querySelectorAll('dialog input,dialog textarea'))input.value='';
+    for(const key of ['detailDate','detailPublishedAt','detailTitle','detailAuthor','detailDeletion','detailTags','detailContent','deleteConfirmMessage','editorMessage','entryTagSuggestions'])elements[key]?.replaceChildren();
     elements.entryList.replaceChildren();
-    elements.archiveList.replaceChildren();
+    clearArchive();
     elements.tagList.replaceChildren();
     elements.householdSwitcher.replaceChildren();
     elements.householdSwitcherWrap.hidden = true;
@@ -3951,6 +4408,13 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.draftCount = 0;
     state.activeEntry = null;
     state.deleteMode = null;
+    state.photoDeleteTarget = null;
+    state.photoDeleteBusy = false;
+    state.deletedPhotoIds.clear();
+    state.photoDeletionUpdates.clear();
+    elements.photoDelete.disabled = false;
+    elements.deleteConfirmYes.disabled = false;
+    elements.deleteConfirmNo.disabled = false;
     clearEditorPhotos();
     state.photoOffset = 0;
     state.photos = [];
@@ -3958,9 +4422,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     cancelCameraRollLoad();
     state.photoEntryQuery = "";
     state.photoMonth = "";
+    state.photoMonthCounts = null;
+    renderPhotoMonthFilter();
+    elements.dateWheelMonth.replaceChildren();
+    elements.dateWheelAll.textContent = "すべて";
     state.photoOrder = "newest";
     updatePhotoSortButton();
-    state.photoFileNameQuery = "";
     state.viewerPhotos = [];
     state.viewerIndex = -1;
     finishPhotoPickerInteraction();

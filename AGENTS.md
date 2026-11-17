@@ -49,6 +49,7 @@
 
 - CI／test／deploy：[`docs/development-flow.md`](docs/development-flow.md)
 - Identity／Passkey／T-Cloud鍵：[`docs/security/passkeys.md`](docs/security/passkeys.md)
+- ゼロ知識暗号化の共通設計・自動準備／移行：[`docs/security/passkeys.md#ゼロ知識暗号化の共通設計`](docs/security/passkeys.md#ゼロ知識暗号化の共通設計)
 - Password停止・復旧：[`docs/security/password-auth-policy.md`](docs/security/password-auth-policy.md)
 - LINE／PWA／TWAのブラウザ挙動：[`docs/browser-support.md`](docs/browser-support.md)
 - 画面遷移／モーダル／戻る・閉じる：[`docs/navigation-and-dialogs.md`](docs/navigation-and-dialogs.md)
@@ -84,6 +85,13 @@
 - パスキーの新規・追加・再登録は第一管理者の招待と承認を必須とする。T-Cloudは端末内だけで既存鍵を解除し、PRF出力、復号鍵、folder key、file keyをCloudflare、GitHub、ログへ渡さない。
 - Security CenterをIdentity、招待、連携、監査の正本とし、失敗だけでなく成功ログインと重要な管理者アクセスも監査する。詳細は[`docs/security/passkeys.md`](docs/security/passkeys.md)に従う。
 
+### ゼロ知識暗号化の標準
+
+- 今後の新規サイトと既存サービスのゼロ知識化では、承認済みの既存パスキーによる通常ログインから、本人用の鍵と信頼設定の準備・解除を端末内で自動実行する。通常利用のためにSecurity Centerで追加の暗号化設定、独自の暗号化パスワード、設定ファイルの受け渡し、パスキー再登録を要求しない。
+- サービス初期化、既存データの全件移行、共有鍵の委譲は、権限を持つ管理者・所有者の通常ログインを起点に自動で進める。既存の招待・承認・サービス連携・権限・失効・復旧の境界を維持し、一般利用者へ管理者用の鍵や権限を渡さない。
+- 一時的な通信失敗だけで再ログインを繰り返させず、同じ有効セッション内で安全に再試行・中断再開する。認証期限・本人確認・世代照合を弱めず、移行中・委譲待ち・失敗・利用可能を区別する。
+- 既存データを保護し、全件照合・実際のバックアップ復元検証後に切り替える。共通の安全条件と受入確認は[共通設計](docs/security/passkeys.md#ゼロ知識暗号化の共通設計)、サービス固有の対象・移行順序・実装状況は各サービスの正本文書に記載する。
+
 ## 10. ブランド資産保護
 
 - 明示的な変更指示がない限り、Android／TWA／PWAのランチャーアイコン、ロゴ、favicon、splash、アプリ名、ブランドカラー、キャラクターデザイン等を変更しない。
@@ -94,6 +102,8 @@
 - ユーザー向けWeb／PWA／TWAは安全に最新版へ自動更新される構成を標準とする。未保存入力、upload、download等がある間は更新を延期し、安全になってから再試行する。
 - 対象アプリ、公開URL、build marker、Service Worker、deploy targetは`web-apps.json`を正とし、追加・変更時はcontract testを通す。
 - 技術的理由で自動更新を適用できない場合は勝手に例外化せず、ユーザーへ説明して確認する。
+
+ログイン画面は既存・新規サービスとも `tools/shared/tlain-login.css` と `tools/shared/tlain-login.js` を正本とする明るい背景・最大幅440pxの白いカードへ統一する。`tlain-login-view`／`tlain-login-card`、version付き参照、`web-apps.json` のbuild依存・assetCopiesを登録し、Web contractと共通ログイン表示試験を通す。独自の全幅・全画面・暗色ログインを追加しない。通常のログインカードは紹介文を置かず、サービス名 →「パスキーを使ってログインしてください。」→ パスキーボタンの順とする。状態・エラー表示と登録・復旧の補助導線は維持する。
 
 ## 12. 画面遷移・戻る操作
 

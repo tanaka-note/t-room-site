@@ -146,10 +146,16 @@ try {
 // Audit every tracked/new text file, not just selected HTML pages. Keep narrow
 // exceptions for compatibility, migration history, and internal test diagnostics.
 const allowed = {
+  "diary-worker/e2ee/tcloud-recovery.mjs": /context='T-ROOM Cloud Storage passkey admin private key v1'/,
+  "diary-worker/public/crypto/e2ee/tcloud-recovery.mjs": /context='T-ROOM Cloud Storage passkey admin private key v1'/,
+  "diary-worker/tests/e2ee/passkey-trust.test.mjs": /context='T-ROOM Cloud Storage admin private key v1'/,
+  "diary-worker/tests/e2ee/real-passkey.browser.mjs": /additionalData:new TextEncoder\(\)\.encode\('T-ROOM Cloud Storage admin private key v1'\)/,
+  "diary-worker/tests/e2ee/recovery.browser.mjs": /additionalData:new TextEncoder\(\)\.encode\('T-ROOM Cloud Storage admin private key v1'\)/,
   "cloud-worker/public/crypto-vault.js": /const \w+_CONTEXT = "T-ROOM Cloud Storage [^"]+";/,
   "cloud-worker/src/index.js": /const context = "T-ROOM Cloud Storage account key v1\|tanaka-note\.com\|";/,
   "android-tcloud/app/src/main/java/jp/tanaka/tcloud/crypto/TCloudCrypto.kt": /private const val \w+_CONTEXT = "T-ROOM Cloud Storage [^"]+"/,
   "cloud-worker/tests/crypto-roundtrip.mjs": /T-ROOM Cloud Storage account key v1\|tanaka-note\.com\|test@example\.com/,
+  "security-worker/test/household-automatic.test.js": /const ADMIN_WRAP_CONTEXT = "T-ROOM Cloud Storage admin private key v1";/,
   "android-tcloud/app/src/test/java/jp/tanaka/tcloud/crypto/TCloudCryptoCompatibilityTest.kt": /T-ROOM Cloud Storage account key v1\|tanaka-note\.com\|\$legacyLoginId/,
   "security-worker/wrangler.jsonc": /"RP_NAME": "T-ROOM"/,
   "security-worker/src/index.js": /rpName: env\.RP_NAME \|\| "T-ROOM",/,
