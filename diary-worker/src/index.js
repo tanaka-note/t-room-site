@@ -238,7 +238,10 @@ export default {
         const readTimedSession = () => timing.measure("diary_auth", () => readSession(request, env));
         const getSession = (fresh = false) => fresh ? readTimedSession() : (sessionPromise ??= readTimedSession());
         const response = await timing.measure("diary_handler", () => withPasswordLoginAudit(env, request, "diary", () => handleApi(request, env, url, path, context, getSession, timing)));
-        return secureResponse(timing.append(await withRollingSession(request, response, env, url, path, getSession)));
+        // Snapshot bytes are already gzipped. Apply the manual encoding mode
+        // after every session/header wrapper has reconstructed the Response.
+        return secureResponse(timing.append(await withRollingSession(request, response, env, url, path, getSession)),
+          path === '/api/encryption/snapshot' ? 'manual' : 'automatic');
       }
 
       const isDiaryNavigation=path==='/'||path==='/tags'||path==='/tags/'||path.startsWith('/entry/')||path.startsWith('/tag/')||path==='/trash'||path==='/favorites'||path==='/favorites/'||path==='/investment'||path==='/investment/';
@@ -2867,7 +2870,7 @@ function json(body, status = 200, extraHeaders) {
   return new Response(JSON.stringify(body), { status, headers });
 }
 
-function secureResponse(response) {
+function secureResponse(response, encodeBody = 'automatic') {
   const headers = new Headers(response.headers);
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("X-Frame-Options", "DENY");
@@ -2875,7 +2878,7 @@ function secureResponse(response) {
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
   headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers, encodeBody });
 }
 
 function bytesToBase64Url(bytes) {

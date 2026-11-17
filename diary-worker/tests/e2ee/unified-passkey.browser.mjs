@@ -4,7 +4,7 @@ import {readFile,mkdtemp,writeFile,utimes,unlink,rmdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {resolve,extname,sep,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {chromium} from 'playwright';
+import {chromium,devices} from 'playwright';
 import {systemFixture} from './system-fixture.mjs';
 import {publicTrustPackage} from '../../e2ee/setup.mjs';
 import {EncryptedDiaryClient} from '../../e2ee/client.mjs';
@@ -17,6 +17,9 @@ const wire=[],errors=[];let origin,authentications=0;
 const trust=await publicTrustPackage(f.configuration);
 const progressive=process.argv.includes('--progressive');let bodyIV,holdSnapshot=progressive,releaseSnapshot;
 const photoSelection=process.argv.includes('--photo-selection');
+const workerd=process.argv.includes('--workerd')?await(await import('./workerd-response.mjs')).workerdResponseTransport():null;
+let compressedSnapshots=0;
+const progressiveEntries=workerd?73:48;
 let photoDirectory;const photoPaths=[];
 const originalPng=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
 let snapshotStarted;const snapshotRequested=new Promise(resolve=>{snapshotStarted=resolve;});
@@ -27,17 +30,18 @@ if(progressive) {
   };
   const initial=await request('/profile'),writer=new EncryptedDiaryClient({profile:initial.profile,anchor:trust.anchor,documentFormat:2,transport:{valid:async()=>true,snapshot:(h,since)=>readSnapshotPages(options=>request('/snapshot?'+new URLSearchParams(Object.entries(options).filter(([,v])=>v!==null))),h,since),mutation:(proposal,operation)=>request('/mutation',{proposal,operation})}});
   await writer.unlock(new Uint8Array(user.prf));
-  for(let i=0;i<48;i++)await writer.commit(entry({entryDate:new Date(Date.now()-(47-i)*86400000).toISOString().slice(0,10),title:`Synthetic seed ${i}`,content:i===0?'OLDEST_BROWSER_CANARY':'Synthetic body '+i,photos:[]}),{id:String(i+1)},{refresh:false});
+  for(let i=0;i<progressiveEntries;i++)await writer.commit(entry({entryDate:new Date(Date.now()-(progressiveEntries-1-i)*86400000).toISOString().slice(0,10),title:`Synthetic seed ${i}`,content:i===0?'OLDEST_BROWSER_CANARY':'Synthetic body '+i,photos:[]}),{id:String(i+1)},{refresh:false});
   bodyIV=writer.records.get('1').row.envelope.iv;writer.lock();
 }
 const server=createServer(async(req,res)=>{
   try {
     const url=new URL(req.url,origin);
     if(url.pathname.startsWith('/diary/api/')) {
-      if(holdSnapshot&&url.pathname==='/diary/api/encryption/snapshot')await new Promise(resolve=>{releaseSnapshot=resolve;snapshotStarted();});
+      if(holdSnapshot&&url.pathname==='/diary/api/encryption/snapshot'){holdSnapshot=false;await new Promise(resolve=>{releaseSnapshot=resolve;snapshotStarted();});}
       const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=Buffer.concat(chunks);
-      wire.push({path:url.pathname,method:req.method,body:body.toString()});
+      wire.push({path:url.pathname,method:req.method,body:body.toString(),...(url.pathname==='/diary/api/encryption/snapshot'?{snapshotSince:Number(url.searchParams.get('since'))}:{})});
       const reply=await f.worker.fetch(new Request(url,{method:req.method,headers:req.headers,...(body.length?{body}:{} )}),f.env,f.ctx);
+      if(workerd){if(url.pathname==='/diary/api/encryption/snapshot'&&reply.headers.get('Content-Encoding')==='gzip')compressedSnapshots++;await workerd.send(reply,res);return;}
       res.writeHead(reply.status,Object.fromEntries(reply.headers));res.end(Buffer.from(await reply.arrayBuffer()));return;
     }
     if(['/security/passkey-client.js','/assets/pwa-auto-update.js'].includes(url.pathname)){res.setHeader('Content-Type','text/javascript');res.end('/* Synthetic authentication, no production calls. */');return;}
@@ -60,12 +64,13 @@ async function pageFor(context) {
   const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));return page;
 }
 try {
-  const context=await browser.newContext(photoSelection?{viewport:{width:390,height:844},isMobile:true,hasTouch:true}:{}),page=await pageFor(context);let downloads=0;page.on('download',()=>downloads++);
+  const context=await browser.newContext(photoSelection?{viewport:{width:390,height:844},isMobile:true,hasTouch:true}:process.argv.includes('--mobile')?devices['Pixel 7']:{}),page=await pageFor(context);let downloads=0;page.on('download',()=>downloads++);
   await page.goto(origin+'/diary/');await page.locator('#passkey-login').click();await page.locator('#app-view').waitFor({state:'visible'});
   await page.waitForFunction(()=>window.lastPRF.every(value=>value===0));assert.equal(authentications,1);
   if(progressive) {
     await snapshotRequested;assert.equal(await page.locator('#app-view').isVisible(),true,'the authorized app opens while snapshot HTTP is still pending');holdSnapshot=false;releaseSnapshot();
-    await page.locator('#entry-list .diary-entry-card').first().waitFor({state:'visible'});
+    await page.waitForFunction(()=>document.querySelector('#entry-list .diary-entry-card')||document.querySelector('#diary-search-status')?.textContent.includes('日記を準備できませんでした'));
+    assert.ok(await page.locator('#entry-list .diary-entry-card').count(),`initial encrypted list failed: ${await page.locator('#entry-list').textContent()}`);
     await page.waitForFunction(()=>window.oldBodyBlocked);assert.ok(await page.locator('#diary-preparation-status').isVisible());
     await page.locator('#diary-search-input').fill('OLDEST_BROWSER_CANARY');
     await page.waitForFunction(()=>document.querySelector('#entry-list').textContent==='読み込んでいます...');
@@ -97,7 +102,7 @@ try {
   }
   await page.click('#save-entry-button');await page.locator('#editor-dialog').waitFor({state:'hidden'});
   const saved=f.db.sqlite.prepare("SELECT household,author,envelope FROM diary_e2ee_records WHERE state='published'").all();
-  assert.equal(saved.length,progressive?49:1);assert.equal(saved.at(-1).author,user.serviceAccountId);assert.equal(saved.at(-1).household,user.claims.households[0]);
+  assert.equal(saved.length,progressive?progressiveEntries+1:1);assert.equal(saved.at(-1).author,user.serviceAccountId);assert.equal(saved.at(-1).household,user.claims.households[0]);
   assert.equal(JSON.stringify(saved).includes('SYNTHETIC_PRIVATE_POST'),false);assert.equal(JSON.stringify(wire).includes('SYNTHETIC_PRIVATE_POST_BODY'),false);
   if(photoSelection) {
     const media=f.db.sqlite.prepare('SELECT status,account_id,original_key,metadata FROM diary_e2ee_media').all();
@@ -132,5 +137,6 @@ try {
   await freshPage.reload();await freshPage.locator('#passkey-login').waitFor({state:'visible'});assert.equal(await freshPage.locator('#app-view').isVisible(),false);
   assert.equal(JSON.stringify(wire).includes(Buffer.from(user.prf).toString('base64url')),false);
   assert.equal(wire.some(row=>row.path.startsWith('/security/')),false);assert.deepEqual(errors,[]);
+  if(workerd){assert.ok(compressedSnapshots>1);assert.ok(wire.some(row=>row.snapshotSince===-1));assert.ok(wire.some(row=>row.snapshotSince>=0));console.log('Android-emulated public login/list, parallel ciphertext pages, reload/cache reuse, search and writes passed through real workerd HTTP compression.');}
   console.log('Unified Diary passkey: sealed trust, fresh device, unchanged vault, secure session resume, logout/relogin, session mismatch and revocation passed without JSON (synthetic WebAuthn).');
-}finally{await browser.close();await new Promise(resolve=>server.close(resolve));await f.close();for(const path of photoPaths)await unlink(path).catch(()=>{});if(photoDirectory)await rmdir(photoDirectory);}
+}finally{await browser.close();await new Promise(resolve=>server.close(resolve));await workerd?.close();await f.close();for(const path of photoPaths)await unlink(path).catch(()=>{});if(photoDirectory)await rmdir(photoDirectory);}
