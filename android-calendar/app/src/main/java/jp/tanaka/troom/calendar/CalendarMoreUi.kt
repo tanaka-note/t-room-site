@@ -83,7 +83,7 @@ import java.util.Locale
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(14.dp, 6.dp, 14.dp, 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (view == "settings") {
             item { Text(state.account?.name.orEmpty(), style = MaterialTheme.typography.titleMedium) }
-            item { Text("配色", style = MaterialTheme.typography.titleSmall); FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("blue" to "ブルー", "mint" to "ミント", "lavender" to "ラベンダー").forEach { (value, label) -> FilterChip(settings.theme == value, onClick = { model.settings(settings.copy(theme = value)) }, label = { Text(label) }) } } }
+            item { AppearanceSettings(settings) { model.settings(it) } }
             item { Text("起動時の画面", style = MaterialTheme.typography.titleSmall); ChoiceField(CalendarPage.entries.firstOrNull { it.name == settings.startPage }?.label ?: "月間カレンダー", CalendarPage.entries.map { it.name to it.label }) { model.settings(settings.copy(startPage = it)) } }
             item { Text("予定の初期の長さ", style = MaterialTheme.typography.titleSmall); ChoiceField("${settings.durationMinutes}分", listOf(15, 30, 60, 90, 120, 180).map { it.toString() to "${it}分" }) { model.settings(settings.copy(durationMinutes = it.toInt())) } }
             item { HorizontalDivider(); Text("標準の通知", Modifier.padding(top = 12.dp), style = MaterialTheme.typography.titleSmall); Text("終日予定は開始日の0:00を基準にします。", style = MaterialTheme.typography.bodySmall); ReminderOptions(settings.reminders) { model.settings(settings.copy(reminders = it)) } }
