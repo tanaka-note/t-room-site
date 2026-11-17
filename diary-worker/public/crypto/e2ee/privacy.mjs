@@ -48,7 +48,9 @@ export async function createPrivateNavigation(client,{storage=sessionStorage,his
   await prepareTags();
   return {storage:privateStorage,history:privateHistory,prepareTags,
     tagRoute:tag=>{const id=tags.get(tag);if(!id)throw new Error('UnknownTag');return `/diary/tag/${id}/`;},
-    tagValue:segment=>routes.get(segment)||'',
+    // A bookmarked legacy tag route can be read before the async index exists.
+    // prepareTags replaces it with its encrypted route after synchronization.
+    tagValue:segment=>routes.get(segment)||(!segment.startsWith('e_')?decodeURIComponent(segment):''),
     flush:async()=>{await Promise.allSettled([...pending]);},
     close(){closed=true;values.clear();tags.clear();routes.clear();}
   };

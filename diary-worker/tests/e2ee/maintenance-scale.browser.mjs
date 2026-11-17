@@ -9,7 +9,7 @@ import {fileURLToPath} from 'node:url';
 import {chromium} from 'playwright';
 import {systemFixture} from './system-fixture.mjs';
 const f=await systemFixture({phase:'legacy',recoveryExtractable:true}),owner=f.users['main-admin'];
-const root=fileURLToPath(new URL('../../public/',import.meta.url));
+const root=resolve(fileURLToPath(new URL('../../public/',import.meta.url)));
 const server=createServer(async(req,res)=>{
   try {
     const path=new URL(req.url,'http://fixture.invalid').pathname;

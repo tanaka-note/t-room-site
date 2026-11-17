@@ -110,7 +110,7 @@ async function prepareKeys(api,session,authentication,check=()=>{},onProgress=()
     if(!info.vault.trust)throw new Error('DiaryTrustNotSaved');
     await sameTrust(trust,await openTrust(authentication.prfOutput,info.recipientId,info.vault.trust));check();await remember(trust);authentication.diaryTrust=trust;
   }else if(session.encryption.enabled)throw new Error('日記の鍵の準備を待っています。管理者の次の利用後にログインし直してください。');
-  if(session.isGlobalOwner&&trust&&session.keySession?.id) {
+  if(session.isGlobalOwner&&trust&&session.keySession?.id&&session.encryption.phase!=='encrypted') {
     const {migrateDiaryOnLogin}=await import('./diary-automatic-migration.js');
     await migrateDiaryOnLogin({api,session,authentication,trust,check,onProgress});
     const fresh=await api('/session');check();

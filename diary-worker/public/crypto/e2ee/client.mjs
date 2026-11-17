@@ -42,7 +42,7 @@ const numericId = () =>
   );
 const equal = (a, b) => b64(encode(a)) === b64(encode(b));
 export class EncryptedDiaryClient {
-  constructor({ transport, profile, anchor, minimumGeneration=1,documentFormat=1,cache=null,minimumSequence=0 }) {
+  constructor({ transport, profile, anchor, minimumGeneration=1,documentFormat=1,cache=null,minimumSequence=0,lazy=false }) {
     this.transport = transport;
     this.profile = profile;
     this.anchor = anchor;
@@ -57,6 +57,8 @@ export class EncryptedDiaryClient {
     this.closed = true;
     this.pendingDeletes = new Map();
     this.preparedBindings = new WeakMap();
+    this.lazy=lazy;this.documentLoads=new WeakMap();this.background=null;
+    this.onProgress=()=>{};this.onBackgroundError=()=>{};
   }
   async unlock(prf,cachedPrivateKeys) {
     const generation = ++this.generation;
@@ -69,6 +71,8 @@ export class EncryptedDiaryClient {
     this.pendingDeletes.clear();
     this.actions.clear();
     this.privateKeys = null;
+    this.documentLoads=new WeakMap();
+    this.background=null;
     const state = await unlockSession({
       prf,
       cachedPrivateKeys,
@@ -91,6 +95,7 @@ export class EncryptedDiaryClient {
     this.pendingDeletes.clear();
     this.actions.clear();
     this.privateKeys = null;
+    this.documentLoads=new WeakMap();this.onProgress({phase:'locked',completed:0,total:0});
   }
   async check() {
     if (this.closed || !(await this.transport.valid())) {
@@ -104,7 +109,13 @@ export class EncryptedDiaryClient {
   get household() {
     return this.profile.household;
   }
-  async sync() {
+  sync() {
+    if(this.syncing?.generation===this.generation)return this.syncing.promise;
+    const pending={generation:this.generation,promise:this.syncSnapshot()};this.syncing=pending;
+    void pending.promise.finally(()=>{if(this.syncing===pending)this.syncing=null;}).catch(()=>{});
+    return pending.promise;
+  }
+  async syncSnapshot() {
     await this.check();
     const generation = this.generation;
     let cached=null, checkpoint=0;
@@ -124,6 +135,7 @@ export class EncryptedDiaryClient {
       const known=cached?.records||[...this.records.values()].map(value=>value.row);
       if(known.length!==snapshot.records.length||known.some(row=>!snapshot.records.some(next=>next.id===row.id&&equal(row,next))))throw new Error('RecordEquivocation');
     }
+    const cacheUnchanged=Boolean(cached&&snapshot.unchanged&&cached.sequence===snapshot.sequence);
     if(cached){
       const rows=new Map(cached.records.map(row=>[row.id,row]));
       if(snapshot.delta&&snapshot.baseSequence!==since)throw new Error('InvalidSnapshot');
@@ -148,7 +160,8 @@ export class EncryptedDiaryClient {
       throw new Error("InvalidSnapshot");
     const records = snapshot.delta ? new Map(this.records) : new Map();
     for (const id of snapshot.removed) records.delete(id);
-    let cursor = 0;
+    let cursor = 0, indexed=0;
+    if(this.lazy)this.onProgress({phase:'index',completed:0,total:snapshot.records.length});
     await Promise.all(
       Array.from({ length: 8 }, async () => {
         while (cursor < snapshot.records.length) {
@@ -178,6 +191,13 @@ export class EncryptedDiaryClient {
               ):this.recordKeys.get(`${row.id}:${row.revision}`))
             : this.keys.get(row.scope);
           if (!key) throw new Error("GrantDenied");
+          if(this.lazy&&row.state!=='preferences') {
+            const summary=await open(key,row.summary,{...binding,kind:'summary'});
+            if(row.state!=='investment'&&(typeof summary.entryDate!=='string'||typeof summary.title!=='string'||!Array.isArray(summary.tags)||summary.tags.some(tag=>typeof tag!=='string')||summary.photoCount!==row.photoIds.length))throw new Error('InvalidSummary');
+            records.set(row.id,{row,summary,key});
+            indexed++;if(indexed%25===0)this.onProgress({phase:'index',completed:indexed,total:snapshot.records.length});
+            continue;
+          }
           const value = await open(key, row.envelope, {
             ...binding,
             kind: "document",
@@ -208,7 +228,7 @@ export class EncryptedDiaryClient {
     if (generation !== this.generation) throw new Error("SessionChanged");
     if (snapshot.sequence < (this.sequence ?? -1))
       throw new Error("RollbackDetected");
-    if(this.cache){const value={version:1,household:this.household,sequence:snapshot.sequence,baseSequence:-1,delta:false,unchanged:false,removed:[],records:[...records.values()].map(r=>r.row)};try{await this.cache.put(cacheKey,value,checkpointKey);}catch(error){if(error.message==='CacheRollbackRejected')throw new Error('RollbackDetected');/* Storage availability cannot turn a durable save into a failed save. */}}
+    if(this.cache&&!cacheUnchanged){const value={version:1,household:this.household,sequence:snapshot.sequence,baseSequence:-1,delta:false,unchanged:false,removed:[],records:[...records.values()].map(r=>r.row)};try{await this.cache.put(cacheKey,value,checkpointKey);}catch(error){if(error.message==='CacheRollbackRejected')throw new Error('RollbackDetected');/* Storage availability cannot turn a durable save into a failed save. */}}
     if(generation!==this.generation||this.closed)throw new Error('SessionChanged');
     for (const [id, previous] of this.records)
       if (!records.has(id))
@@ -217,8 +237,72 @@ export class EncryptedDiaryClient {
       this.revisionFloor.set(id, current.row.revision);
     this.records = records;
     this.sequence = snapshot.sequence;
+    if(this.lazy)this.progress();
     if(generation!==this.generation||this.closed)throw new Error("SessionChanged");
     return this.records;
+  }
+  progress() {
+    const total=this.records.size,completed=[...this.records.values()].filter(record=>record.entry).length;
+    this.onProgress({phase:completed===total?'complete':'documents',completed,total});
+  }
+  async hydrate(id) {
+    for(let attempt=0;attempt<3;attempt++) {
+      if(this.closed)throw Object.assign(new Error('SessionExpired'),{status:401});
+      const record=this.records.get(String(id));if(!record)throw new InputError(404,'NotFound');
+      if(record.entry)return record.entry;
+      const generation=this.generation;
+      if(!this.documentLoads.has(record))this.documentLoads.set(record,(async()=>{
+        const value=await open(record.key,record.row.envelope,{...bindingOf(record.row),kind:'document'});
+        if(this.closed||generation!==this.generation)throw new Error('SessionChanged');
+        if(value.version!==1||!value.entry||typeof value.entry!=='object')throw new Error('UnsupportedPayload');
+        if(record.row.state==='investment')investmentRecords(value.entry.records);
+        else if(typeof value.entry.title!=='string'||typeof value.entry.content!=='string'||!Array.isArray(value.entry.photos)||!equal(value.entry.photos.map(p=>p.id),record.row.photoIds)||!equal({entryDate:value.entry.entryDate,title:value.entry.title,tags:value.entry.tags,weather:value.entry.weather,photoCount:value.entry.photos.length},record.summary))throw new Error('InvalidPayload');
+        if(this.records.get(String(id))===record){record.entry=value.entry;delete record.key;this.progress();}
+      })());
+      await this.documentLoads.get(record);
+      if(this.records.get(String(id))===record)return record.entry;
+    }
+    throw new Error('SnapshotChanged');
+  }
+  async hydrateRecords(records) {
+    let cursor=0;
+    await Promise.all(Array.from({length:Math.min(4,records.length)},async()=>{
+      while(cursor<records.length)await this.hydrate(records[cursor++].row.id);
+    }));
+  }
+  async ensureList(parameters) {
+    if(!this.lazy)return;
+    const draft=parameters.get('draft')==='1',trash=parameters.get('trash')==='1';
+    if(splitSearchTerms(parameters.get('q')).length||draft||trash) {
+      // Search never silently omits a document that is still being prepared.
+      await this.hydrateRecords([...this.records.values()].filter(r=>r.row.state===(trash?'trash':draft?'draft':'published')));return;
+    }
+    const entries=this.matchingEntries(parameters),end=Math.max(0,Number(parameters.get('offset'))||0)+Math.min(50,Math.max(1,Number(parameters.get('limit'))||20));
+    const boundary=entries[Math.min(end,entries.length)-1]?.entryDate;
+    // summary has no publication timestamp; hydrate every tie on the boundary
+    // date before applying the existing stable full-document ordering.
+    await this.hydrateRecords(entries.filter(e=>!boundary||e.entryDate>=boundary).map(e=>this.records.get(String(e.id))));
+  }
+  async ensureAll() {await this.hydrateRecords([...this.records.values()]);}
+  startBackground() {
+    if(!this.lazy||this.closed||this.background)return this.background;
+    const generation=this.generation;
+    const running=(async()=>{
+      await new Promise(resolve=>setTimeout(resolve,0));
+      while(!this.closed&&generation===this.generation) {
+        const queue=[...this.records.values()].filter(r=>!r.entry).sort((a,b)=>String(b.summary?.entryDate||'').localeCompare(String(a.summary?.entryDate||''))).map(r=>r.row.id);
+        if(!queue.length)return;
+        for(let index=0;index<queue.length&&!this.closed&&generation===this.generation;index+=2) {
+          await Promise.all(queue.slice(index,index+2).map(id=>this.hydrate(id).catch(error=>{
+            // A concurrent, authenticated delta may legitimately remove a row.
+            if(error.status===404&&!this.records.has(id))return;throw error;
+          })));
+          await new Promise(resolve=>setTimeout(resolve,0));
+        }
+      }
+    })().catch(error=>{if(!this.closed&&generation===this.generation)this.onBackgroundError(error);}).finally(()=>{if(this.background===running)this.background=null;});
+    this.background=running;
+    return this.background;
   }
   async prepare(
     entry,
@@ -388,7 +472,7 @@ export class EncryptedDiaryClient {
     )
       throw new Error("InvalidReceipt");
     this.pending.delete(intent);
-    if (refresh) await this.sync();
+    if (refresh) {await this.sync();if(this.records.has(result.id))await this.hydrate(result.id);}
     else
       this.records.set(proposal.id, {
         row: {
@@ -414,11 +498,12 @@ export class EncryptedDiaryClient {
     this.actions.delete(key);
     return result;
   }
-  entry(id) {
+  entry(id, summaryOnly=false) {
     const record = this.records.get(String(id));
     if (!record || !["published","draft","trash"].includes(record.row.state)) throw new InputError(404, "NotFound");
+    if(!record.entry&&!summaryOnly)throw new InputError(425,'EntryNotReady');
     return {
-      ...record.entry,
+      ...(record.entry||record.summary),
       id: Number(record.row.id),
       revision: record.row.revision,
       status: record.row.state === "draft" ? "draft" : "published",
@@ -436,6 +521,7 @@ export class EncryptedDiaryClient {
   }
   async setFavorite(id, enabled) {
     await this.sync();
+    await this.hydrate(id);
     this.entry(id);
     const recordId = preferencesScope(this.household, this.actor.accountId);
     const values = new Set(this.favoriteIds());
@@ -462,6 +548,7 @@ export class EncryptedDiaryClient {
       return { entry: this.entry(result.id) };
     }
     await this.sync();
+    if(id)await this.hydrate(id);
     let current = id ? this.records.get(String(id)) : null;
     if (id && !current) throw new InputError(404, "NotFound");
     if (current && body.revision !== current.row.revision)
@@ -519,6 +606,7 @@ export class EncryptedDiaryClient {
       const source = this.records.get(current.row.sourceId);
       if (!source || source.row.revision !== current.row.sourceRevision)
         throw new InputError(409, "RevisionConflict");
+      await this.hydrate(source.row.id);
       entry.authorId = source.row.author;
       entry.authorName = source.entry.authorName;
       options = {
@@ -552,6 +640,7 @@ export class EncryptedDiaryClient {
     await this.sync();
     const record = this.records.get(String(id));
     if (!record) throw new InputError(404, "NotFound");
+    await this.hydrate(id);
     if (revision != null && record.row.revision !== revision)
       throw new InputError(409, "RevisionConflict");
     if (operation === "purge" || operation === "discard") {
@@ -588,7 +677,7 @@ export class EncryptedDiaryClient {
   async attachPhotos(entryId,photos) {
     const actionKey=`attachPhotos:${entryId}:${photos.map(p=>p.id).sort().join(',')}`;
     if(this.actions.has(actionKey))return this.commitAction(actionKey);
-    await this.sync();const record=this.records.get(String(entryId));
+    await this.sync();await this.hydrate(entryId);const record=this.records.get(String(entryId));
     if(!record||!['published','draft'].includes(record.row.state))throw new InputError(404,'NotFound');
     const existing=new Set(record.row.photoIds),added=photos.filter(p=>!existing.has(p.id));
     if(!added.length)return {ok:true,id:String(entryId),revision:record.row.revision};
@@ -609,9 +698,10 @@ export class EncryptedDiaryClient {
     await this.sync();
     const record = [...this.records.values()].find(
       (r) =>
-        r.row.state === "published" && r.entry.photos?.some((p) => p.id === id),
+        r.row.state === "published" && r.row.photoIds.includes(id),
     );
     if (!record) throw new InputError(404, "NotFound");
+    await this.hydrate(record.row.id);
     if (
       record.row.revision !== revision ||
       [...this.records.values()].some((r) => r.row.sourceId === record.row.id)
@@ -636,6 +726,7 @@ export class EncryptedDiaryClient {
   }
   async migrateLegacy(entries, onProgress = () => {}) {
     await this.sync();
+    await this.ensureAll();
     for (let i = 0; i < entries.length; i++) {
       if (i && i % 25 === 0) await this.sync();
       const entry = structuredClone(entries[i]),
@@ -671,7 +762,7 @@ export class EncryptedDiaryClient {
     }
     await this.sync();
   }
-  list(parameters) {
+  matchingEntries(parameters) {
     const draft = parameters.get("draft") === "1",
       trash = parameters.get("trash") === "1",
       favorite = parameters.get("favorite") === "1";
@@ -685,7 +776,7 @@ export class EncryptedDiaryClient {
         (r) =>
           r.row.state === (trash ? "trash" : draft ? "draft" : "published"),
       )
-      .map((r) => this.entry(r.row.id));
+      .map((r) => this.entry(r.row.id,true));
     if (!draft)
       entries = entries.filter(
         (e) =>
@@ -697,7 +788,7 @@ export class EncryptedDiaryClient {
           terms.every(
             (t) =>
               e.title.includes(t) ||
-              e.content.includes(t) ||
+              e.content?.includes(t) ||
               e.tags.some((tag) => tag.includes(t)),
           ),
       );
@@ -709,10 +800,14 @@ export class EncryptedDiaryClient {
         String(b.lastPublishedAt).localeCompare(String(a.lastPublishedAt)) ||
         b.id - a.id,
     );
+    return entries;
+  }
+  list(parameters) {
+    const entries=this.matchingEntries(parameters);
     const offset = Math.max(0, Number(parameters.get("offset")) || 0),
       limit = Math.min(50, Math.max(1, Number(parameters.get("limit")) || 20));
     return {
-      entries: entries.slice(offset, offset + limit),
+      entries: entries.slice(offset, offset + limit).map(e=>this.entry(e.id)),
       hasMore: entries.length > offset + limit,
       offset,
       limit,
@@ -723,7 +818,7 @@ export class EncryptedDiaryClient {
       tags = new Map();
     for (const r of this.records.values())
       if (r.row.state === "published") {
-        const e = r.entry;
+        const e = r.entry||r.summary;
         const month = e.entryDate.slice(0, 7);
         months.set(month, (months.get(month) || 0) + 1);
         for (const tag of e.tags) tags.set(tag, (tags.get(tag) || 0) + 1);
