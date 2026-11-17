@@ -1,7 +1,7 @@
 const coreUrl = new URL(`photo-migration-core.js${new URL(import.meta.url).search}`, import.meta.url);
 const { PhotoMigration, validateManifest } = await import(coreUrl.href);
 
-export async function mountMigration(initialSession, year = 2025) {
+export async function mountMigration(initialSession, year = 2025, encryptionRuntime = null) {
   if (![2023, 2024, 2025].includes(year)) throw new Error('移行対象の年が不正です。');
   const stylesheet = document.createElement('link');
   stylesheet.rel = 'stylesheet';
@@ -122,7 +122,10 @@ export async function mountMigration(initialSession, year = 2025) {
     for (let attempt = 0; attempt < attempts; attempt++) {
       let response;
       try {
-        response = await fetch(`/diary/api${path}`, { ...request, signal: AbortSignal.timeout(body instanceof FormData ? 900000 : 60000) });
+        const init={ ...request, signal: AbortSignal.timeout(body instanceof FormData ? 900000 : 60000) };
+        response = encryptionRuntime
+          ? await (body instanceof FormData ? encryptionRuntime.fetch(`/diary/api${path}`,init) : encryptionRuntime.api(path,init))
+          : await fetch(`/diary/api${path}`,init);
       } catch (error) {
         degraded = true;
         if (attempt + 1 === attempts) throw new Error('通信が中断しました。保存結果を照合してから再開できます。');
@@ -204,6 +207,7 @@ export async function mountMigration(initialSession, year = 2025) {
         checkpointQueue = Promise.resolve();
         try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
         const engine = new PhotoMigration({ manifest, journal, destination, api, readFile, saveJournal,
+          photoCommitChangesRevision: Boolean(encryptionRuntime),
           canParallel: () => !degraded && !navigator.connection?.saveData && !/(^|-)2g$/.test(navigator.connection?.effectiveType || ''),
           shouldStop: () => stop, onProgress: progress => {
             element('state').textContent = `${progress.date} ${progress.stage === 'uploading' ? `${progress.uploaded}/${progress.photos}枚` : progress.stage === 'verified' ? '照合済み' : '保存完了'} / 全体 ${refreshProgress()}/${manifest.days.length}日`;

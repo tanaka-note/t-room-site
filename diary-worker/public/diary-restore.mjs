@@ -2444,6 +2444,7 @@ var INVESTMENT_VALUES = Object.freeze(["total", "cash", "stocks", "funds", "bond
 var READ_FORMATS = Object.freeze([1, 2]);
 
 // diary-worker/e2ee/store.mjs
+var recordBytesSQL = ["envelope", "summary", "key_box", "photo_ids", "attestation"].map((column) => `length(CAST(${column} AS BLOB))`).join("+") + "+1000";
 var parseRecord = (row) => row ? {
   id: row.id,
   household: row.household,

@@ -66,7 +66,7 @@ export async function handleEncryptedMedia(request,env,url,path,actor,{json,read
     const lease=await writeLease(env.DB),body=await readJson(request,4096),target=body.targetEntryId?await store.get(String(body.targetEntryId)):null;
     if(body.targetEntryId&&(!target||target.household!==actor.activeHouseholdId||!['published','draft'].includes(target.state)||!canRead(actor,target)))fail(403,'InvalidUploadTarget');
     const id=crypto.randomUUID();const saved=await env.DB.prepare(`INSERT INTO diary_e2ee_uploads(id,household,account_id,target_id,status,expires_at) SELECT ?,?,?,?,'active',? WHERE (SELECT generation FROM diary_e2ee_control WHERE id=1)=?`).bind(id,actor.activeHouseholdId,actor.accountId,target?.id||null,Date.now()+24*HOUR,lease.generation).run();
-    if(saved.meta.changes!==1)fail(423,'DiaryWritesPaused');return json({uploadSession:{id}});
+    if(saved.meta.changes!==1)fail(423,'DiaryWritesPaused');return json({uploadSession:{id,expiresAt:new Date(Date.now()+24*HOUR).toISOString()}});
   }
   const match=path.match(/^\/api\/encryption\/uploads\/([0-9a-f-]{36})(?:\/(photos)(?:\/([0-9a-f-]{36}))?|\/(commit))?$/);
   if(!match)fail(404,'UnknownUploadRoute');

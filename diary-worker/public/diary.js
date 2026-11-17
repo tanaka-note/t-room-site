@@ -3,11 +3,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   const diaryHistory=encryptionRuntime?{get state(){return encryptionRuntime.history.state;},get scrollRestoration(){return encryptionRuntime.history.scrollRestoration;},set scrollRestoration(value){encryptionRuntime.history.scrollRestoration=value;},replaceState:(...args)=>encryptionRuntime.history.replaceState(...args),back:()=>encryptionRuntime.history.back()}:window.history;
   let encryptedNavigationType=null,encryptedReferrer='',lastEncryptedSession=initialSession;
   let encryptedRoute=location.pathname;
+  let remoteRefreshPending=false,remoteRefreshRunning=false;
   const migrationYear = new URL(location.href).searchParams.get("takeout-migration");
   if (["2023", "2024", "2025"].includes(migrationYear)) {
     if (!initialSession?.authenticated || !initialSession.canManageEntries) throw new Error("日記を作成できるアカウントでログインしてください。");
     const migrationUrl = new URL(`photo-migration.js${new URL(import.meta.url).search}`, import.meta.url);
-    await (await import(migrationUrl.href)).mountMigration(initialSession, Number(migrationYear));
+    await (await import(migrationUrl.href)).mountMigration(initialSession, Number(migrationYear), encryptionRuntime);
     onReady();
     return;
   }
@@ -396,6 +397,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function bindEvents() {
     if(encryptionRuntime){
       window.addEventListener('troom-session-expired',()=>{resetState();showLogin('ログイン状態が変わりました。パスキーでログインし直してください。');});
+      window.addEventListener('troom-diary-data-changed',()=>{
+        if(!state.role)return;
+        remoteRefreshPending=true;void refreshRemoteView();
+      });
       window.addEventListener('popstate',()=>{if(encryptedRoute===location.pathname||!isDiaryListPath(location.pathname))return;encryptedReferrer=encryptedRoute;encryptedNavigationType='back';void openEncryptedRoute().catch(error=>showToast(error.message));});
       let snapshotTimer;
       window.addEventListener('scroll',()=>{clearTimeout(snapshotTimer);snapshotTimer=setTimeout(()=>{if(!elements.appView.hidden&&!document.querySelector('dialog[open]'))storeDiaryReturnView('',{historyOnly:true});},150);},{passive:true});
@@ -828,6 +833,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       state.dateTo = "";
       state.tag = "";
       state.tagQuery = "";
+      elements.searchInput.value = "";
       elements.dateFrom.value = "";
       elements.dateTo.value = "";
       elements.tagSearchInput.value = "";
@@ -875,8 +881,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       ...["isGlobalOwner", "canManageEntries", "canViewTrash", "canPermanentlyDelete", "canViewInvestment"].map(key => Boolean(session[key]))]);
   }
 
-  async function loadEntries(reset, bootstrap = false, returnEntryCount = 0) {
-    if (!bootstrap) cancelPositionRestoration();
+  async function refreshRemoteView() {
+    if(!remoteRefreshPending||remoteRefreshRunning||!state.role||state.entriesAbortController||state.searchTimer||state.searchComposing)return;
+    remoteRefreshPending=false;remoteRefreshRunning=true;
+    try{await Promise.all([loadMeta(true),loadEntries(true,false,Math.max(state.entries.length,isMonthlyView()?5:20),true)]);}
+    finally{remoteRefreshRunning=false;if(remoteRefreshPending)window.setTimeout(()=>void refreshRemoteView(),0);}
+  }
+
+  async function loadEntries(reset, bootstrap = false, returnEntryCount = 0, background = false) {
+    if (!bootstrap && !background) cancelPositionRestoration();
     const generation = sessionGeneration;
     window.clearTimeout(state.searchTimer);
     state.searchTimer = null;
@@ -893,7 +906,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     let nextOffset = reset ? 0 : state.offset;
     let hasMore = true;
     let pageGuard = 0;
-    if (reset) {
+    if (reset && !background) {
       state.offset = 0;
       state.entries = [];
       state.entryMap.clear();
@@ -948,16 +961,18 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       for (const entry of state.entries) state.entryMap.set(entry.id, entry);
       state.offset = state.entries.length;
       state.hasMore = hasMore;
-      if (bootstrap) preserveViewport(() => renderEntries(reset ? 0 : previousEntryCount));
+      if (bootstrap || background) preserveViewport(() => renderEntries(reset ? 0 : previousEntryCount));
       else renderEntries(reset ? 0 : previousEntryCount);
       updateSearchStatus();
       return true;
     } catch (error) {
       if (requestId !== state.requestId) return;
+      if(background){showToast(error.message);return false;}
       elements.entryList.replaceChildren(createEmpty(error.message));
       elements.searchStatus.textContent = error.message;
     } finally {
       if (state.entriesAbortController === abortController) state.entriesAbortController = null;
+      if(remoteRefreshPending)window.setTimeout(()=>void refreshRemoteView(),0);
       if (requestId === state.requestId) {
         elements.loadMore.hidden = monthlyView ? state.monthExpanded || !state.hasMore : !state.hasMore;
         setBusy(elements.loadMore, false, monthlyView ? "もっと見る" : "さらに表示");
@@ -1251,13 +1266,14 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     await loadEntries(false);
   }
 
-  async function loadMeta() {
+  async function loadMeta(background = false) {
     const generation = sessionGeneration;
     try {
       const result = await api("/meta");
-      if (generation === sessionGeneration) applyMeta(result);
+      if (generation === sessionGeneration) preserveViewport(()=>applyMeta(result));
     } catch (error) {
       if (generation !== sessionGeneration) return;
+      if(background){showToast(error.message);return;}
       elements.archiveList.replaceChildren(createEmpty(error.message));
       elements.tagList.replaceChildren(createEmpty(error.message));
     }
@@ -4322,6 +4338,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function resetState() {
+    remoteRefreshPending=false;
     encryptionRuntime?.lock();
     photoSaver?.suspend();
     cancelPositionRestoration();

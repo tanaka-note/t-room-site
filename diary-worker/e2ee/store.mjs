@@ -16,6 +16,12 @@ import { verifyRecord } from "./record.mjs";
 const fail = (message, status = 409) => {
   throw Object.assign(new Error(message), { status });
 };
+// Match the cold-reader budget. Include every account's preferences so a write
+// cannot make any authorized reader's next snapshot unreadable.
+const recordBytesSQL = ['envelope','summary','key_box','photo_ids','attestation']
+  .map(column => `length(CAST(${column} AS BLOB))`).join('+') + '+1000';
+const recordBytes = row => 1000 + [row.envelope,row.summary,row.keyBox,row.photoIds,row.attestation]
+  .reduce((bytes,value) => bytes + encode(value).length,0);
 export const parseRecord = (row) =>
   row
     ? {
@@ -218,14 +224,16 @@ export function createStore(db, registry) {
     else if (!["save", "import"].includes(operation)) fail("InvalidTransition");
     if (next.sourceId && operation !== "import") {
       const source = await get(next.sourceId);
+      const continuingDraft = current?.state === "draft" && next.state === "draft"
+        && next.sourceId === current.sourceId && next.sourceRevision === current.sourceRevision;
       if (
-        next.state !== "draft" ||
+        !continuingDraft && (next.state !== "draft" ||
         !source ||
         source.household !== next.household ||
         source.state !== "published" ||
         !canRead(actor, source) ||
         !Number.isSafeInteger(next.sourceRevision) ||
-        next.sourceRevision !== source.revision
+        next.sourceRevision !== source.revision)
       )
         fail("InvalidDraftSource");
     }
@@ -311,10 +319,17 @@ export function createStore(db, registry) {
         ? ` AND NOT EXISTS(SELECT 1 FROM diary_e2ee_records d WHERE d.state='draft' AND d.source_id=diary_e2ee_records.id)`
         : "";
     const mediaGuard = ` AND NOT EXISTS(SELECT 1 FROM diary_e2ee_media_gc WHERE photo_id IN (SELECT value FROM json_each(?)))`;
+    const excluded = [next.id, ...(operation === 'publish' ? [proposal.draftId] : [])];
+    const nextBytes = recordBytes(proposal);
+    const needsBudget = !current || nextBytes > recordBytes(current);
+    const budgetSQL = `SELECT COUNT(*) AS count,COALESCE(SUM(${recordBytesSQL}),0) AS bytes FROM diary_e2ee_records WHERE household=? AND id NOT IN (SELECT value FROM json_each(?))`;
+    const budgetBindings = [next.household,JSON.stringify(excluded)];
+    const capacityGuard = needsBudget ? ` AND (SELECT count<5000 AND bytes+?<=50000000 FROM (${budgetSQL}))` : '';
+    const capacityBindings = needsBudget ? [nextBytes,...budgetBindings] : [];
     const write = current
       ? db
           .prepare(
-            `UPDATE diary_e2ee_records SET household=?,scope=?,state=?,author=?,revision=?,epoch=?,source_id=?,source_revision=?,retained_for=?,envelope=?,summary=?,photo_ids=?,request_id=?,mutation_id=?,key_box=?,attestation=? WHERE id=? AND revision=?${publishGuard}${photoGuard}${mediaGuard}${rolloutGuard}${stagedGuard}`,
+            `UPDATE diary_e2ee_records SET household=?,scope=?,state=?,author=?,revision=?,epoch=?,source_id=?,source_revision=?,retained_for=?,envelope=?,summary=?,photo_ids=?,request_id=?,mutation_id=?,key_box=?,attestation=? WHERE id=? AND revision=?${publishGuard}${photoGuard}${mediaGuard}${rolloutGuard}${stagedGuard}${capacityGuard}`,
           )
           .bind(
             ...values,
@@ -324,13 +339,13 @@ export function createStore(db, registry) {
               ? [proposal.draftId, proposal.draftRevision]
               : []),
             JSON.stringify(proposal.photoIds),
-            ...rolloutBindings,...stagedBindings,
+            ...rolloutBindings,...stagedBindings,...capacityBindings,
           )
       : db
           .prepare(
-            `INSERT INTO diary_e2ee_records(household,scope,state,author,revision,epoch,source_id,source_revision,retained_for,envelope,summary,photo_ids,request_id,mutation_id,key_box,attestation,id) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM diary_e2ee_media_gc WHERE photo_id IN (SELECT value FROM json_each(?)))${rolloutGuard}${stagedGuard} ON CONFLICT(id) DO NOTHING`,
+            `INSERT INTO diary_e2ee_records(household,scope,state,author,revision,epoch,source_id,source_revision,retained_for,envelope,summary,photo_ids,request_id,mutation_id,key_box,attestation,id) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM diary_e2ee_media_gc WHERE photo_id IN (SELECT value FROM json_each(?)))${rolloutGuard}${stagedGuard}${capacityGuard} ON CONFLICT(id) DO NOTHING`,
           )
-          .bind(...values,next.id,JSON.stringify(proposal.photoIds),...rolloutBindings,...stagedBindings);
+          .bind(...values,next.id,JSON.stringify(proposal.photoIds),...rolloutBindings,...stagedBindings,...capacityBindings);
     const result = { ok: true, id: next.id, revision: next.revision };
     assertActor(actor, next.household);
     const statements = [
@@ -375,7 +390,10 @@ export function createStore(db, registry) {
       );
     await db.batch(statements);
     const saved = await requestLookup();
-    if (!saved) fail("RevisionConflict");
+    if (!saved) {
+      if(needsBudget){const budget=await db.prepare(budgetSQL).bind(...budgetBindings).first();if(budget.count>=5000||budget.bytes+nextBytes>50_000_000)fail('DiaryCapacityExceeded',413);}
+      fail("RevisionConflict");
+    }
     if (saved.fingerprint !== fingerprint) fail("IdempotencyConflict");
     return JSON.parse(saved.result);
   }
@@ -513,7 +531,7 @@ export function createStore(db, registry) {
     assertActor(actor,household);
     const [sequence,records]=await db.batch([
       db.prepare('SELECT COALESCE(MAX(seq),0) seq FROM diary_e2ee_changes WHERE household=?').bind(household),
-      db.prepare(`SELECT r.id,length(r.envelope)+length(r.summary)+length(r.key_box)+length(r.photo_ids)+length(r.attestation)+1000 bytes FROM diary_e2ee_records r WHERE r.household=? AND ${visibleSQL} ORDER BY r.id LIMIT 5001`).bind(household,...visibleBindings(actor,household))
+      db.prepare(`SELECT r.id,${recordBytesSQL} bytes FROM diary_e2ee_records r WHERE r.household=? AND ${visibleSQL} ORDER BY r.id LIMIT 5001`).bind(household,...visibleBindings(actor,household))
     ]);
     if(records.results.length>5000||records.results.reduce((n,r)=>n+r.bytes,0)>50_000_000)fail('SnapshotLimit',413);
     const pages=[];let after=null,previous=null,count=0,bytes=0;

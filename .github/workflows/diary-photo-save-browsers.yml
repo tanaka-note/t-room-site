@@ -8,6 +8,10 @@ on:
       - 'diary-worker/public/diary.css'
       - 'diary-worker/public/index.html'
       - 'diary-worker/tests/browser/photo-save.mjs'
+      - 'diary-worker/tests/e2ee/integrity.browser.mjs'
+      - 'diary-worker/e2ee/**'
+      - 'diary-worker/public/diary-encryption.js'
+      - 'diary-worker/public/photo-migration*.js'
       - 'diary-worker/tests/photo-save.mjs'
       - 'diary-worker/tests/date-input-platform-ui.mjs'
       - 'diary-worker/tests/date-wheel-dismiss-ui.mjs'
@@ -64,10 +68,19 @@ jobs:
           TROOM_CHROMIUM_CHANNEL: ${{ matrix.channel }}
           TROOM_TRACE_DIR: tmp/verify-artifacts/photo-save
         run: node --require ./tools/browser-trace.cjs diary-worker/tests/browser/photo-save.mjs
+      - name: Verify encrypted sessions, concurrent edits and Takeout recovery
+        env:
+          TROOM_BROWSER: ${{ matrix.engine }}
+          PLAYWRIGHT_PACKAGE: ${{ matrix.package }}
+          TROOM_CHROMIUM_CHANNEL: ${{ matrix.channel }}
+          TROOM_TRACE_DIR: tmp/verify-artifacts/diary-integrity
+        run: node --require ./tools/browser-trace.cjs diary-worker/tests/e2ee/integrity.browser.mjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
           name: diary-photo-save-${{ matrix.os }}
-          path: tmp/verify-artifacts/photo-save/
+          path: |
+            tmp/verify-artifacts/photo-save/
+            tmp/verify-artifacts/diary-integrity/
           if-no-files-found: ignore
           retention-days: 5
