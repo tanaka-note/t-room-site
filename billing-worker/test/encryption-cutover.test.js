@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { capture } from "../../backup-worker/src/backup.js";
+import { compress, verifiedPut } from "../../backup-worker/src/integrity.js";
+import {
+  planBillingLegacy, readBillingLegacyArchive, readBillingLegacySource,
+  saveBillingLegacyVerification, verifyBillingLegacyCoverage, writeBillingLegacyArchive
+} from "../../backup-worker/src/billing-legacy.js";
 import { billingCheckpoint } from "../../backup-worker/src/billing-checkpoint.js";
 import { BILLING_ENCRYPTED_MIGRATION } from "../../backup-worker/src/billing-encrypted.js";
 import { readExportManifest, saveExport } from "../../backup-worker/src/export-backup.js";
@@ -10,14 +16,13 @@ import { restoreIsolated } from "../../backup-worker/tools/restore-isolated.mjs"
 import { encryptedBillingApp } from "../public/billing-encrypted-app.mjs";
 import { prepareBillingVault } from "../public/billing-key-client.mjs";
 import { stageBillingMigration } from "../public/billing-migration-client.mjs";
-import { restoreBillingCheckpoint } from "../public/billing-checkpoint-restore.mjs";
+import { prepareBillingLegacyMaintenance, restoreBillingCheckpoint } from "../public/billing-checkpoint-restore.mjs";
 import { fixture, seedLedger } from "./performance-fixture.mjs";
 
 test("ordinary admin login stages, restores and opens encrypted Billing; normal mutations preserve members and audit", async () => {
   const f = fixture();
   const ownerPRF = crypto.getRandomValues(new Uint8Array(32)), memberPRF = crypto.getRandomValues(new Uint8Array(32));
   try {
-    f.db.exec(readFileSync(new URL("../encryption/migration-preparation.sql",import.meta.url),"utf8"));
     f.securityDb.exec(readFileSync(new URL("../../security-worker/e2ee/billing-vaults.sql",import.meta.url),"utf8"));
     f.securityDb.exec(`INSERT INTO security_identities (id,display_name,status,is_security_admin)
         VALUES ('primary-admin','Fixture admin','active',1);
@@ -39,11 +44,29 @@ test("ordinary admin login stages, restores and opens encrypted Billing; normal 
     const recoveryPublicKey = await crypto.subtle.exportKey("jwk",recovery.publicKey);
     f.env.SECURITY.getBillingRecoveryContext = async () => ({ publicKey:recoveryPublicKey,envelope:{} });
     seedLedger(f);
-    Object.assign(f.env,{ BILLING_KEY_PREPARATION_ENABLED:"true", BILLING_MIGRATION_ENABLED:"true", BILLING_CUTOVER_ENABLED:"true" });
+    f.db.exec(`INSERT INTO billing_opening_balances VALUES ('chiharu','2026-08-01',225,'owner',CURRENT_TIMESTAMP);
+      INSERT INTO billing_audit_logs(event_type,actor_account_id,target_account_id,entry_id,details_json)
+      VALUES ('entry_created','owner','chiharu',1,'{"memo":"fixture"}');`);
     const backupEnv = { BILLING_DB:f.env.DB,BACKUP:new Bucket() };
+    const oldDay = Date.parse("2026-11-01T00:00:00Z");
+    const snapshot = await capture(f.env.DB, "billing", oldDay);
+    await backupEnv.BACKUP.put("d1/billing/daily/2026-11-01.json.gz", await compress({ ...snapshot, formatVersion:1 }));
+    await verifiedPut(backupEnv.BACKUP,"d1/billing/v2/daily/2026-11-01.json.gz",await compress(snapshot));
+    await saveExport(exportEnv("billing",f.env.DB,backupEnv.BACKUP),"billing",oldDay,{
+      fetcher:exportFetcher(f.db,"billing").fetcher
+    });
+    f.db.exec(readFileSync(new URL("../encryption/migration-preparation.sql",import.meta.url),"utf8"));
+    Object.assign(f.env,{ BILLING_KEY_PREPARATION_ENABLED:"true", BILLING_MIGRATION_ENABLED:"true", BILLING_CUTOVER_ENABLED:"true", BILLING_LEGACY_MIN_GENERATIONS:"4" });
+    const bucket = backupEnv.BACKUP;
     f.env.BILLING_BACKUP = {
       writeCheckpoint: generation => billingCheckpoint(backupEnv,generation,true),
-      readCheckpoint: generation => billingCheckpoint(backupEnv,generation)
+      readCheckpoint: generation => billingCheckpoint(backupEnv,generation),
+      planLegacy: fingerprint => planBillingLegacy(bucket,fingerprint),
+      readLegacySource: (...args) => readBillingLegacySource(bucket,...args),
+      readLegacyArchive: id => readBillingLegacyArchive(bucket,id),
+      writeLegacyArchive: archive => writeBillingLegacyArchive(bucket,archive),
+      verifyLegacyCoverage: (...args) => verifyBillingLegacyCoverage(bucket,...args),
+      saveLegacyVerification: (...args) => saveBillingLegacyVerification(bucket,...args)
     };
     const owner = await f.login("owner","primary-admin","fixture-primary-billing","YmlsbGluZy1vd25lcg");
     const member = await f.login("chiharu");
@@ -103,6 +126,57 @@ test("ordinary admin login stages, restores and opens encrypted Billing; normal 
     assert.equal((await ownerApp.request(another)).entries.some(entry=>entry.id===created.id),false);
     assert.equal(f.db.prepare("SELECT count(*) AS n FROM billing_encryption_operations").get().n,3);
     assert.equal(f.db.prepare("SELECT count(*) AS n FROM billing_audit_logs WHERE event_type LIKE 'entry_%' AND details_json='{}'").get().n,3);
+    const legacyPath = "/encryption/legacy";
+    await assert.rejects(memberApi(`${legacyPath}/status`),error => error.status === 403);
+    await assert.rejects(ownerApi(`${legacyPath}/plan`),error => error.status === 403);
+    let cleanup;
+    const maintenance = await prepareBillingLegacyMaintenance((path, options) => {
+      if (path.endsWith("/cleanup")) cleanup = options;
+      return ownerApi(path, options);
+    },ownerKeys,ownerAuth,{ unlockRecovery:async () => recovery.privateKey, sqlite:{ wasmBinary } });
+    await assert.rejects(maintenance.cleanup("平文原本を整理"), /復元を先に確認/);
+    const before = await maintenance.status();
+    assert.deepEqual(before, { entries:120, settlements:60, openingBalances:1, auditDetails:1, cleanedAt:null });
+    const oldKey = "d1/billing/daily/2026-11-01.json.gz";
+    const oldObject = bucket.objects.get(oldKey);
+    bucket.objects.delete(oldKey);
+    await assert.rejects(maintenance.verify(() => {}),error => error.status === 409);
+    bucket.objects.set(oldKey,oldObject);
+    const progressLegacy = [];
+    assert.deepEqual(await maintenance.verify((...value) => progressLegacy.push(value)),{ generations:4, unreferencedParts:0 });
+    assert.deepEqual(progressLegacy.at(-1),[4,4]);
+    const sealedKeys = () => bucket.writes.filter(key => /^sealed\/billing-legacy\/v1\/[^/]+\.json$/.test(key));
+    assert.equal(sealedKeys().length,3);
+    assert.deepEqual(await maintenance.verify(() => {}),{ generations:4, unreferencedParts:0 });
+    assert.equal(sealedKeys().length,3);
+    await assert.rejects(maintenance.cleanup("間違った確認"),error => error.status === 400);
+    const damaged = { ...cleanup, body:{ ...cleanup.body, report:{ ...cleanup.body.report, signature:"A".repeat(86) } } };
+    await assert.rejects(ownerApi(`${legacyPath}/cleanup`,damaged),error => error.status === 409);
+    const checkpointKey = `d1/billing/encrypted/checkpoints/${result.migration}.json.gz`;
+    const sourceKey = sealedKeys()[0];
+    const savedArchive = bucket.objects.get(sourceKey);
+    bucket.objects.delete(sourceKey);
+    await assert.rejects(maintenance.cleanup("平文原本を整理"));
+    assert.deepEqual(await maintenance.status(),before);
+    bucket.objects.set(sourceKey,savedArchive);
+    await bucket.put(oldKey,oldObject.bytes);
+    await assert.rejects(maintenance.cleanup("平文原本を整理"));
+    bucket.objects.set(oldKey,oldObject);
+    const checkpointObject = bucket.objects.get(checkpointKey);
+    assert.ok(checkpointObject);
+    bucket.objects.delete(checkpointKey);
+    await assert.rejects(maintenance.cleanup("平文原本を整理"));
+    assert.deepEqual(await maintenance.status(),before);
+    bucket.objects.set(checkpointKey,checkpointObject);
+    const cleaned = await maintenance.cleanup("平文原本を整理");
+    assert.ok(cleaned.cleanedAt);
+    assert.deepEqual(cleaned,{ entries:0, settlements:0, openingBalances:0, auditDetails:0, cleanedAt:cleaned.cleanedAt });
+    assert.deepEqual(await maintenance.cleanup("平文原本を整理"),cleaned);
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM billing_audit_logs WHERE event_type='encrypted_legacy_source_cleaned'").get().n,1);
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM billing_audit_logs WHERE event_type='entry_created'").get().n,2);
+    assert.equal(bucket.objects.get(oldKey),oldObject);
+    assert.deepEqual(await memberApp.request(path),legacy.body);
+    assert.throws(() => f.db.exec("UPDATE billing_audit_logs SET details_json='x' WHERE id=1"),/billing migration in progress/);
     const backup = await saveExport(exportEnv("billing",f.env.DB,backupEnv.BACKUP),"billing",Date.now(),{
       fetcher:exportFetcher(f.db,"billing",{ migration:BILLING_ENCRYPTED_MIGRATION }).fetcher
     });

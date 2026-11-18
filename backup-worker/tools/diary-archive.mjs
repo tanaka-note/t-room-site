@@ -1,4 +1,5 @@
 import { exportSpec } from '../src/export-backup.js';
+import { restoreIsolated } from './restore-isolated.mjs';
 import { createLegacyArchive } from './d1-legacy-archive.mjs';
 
 export const {
@@ -28,4 +29,4 @@ export const {
     }
     if (db.prepare('SELECT count(*) AS n FROM diary_accounts WHERE active != 0').get().n) throw new Error('DiaryArchiveAccountsActive');
   }
-});
+}, restoreIsolated);

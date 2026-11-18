@@ -32,7 +32,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var require_sql_wasm_browser = __commonJS({
   "security-worker/node_modules/.pnpm/sql.js@1.16.0/node_modules/sql.js/dist/sql-wasm-browser.js"(exports, module) {
     var initSqlJsPromise = void 0;
-    var initSqlJs2 = function(moduleConfig) {
+    var initSqlJs3 = function(moduleConfig) {
       if (initSqlJsPromise) {
         return initSqlJsPromise;
       }
@@ -2143,20 +2143,2224 @@ var require_sql_wasm_browser = __commonJS({
       return initSqlJsPromise;
     };
     if (typeof exports === "object" && typeof module === "object") {
-      module.exports = initSqlJs2;
-      module.exports.default = initSqlJs2;
+      module.exports = initSqlJs3;
+      module.exports.default = initSqlJs3;
     } else if (typeof define === "function" && define["amd"]) {
       define([], function() {
-        return initSqlJs2;
+        return initSqlJs3;
       });
     } else if (typeof exports === "object") {
-      exports["Module"] = initSqlJs2;
+      exports["Module"] = initSqlJs3;
     }
   }
 });
 
 // billing-worker/restore-checkpoint.mjs
+var import_sql2 = __toESM(require_sql_wasm_browser(), 1);
+
+// backup-worker/src/integrity.js
+var MAX_OBJECT_BYTES = 16 * 1024 * 1024;
+async function readBounded(stream, max = MAX_OBJECT_BYTES) {
+  const reader = stream.getReader(), chunks = [];
+  let size = 0;
+  try {
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > max) {
+        await reader.cancel();
+        throw new Error("SnapshotTooLarge");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const result = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
+var hex = (bytes) => [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
+var digest = async (bytes) => hex(await crypto.subtle.digest("SHA-256", bytes));
+var objectBytes = (object) => readBounded(object.body);
+async function decode(bytes) {
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await readBounded(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")))));
+}
+async function verifiedGeneration(bucket, key, validate) {
+  const object = await bucket.get(key);
+  if (!object) return null;
+  if (!/^[a-f0-9]{64}$/.test(object.customMetadata?.sha256 || "")) throw new Error("LegacyGenerationUnverified");
+  const bytes = await objectBytes(object);
+  if (await digest(bytes) !== object.customMetadata.sha256) throw new Error("VerificationFailed");
+  const payload = await decode(bytes);
+  await validate(payload);
+  return { bytes, payload, sha256: object.customMetadata.sha256, etag: object.etag };
+}
+
+// diary-worker/e2ee/crypto.mjs
+var encoder = new TextEncoder();
+var decoder = new TextDecoder("utf-8", { fatal: true });
+var VERSION = 1;
+var RECOVERY_RECIPIENT = "__recovery__";
+var canonical = (value) => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(
+  Object.keys(value).sort().map((k) => [k, canonical(value[k])])
+) : value;
+var encode = (value) => encoder.encode(JSON.stringify(canonical(value)));
+var b64 = (value) => {
+  const bytes = new Uint8Array(value);
+  if (bytes.toBase64)
+    return bytes.toBase64({ alphabet: "base64url", omitPadding: true });
+  const chunks = [];
+  for (let offset = 0; offset < bytes.length; offset += 8192)
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 8192)));
+  return btoa(chunks.join("")).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+};
+function base64Length(value, max) {
+  if (typeof value !== "string" || !value.length || value.length > max || !/^[\w-]+$/.test(value) || value.length % 4 === 1)
+    throw new Error("InvalidEnvelope");
+  return Math.floor(value.length * 3 / 4);
+}
+function unb64(value, max = 2e6) {
+  base64Length(value, max);
+  if (Uint8Array.fromBase64)
+    return Uint8Array.fromBase64(value, { alphabet: "base64url" });
+  const text = atob(
+    value.replaceAll("-", "+").replaceAll("_", "/") + "=".repeat((4 - value.length % 4) % 4)
+  );
+  const result = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) result[i] = text.charCodeAt(i);
+  return result;
+}
+function context(value) {
+  const { household, scope, id, revision, epoch, kind } = value;
+  if (![household, scope, id, kind].every(
+    (v) => typeof v === "string" && /^[\w:-]{1,160}$/.test(v)
+  ) || !Number.isSafeInteger(revision) || revision < 1 || !Number.isSafeInteger(epoch) || epoch < 1)
+    throw new Error("InvalidContext");
+  return {
+    protocol: "T-lain diary",
+    version: VERSION,
+    household,
+    scope,
+    id,
+    revision,
+    epoch,
+    kind,
+    state: value.state,
+    author: value.author,
+    sourceId: value.sourceId,
+    sourceRevision: value.sourceRevision,
+    retainedFor: value.retainedFor,
+    photoIds: value.photoIds
+  };
+}
+async function newKey() {
+  return crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, [
+    "encrypt",
+    "decrypt"
+  ]);
+}
+async function fingerprint(publicKey) {
+  return b64(
+    await crypto.subtle.digest(
+      "SHA-256",
+      encode({
+        kty: publicKey.kty,
+        crv: publicKey.crv,
+        x: publicKey.x,
+        y: publicKey.y,
+        n: publicKey.n,
+        e: publicKey.e
+      })
+    )
+  );
+}
+function validatePublicKey(key, kind) {
+  const signing = kind === "signing";
+  const fields = signing ? ["kty", "crv", "x", "y"] : ["kty", "n", "e"];
+  const allowed = /* @__PURE__ */ new Set([...fields, "alg", "ext", "key_ops"]);
+  if (!key || typeof key !== "object" || Array.isArray(key) || !["signing", "recipient", "recovery"].includes(kind) || fields.some((name) => !Object.hasOwn(key, name)) || Object.keys(key).some((name) => !allowed.has(name)) || Object.hasOwn(key, "ext") && typeof key.ext !== "boolean" || Object.hasOwn(key, "alg") && key.alg !== (signing ? "ES256" : "RSA-OAEP-256") || Object.hasOwn(key, "key_ops") && (!Array.isArray(key.key_ops) || key.key_ops.length !== 1 || key.key_ops[0] !== (signing ? "verify" : "encrypt")))
+    throw new Error("InvalidPublicKey");
+  if (signing) {
+    if (key.kty !== "EC" || key.crv !== "P-256" || unb64(key.x, 43).length !== 32 || unb64(key.y, 43).length !== 32)
+      throw new Error("InvalidPublicKey");
+  } else if (key.kty !== "RSA" || key.e !== "AQAB" || !(kind === "recovery" ? [384, 512] : [384]).includes(unb64(key.n, 684).length)) {
+    throw new Error("InvalidPublicKey");
+  }
+  return key;
+}
+async function signed(value, privateKey) {
+  return {
+    value,
+    signature: b64(
+      await crypto.subtle.sign(
+        { name: "ECDSA", hash: "SHA-256" },
+        privateKey,
+        encode(value)
+      )
+    )
+  };
+}
+async function recipientKeyBox(key, binding, members, recoveryPublicKey) {
+  if (!recoveryPublicKey) throw new Error("RecoveryKeyRequired");
+  members = [
+    ...members,
+    { credentialId: RECOVERY_RECIPIENT, publicKey: recoveryPublicKey }
+  ];
+  const raw = new Uint8Array(await crypto.subtle.exportKey("raw", key));
+  try {
+    const entries = await Promise.all(
+      members.map(async (member) => {
+        const recipient = await crypto.subtle.importKey(
+          "jwk",
+          member.publicKey,
+          { name: "RSA-OAEP", hash: "SHA-256" },
+          false,
+          ["encrypt"]
+        );
+        return [
+          member.credentialId,
+          b64(
+            await crypto.subtle.encrypt(
+              { name: "RSA-OAEP", label: encode(context(binding)) },
+              recipient,
+              raw
+            )
+          )
+        ];
+      })
+    );
+    return Object.fromEntries(entries);
+  } finally {
+    raw.fill(0);
+  }
+}
+async function openRecipientKey(box, binding, credentialId, privateKey, { extractable = false } = {}) {
+  if (extractable && credentialId !== RECOVERY_RECIPIENT) throw new Error("RecoveryOnly");
+  if (!box?.[credentialId]) throw new Error("GrantDenied");
+  const raw = new Uint8Array(
+    await crypto.subtle.decrypt(
+      { name: "RSA-OAEP", label: encode(context(binding)) },
+      privateKey,
+      unb64(box[credentialId], credentialId === RECOVERY_RECIPIENT ? 684 : 512)
+    )
+  );
+  try {
+    return await crypto.subtle.importKey("raw", raw, "AES-GCM", extractable, [
+      "encrypt",
+      "decrypt"
+    ]);
+  } finally {
+    raw.fill(0);
+  }
+}
+
+// billing-worker/legacy-protocol.mjs
+var legacyProtocol = "T-lain Billing legacy backups restore v1";
+
+// billing-worker/restore-legacy.mjs
 var import_sql = __toESM(require_sql_wasm_browser(), 1);
+
+// backup-worker/src/registry.js
+var SERVICES = {
+  "portfolio": {
+    "label": "\u8CC7\u7523\u904B\u7528\u5831\u544A",
+    "binding": "PORTFOLIO_DB",
+    "database": "portfolio-db",
+    "migration": "0001_portfolio.sql",
+    "tables": [
+      {
+        "name": "portfolio_accounts",
+        "columns": ["id", "display_name", "role", "is_active", "session_version"],
+        "sourceColumns": "id,display_name,role,is_active,session_version"
+      },
+      {
+        "name": "portfolio_state",
+        "columns": ["id", "revision", "metadata"],
+        "sourceColumns": "id,revision,metadata"
+      },
+      {
+        "name": "portfolio_records",
+        "columns": ["period", "time", "raw_market_value", "assets", "updated_at", "updated_by"],
+        "sourceColumns": "period,time,raw_market_value,assets,updated_at,updated_by"
+      },
+      {
+        "name": "portfolio_changes",
+        "columns": ["revision", "request_id", "fingerprint", "period", "previous_record", "saved_record", "updated_at", "account_id"],
+        "sourceColumns": "revision,request_id,fingerprint,period,previous_record,saved_record,updated_at,account_id"
+      }
+    ],
+    "knownTables": ["portfolio_accounts", "portfolio_state", "portfolio_records", "portfolio_changes"]
+  },
+  "household": {
+    "label": "\u5BB6\u8A08\u7C3F",
+    "binding": "HOUSEHOLD_DB",
+    "database": "household-db",
+    "migration": "0007_client_encryption.sql",
+    "tables": [
+      {
+        "name": "household_accounts",
+        "columns": [
+          "id",
+          "display_name",
+          "role",
+          "is_active",
+          "session_version",
+          "household_id"
+        ],
+        "sourceColumns": "id,display_name,role,is_active,session_version,household_id"
+      },
+      {
+        "name": "household_state",
+        "columns": [
+          "id",
+          "revision",
+          "active_dataset"
+        ],
+        "sourceColumns": "id,revision,active_dataset"
+      },
+      {
+        "name": "household_records",
+        "columns": [
+          "dataset_id",
+          "kind",
+          "id",
+          "payload"
+        ],
+        "sourceColumns": "dataset_id,kind,id,payload"
+      },
+      {
+        "name": "household_requests",
+        "columns": [
+          "request_id",
+          "fingerprint",
+          "response_json",
+          "created_at",
+          "household_id"
+        ],
+        "sourceColumns": "request_id,fingerprint,response_json,created_at,household_id"
+      },
+      {
+        "name": "household_datasets",
+        "columns": [
+          "id",
+          "created_at",
+          "activated_at",
+          "retired_at",
+          "lease_expires_at",
+          "household_id",
+          "crypto_version"
+        ],
+        "sourceColumns": "id,created_at,activated_at,retired_at,lease_expires_at,household_id,crypto_version"
+      },
+      {
+        "name": "household_crypto_config",
+        "columns": [
+          "household_id",
+          "key_id",
+          "recovery_wrapped_key",
+          "recovery_public_key"
+        ],
+        "sourceColumns": "household_id,key_id,recovery_wrapped_key,recovery_public_key"
+      },
+      {
+        "name": "household_crypto_vaults",
+        "columns": [
+          "credential_id",
+          "identity_id",
+          "public_key_json",
+          "iv",
+          "ciphertext"
+        ],
+        "sourceColumns": "credential_id,identity_id,public_key_json,iv,ciphertext"
+      },
+      {
+        "name": "household_crypto_grants",
+        "columns": [
+          "household_id",
+          "credential_id",
+          "identity_id",
+          "service_link_id",
+          "wrapped_key"
+        ],
+        "sourceColumns": "household_id,credential_id,identity_id,service_link_id,wrapped_key"
+      }
+    ],
+    "knownTables": [
+      "household_accounts",
+      "household_state",
+      "household_records",
+      "household_requests",
+      "household_datasets",
+      "household_crypto_config",
+      "household_crypto_vaults",
+      "household_crypto_grants"
+    ]
+  },
+  "cloud": {
+    "label": "T-Cloud",
+    "binding": "CLOUD_DB",
+    "database": "cloud-db",
+    "migration": "0012_favorites.sql",
+    "tables": [
+      {
+        "name": "cloud_folders",
+        "columns": [
+          "id",
+          "parent_id",
+          "name",
+          "created_by",
+          "created_at",
+          "updated_at",
+          "deleted_at",
+          "crypto_version",
+          "encrypted_name",
+          "name_iv",
+          "password_salt",
+          "password_wrapped_key",
+          "password_wrap_iv",
+          "admin_wrapped_key",
+          "parent_wrapped_key",
+          "parent_wrap_iv"
+        ],
+        "sourceColumns": "id,parent_id,name,created_by,created_at,updated_at,deleted_at,password_hash,crypto_version,encrypted_name,name_iv,password_salt,password_wrapped_key,password_wrap_iv,admin_wrapped_key,parent_wrapped_key,parent_wrap_iv"
+      },
+      {
+        "name": "cloud_files",
+        "columns": [
+          "id",
+          "folder_id",
+          "object_key",
+          "thumbnail_key",
+          "stream_uid",
+          "original_name",
+          "mime_type",
+          "media_kind",
+          "size_bytes",
+          "status",
+          "created_by",
+          "created_at",
+          "updated_at",
+          "deleted_at",
+          "crypto_version",
+          "encrypted_metadata",
+          "metadata_iv",
+          "wrapped_file_key",
+          "file_key_iv",
+          "encrypted_size_bytes",
+          "chunk_size_bytes",
+          "chunk_count",
+          "display_metadata_version",
+          "display_name",
+          "display_mime_type",
+          "display_media_kind",
+          "display_last_modified",
+          "display_duration_seconds",
+          "display_thumbnail_key"
+        ],
+        "sourceColumns": "id,folder_id,object_key,thumbnail_key,stream_uid,original_name,mime_type,media_kind,size_bytes,status,multipart_upload_id,created_by,created_at,updated_at,deleted_at,crypto_version,encrypted_metadata,metadata_iv,wrapped_file_key,file_key_iv,encrypted_size_bytes,chunk_size_bytes,chunk_count,display_metadata_version,display_name,display_mime_type,display_media_kind,display_last_modified,display_duration_seconds,display_thumbnail_key"
+      },
+      {
+        "name": "cloud_crypto_config",
+        "columns": [
+          "id",
+          "crypto_version",
+          "public_key_jwk",
+          "admin_private_cipher",
+          "admin_private_iv",
+          "recovery_private_cipher",
+          "recovery_private_iv",
+          "created_at",
+          "updated_at"
+        ],
+        "sourceColumns": "id,crypto_version,public_key_jwk,admin_private_cipher,admin_private_iv,recovery_private_cipher,recovery_private_iv,created_at,updated_at"
+      },
+      {
+        "name": "cloud_deletion_requests",
+        "columns": [
+          "id",
+          "file_id",
+          "file_name",
+          "requested_by",
+          "status",
+          "requested_at",
+          "approved_at",
+          "approved_by"
+        ],
+        "sourceColumns": "id,file_id,file_name,requested_by,status,requested_at,approved_at,approved_by"
+      },
+      {
+        "name": "cloud_favorite_files",
+        "columns": [
+          "owner_id",
+          "file_id",
+          "created_at"
+        ],
+        "sourceColumns": "owner_id,file_id,created_at"
+      },
+      {
+        "name": "cloud_favorite_folders",
+        "columns": [
+          "owner_id",
+          "folder_id",
+          "created_at"
+        ],
+        "sourceColumns": "owner_id,folder_id,created_at"
+      },
+      {
+        "name": "cloud_audit_logs",
+        "columns": [
+          "id",
+          "event_type",
+          "actor_role",
+          "target_type",
+          "target_id",
+          "details_json",
+          "occurred_at"
+        ],
+        "sourceColumns": "id,event_type,actor_role,target_type,target_id,details_json,occurred_at"
+      },
+      {
+        "name": "cloud_security_events",
+        "columns": [
+          "id",
+          "event_type",
+          "actor_role",
+          "details_json",
+          "occurred_at"
+        ],
+        "sourceColumns": "id,event_type,actor_role,details_json,occurred_at"
+      }
+    ],
+    "knownTables": [
+      "cloud_folders",
+      "cloud_files",
+      "cloud_audit_logs",
+      "cloud_login_attempts",
+      "cloud_folder_unlocks",
+      "cloud_deletion_requests",
+      "cloud_crypto_config",
+      "cloud_security_events",
+      "cloud_shares",
+      "cloud_share_attempts",
+      "cloud_share_events",
+      "cloud_share_files",
+      "cloud_usage_summary",
+      "cloud_share_folders",
+      "cloud_favorite_files",
+      "cloud_favorite_folders"
+    ]
+  },
+  "security": {
+    "label": "Security Center",
+    "binding": "SECURITY_DB",
+    "database": "security-db",
+    "migration": "0030_portfolio_service.sql",
+    "tables": [
+      {
+        "name": "security_identities",
+        "columns": [
+          "id",
+          "display_name",
+          "status",
+          "is_security_admin",
+          "last_login_at",
+          "created_at",
+          "updated_at",
+          "last_seen_at"
+        ],
+        "sourceColumns": "id,display_name,status,is_security_admin,last_login_at,created_at,updated_at,last_seen_at"
+      },
+      {
+        "name": "security_invitations",
+        "columns": [
+          "id",
+          "identity_id",
+          "token_hash",
+          "link_set_hash",
+          "expires_at",
+          "status",
+          "created_by_identity_id",
+          "created_at",
+          "used_at",
+          "revoked_at"
+        ],
+        "sourceColumns": "id,identity_id,token_hash,link_set_hash,expires_at,status,created_by_identity_id,created_at,used_at,revoked_at"
+      },
+      {
+        "name": "security_credentials",
+        "columns": [
+          "credential_id",
+          "identity_id",
+          "public_key",
+          "counter",
+          "transports_json",
+          "device_type",
+          "backed_up",
+          "prf_enabled",
+          "prf_salt",
+          "status",
+          "label",
+          "registered_at",
+          "approved_at",
+          "last_used_at",
+          "revoked_at",
+          "registered_via_invitation_id"
+        ],
+        "sourceColumns": "credential_id,identity_id,public_key,counter,transports_json,device_type,backed_up,prf_enabled,prf_salt,status,label,registered_at,approved_at,last_used_at,revoked_at,registered_via_invitation_id"
+      },
+      {
+        "name": "security_service_links",
+        "columns": [
+          "id",
+          "identity_id",
+          "service",
+          "service_account_id",
+          "cloud_root_folder_id",
+          "display_label",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "sourceColumns": "id,identity_id,service,service_account_id,cloud_root_folder_id,display_label,status,created_at,updated_at"
+      },
+      {
+        "name": "security_tcloud_client_vaults",
+        "columns": [
+          "credential_id",
+          "identity_id",
+          "public_key_jwk",
+          "public_key_fingerprint",
+          "encrypted_payload",
+          "payload_iv",
+          "created_at",
+          "updated_at"
+        ],
+        "sourceColumns": "credential_id,identity_id,public_key_jwk,public_key_fingerprint,encrypted_payload,payload_iv,created_at,updated_at"
+      },
+      {
+        "name": "security_tcloud_key_envelopes",
+        "columns": [
+          "id",
+          "identity_id",
+          "credential_id",
+          "service_link_id",
+          "envelope_type",
+          "public_key_jwk",
+          "encrypted_payload",
+          "payload_iv",
+          "wrapped_key",
+          "created_at",
+          "updated_at"
+        ],
+        "sourceColumns": "id,identity_id,credential_id,service_link_id,envelope_type,public_key_jwk,encrypted_payload,payload_iv,wrapped_key,created_at,updated_at"
+      },
+      {
+        "name": "security_health_members",
+        "columns": [
+          "slot",
+          "identity_id"
+        ],
+        "sourceColumns": "slot,identity_id"
+      },
+      {
+        "name": "security_health_config",
+        "columns": [
+          "account_id",
+          "recovery_wrapped_key",
+          "recovery_public_key"
+        ],
+        "sourceColumns": "account_id,recovery_wrapped_key,recovery_public_key"
+      },
+      {
+        "name": "security_health_vaults",
+        "columns": [
+          "credential_id",
+          "identity_id",
+          "public_key_json",
+          "iv",
+          "ciphertext"
+        ],
+        "sourceColumns": "credential_id,identity_id,public_key_json,iv,ciphertext"
+      },
+      {
+        "name": "security_health_grants",
+        "columns": [
+          "identity_id",
+          "credential_id",
+          "service_link_id",
+          "wrapped_key"
+        ],
+        "sourceColumns": "identity_id,credential_id,service_link_id,wrapped_key"
+      },
+      {
+        "name": "security_ai_budget_policies",
+        "columns": [
+          "identity_id",
+          "monthly_budget_jpy",
+          "soft_stop_jpy",
+          "hard_stop_jpy",
+          "reserve_enabled",
+          "reserve_period",
+          "created_at",
+          "updated_at"
+        ],
+        "sourceColumns": "identity_id,monthly_budget_jpy,soft_stop_jpy,hard_stop_jpy,reserve_enabled,reserve_period,created_at,updated_at"
+      },
+      {
+        "name": "security_audit_events",
+        "columns": [
+          "event_id",
+          "occurred_at",
+          "received_at",
+          "service",
+          "event_type",
+          "outcome",
+          "identity_id",
+          "service_account_id",
+          "role",
+          "auth_method",
+          "session_id_hash",
+          "source_hash",
+          "user_agent",
+          "target_type",
+          "target_id",
+          "details_json",
+          "service_link_id",
+          "service_account_label"
+        ],
+        "sourceColumns": "event_id,occurred_at,received_at,service,event_type,outcome,identity_id,service_account_id,role,auth_method,session_id_hash,source_hash,user_agent,target_type,target_id,details_json,service_link_id,service_account_label"
+      }
+    ],
+    "knownTables": [
+      "security_identities",
+      "security_invitations",
+      "security_credentials",
+      "security_challenges",
+      "security_tcloud_client_vaults",
+      "security_setup_sessions",
+      "security_runtime_state",
+      "security_ai_budget_policies",
+      "security_definition_updates",
+      "security_definition_events",
+      "security_audit_daily",
+      "security_health_members",
+      "security_health_config",
+      "security_health_vaults",
+      "security_service_links",
+      "security_handoffs",
+      "security_tcloud_key_envelopes",
+      "security_health_grants",
+      "security_audit_events",
+      "security_active_sessions"
+    ]
+  },
+  "billing": {
+    "label": "\u8ACB\u6C42\u66F8\u7BA1\u7406",
+    "binding": "BILLING_DB",
+    "database": "billing-db",
+    "migration": "0008_password_auth_policy.sql",
+    "tables": [
+      {
+        "name": "billing_accounts",
+        "columns": [
+          "id",
+          "login_id",
+          "display_name",
+          "role",
+          "session_version",
+          "is_active",
+          "created_at",
+          "updated_at"
+        ],
+        "sourceColumns": "id,login_id,display_name,role,password_salt,password_hash,password_iterations,session_version,is_active,created_at,updated_at,failed_login_attempts,locked_until,password_pepper_version"
+      },
+      {
+        "name": "billing_opening_balances",
+        "columns": [
+          "account_id",
+          "effective_date",
+          "balance_yen",
+          "updated_by",
+          "updated_at"
+        ],
+        "sourceColumns": "account_id,effective_date,balance_yen,updated_by,updated_at"
+      },
+      {
+        "name": "billing_entries",
+        "columns": [
+          "id",
+          "account_id",
+          "document_type",
+          "entry_date",
+          "category",
+          "amount_yen",
+          "description",
+          "note",
+          "created_by",
+          "created_at",
+          "updated_at",
+          "deleted_at"
+        ],
+        "sourceColumns": "id,account_id,document_type,entry_date,category,amount_yen,description,note,created_by,created_at,updated_at,deleted_at"
+      },
+      {
+        "name": "billing_settlements",
+        "columns": [
+          "id",
+          "account_id",
+          "settlement_date",
+          "direction",
+          "method",
+          "amount_yen",
+          "note",
+          "created_by",
+          "legacy_entry_id",
+          "created_at",
+          "updated_at",
+          "deleted_at"
+        ],
+        "sourceColumns": "id,account_id,settlement_date,direction,method,amount_yen,note,created_by,legacy_entry_id,created_at,updated_at,deleted_at"
+      },
+      {
+        "name": "billing_audit_logs",
+        "columns": [
+          "id",
+          "event_type",
+          "actor_account_id",
+          "target_account_id",
+          "entry_id",
+          "attempted_login_id",
+          "details_json",
+          "occurred_at"
+        ],
+        "sourceColumns": "id,event_type,actor_account_id,target_account_id,entry_id,attempted_login_id,details_json,occurred_at"
+      },
+      {
+        "name": "password_auth_policy",
+        "columns": [
+          "service",
+          "account_id",
+          "password_auth_enabled",
+          "password_session_epoch",
+          "changed_by",
+          "reason",
+          "updated_at"
+        ],
+        "sourceColumns": "service,account_id,password_auth_enabled,password_session_epoch,changed_by,reason,updated_at"
+      },
+      {
+        "name": "password_auth_policy_audit",
+        "columns": [
+          "id",
+          "service",
+          "account_id",
+          "event_type",
+          "password_session_epoch",
+          "changed_by",
+          "reason",
+          "occurred_at"
+        ],
+        "sourceColumns": "id,service,account_id,event_type,password_session_epoch,changed_by,reason,occurred_at"
+      }
+    ],
+    "knownTables": [
+      "billing_accounts",
+      "billing_opening_balances",
+      "billing_audit_logs",
+      "billing_entries",
+      "billing_settlements",
+      "billing_login_attempts",
+      "password_auth_policy",
+      "password_auth_policy_audit"
+    ]
+  },
+  "payments": {
+    "label": "\u652F\u6255\u660E\u7D30",
+    "binding": "PAYMENTS_DB",
+    "database": "payments-db",
+    "migration": "0002_monthly_ledger.sql",
+    "tables": [
+      {
+        "name": "payments_accounts",
+        "columns": [
+          "id",
+          "display_name",
+          "is_active",
+          "session_version"
+        ],
+        "sourceColumns": "id,display_name,is_active,session_version"
+      },
+      {
+        "name": "payments_entries",
+        "columns": [
+          "id",
+          "account_id",
+          "paid_on",
+          "payee",
+          "description",
+          "amount",
+          "start_month",
+          "months",
+          "notes",
+          "version",
+          "created_at",
+          "updated_at",
+          "deleted_at"
+        ],
+        "sourceColumns": "id,account_id,paid_on,payee,description,amount,start_month,months,notes,version,created_at,updated_at,deleted_at"
+      },
+      {
+        "name": "payments_monthly_marks",
+        "columns": [
+          "entry_id",
+          "target_month",
+          "amount",
+          "completed_at"
+        ],
+        "sourceColumns": "entry_id,target_month,amount,completed_at"
+      },
+      {
+        "name": "payments_operation_audit",
+        "columns": [
+          "request_id",
+          "entry_id",
+          "target_month",
+          "action",
+          "occurred_at",
+          "identity_id",
+          "account_id",
+          "entry_version",
+          "amount",
+          "previous_amount",
+          "start_month",
+          "previous_start_month",
+          "months",
+          "previous_months"
+        ],
+        "sourceColumns": "request_id,entry_id,target_month,action,occurred_at,identity_id,account_id,entry_version,amount,previous_amount,start_month,previous_start_month,months,previous_months"
+      },
+      {
+        "name": "payments_requests",
+        "columns": [
+          "request_id",
+          "fingerprint",
+          "response_json",
+          "created_at"
+        ],
+        "sourceColumns": "request_id,fingerprint,response_json,created_at"
+      }
+    ],
+    "knownTables": [
+      "payments_accounts",
+      "payments_entries",
+      "payments_requests",
+      "payments_monthly_marks",
+      "payments_operation_audit"
+    ]
+  },
+  "health": {
+    "label": "\u4F53\u8ABF\u7BA1\u7406",
+    "binding": "HEALTH_DB",
+    "database": "health-db",
+    "migration": "0001_init.sql",
+    "tables": [
+      {
+        "name": "health_records",
+        "columns": [
+          "record_id",
+          "account_id",
+          "iv",
+          "ciphertext",
+          "revision",
+          "updated_at"
+        ],
+        "sourceColumns": "record_id,account_id,iv,ciphertext,revision,updated_at"
+      }
+    ],
+    "knownTables": [
+      "health_records"
+    ]
+  },
+  "inventory": {
+    "label": "\u5728\u5EAB\u7167\u4F1A",
+    "binding": "INVENTORY_DB",
+    "database": "inventory-db",
+    "migration": "0002_item_deletion.sql",
+    "tables": [
+      {
+        "name": "inventory_accounts",
+        "columns": [
+          "id",
+          "display_name",
+          "is_active",
+          "session_version"
+        ],
+        "sourceColumns": "id,display_name,is_active,session_version"
+      },
+      {
+        "name": "inventory_items",
+        "columns": [
+          "id",
+          "account_id",
+          "name",
+          "unit",
+          "stock",
+          "version",
+          "created_at",
+          "archived_at",
+          "deleted_at"
+        ],
+        "sourceColumns": "id,account_id,name,unit,stock,version,created_at,archived_at,deleted_at"
+      },
+      {
+        "name": "inventory_movements",
+        "columns": [
+          "id",
+          "account_id",
+          "item_id",
+          "kind",
+          "quantity_delta",
+          "expected_version",
+          "occurred_at",
+          "created_at",
+          "voided_at"
+        ],
+        "sourceColumns": "id,account_id,item_id,kind,quantity_delta,expected_version,occurred_at,created_at,voided_at"
+      },
+      {
+        "name": "inventory_requests",
+        "columns": [
+          "account_id",
+          "request_id",
+          "fingerprint",
+          "response_json",
+          "created_at"
+        ],
+        "sourceColumns": "account_id,request_id,fingerprint,response_json,created_at"
+      }
+    ],
+    "knownTables": [
+      "inventory_accounts",
+      "inventory_items",
+      "inventory_movements",
+      "inventory_requests"
+    ]
+  },
+  "ai": {
+    "label": "AI Chat",
+    "binding": "AI_DB",
+    "database": "ai-db",
+    "migration": "0003_tlain_brand.sql",
+    "tables": [
+      {
+        "name": "ai_accounts",
+        "columns": [
+          "identity_id",
+          "display_name",
+          "role",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "sourceColumns": "identity_id,display_name,role,status,created_at,updated_at"
+      },
+      {
+        "name": "ai_characters",
+        "columns": [
+          "id",
+          "display_name",
+          "persona_instructions",
+          "speaking_style",
+          "first_person",
+          "user_address",
+          "voice_engine",
+          "voice_id",
+          "live2d_model_id",
+          "active",
+          "created_at",
+          "updated_at"
+        ],
+        "sourceColumns": "id,display_name,persona_instructions,speaking_style,first_person,user_address,voice_engine,voice_id,live2d_model_id,active,created_at,updated_at"
+      },
+      {
+        "name": "ai_character_settings",
+        "columns": [
+          "identity_id",
+          "character_id",
+          "memory_namespace",
+          "settings_json",
+          "created_at",
+          "updated_at"
+        ],
+        "sourceColumns": "identity_id,character_id,memory_namespace,settings_json,created_at,updated_at"
+      },
+      {
+        "name": "ai_conversations",
+        "columns": [
+          "id",
+          "identity_id",
+          "character_id",
+          "title",
+          "current_mode",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "sourceColumns": "id,identity_id,character_id,title,current_mode,status,created_at,updated_at"
+      },
+      {
+        "name": "ai_messages",
+        "columns": [
+          "id",
+          "conversation_id",
+          "identity_id",
+          "character_id",
+          "role",
+          "content",
+          "content_format",
+          "source_mode",
+          "client_message_id",
+          "model",
+          "input_tokens",
+          "cached_input_tokens",
+          "output_tokens",
+          "audio_input_tokens",
+          "audio_output_tokens",
+          "created_at"
+        ],
+        "sourceColumns": "id,conversation_id,identity_id,character_id,role,content,content_format,source_mode,client_message_id,model,input_tokens,cached_input_tokens,output_tokens,audio_input_tokens,audio_output_tokens,created_at"
+      },
+      {
+        "name": "ai_memories",
+        "columns": [
+          "id",
+          "identity_id",
+          "character_id",
+          "kind",
+          "content",
+          "source_conversation_id",
+          "importance",
+          "retrieval_key",
+          "active",
+          "created_at",
+          "updated_at"
+        ],
+        "sourceColumns": "id,identity_id,character_id,kind,content,source_conversation_id,importance,retrieval_key,active,created_at,updated_at"
+      },
+      {
+        "name": "ai_usage_events",
+        "columns": [
+          "request_id",
+          "identity_id",
+          "character_id",
+          "conversation_id",
+          "model",
+          "input_tokens",
+          "cached_input_tokens",
+          "output_tokens",
+          "audio_input_tokens",
+          "audio_output_tokens",
+          "estimated_cost_micros_jpy",
+          "usage_period",
+          "occurred_at"
+        ],
+        "sourceColumns": "request_id,identity_id,character_id,conversation_id,model,input_tokens,cached_input_tokens,output_tokens,audio_input_tokens,audio_output_tokens,estimated_cost_micros_jpy,usage_period,occurred_at"
+      },
+      {
+        "name": "ai_budget_guards",
+        "columns": [
+          "identity_id",
+          "usage_period",
+          "spent_micros_jpy",
+          "reserved_micros_jpy",
+          "updated_at"
+        ],
+        "sourceColumns": "identity_id,usage_period,spent_micros_jpy,reserved_micros_jpy,updated_at"
+      },
+      {
+        "name": "ai_request_claims",
+        "columns": [
+          "client_request_id",
+          "identity_id",
+          "conversation_id",
+          "character_id",
+          "status",
+          "model",
+          "reserved_micros_jpy",
+          "user_message_id",
+          "assistant_message_id",
+          "attempt_count",
+          "error_code",
+          "created_at",
+          "updated_at"
+        ],
+        "sourceColumns": "client_request_id,identity_id,conversation_id,character_id,status,model,reserved_micros_jpy,user_message_id,assistant_message_id,attempt_count,error_code,created_at,updated_at"
+      }
+    ],
+    "knownTables": [
+      "ai_accounts",
+      "ai_characters",
+      "ai_character_settings",
+      "ai_conversations",
+      "ai_messages",
+      "ai_memories",
+      "ai_usage_events",
+      "ai_budget_guards",
+      "ai_request_claims"
+    ]
+  },
+  "downloader": {
+    "label": "Downloader\u5229\u7528\u96C6\u8A08",
+    "binding": "DOWNLOADER_DB",
+    "database": "downloader-db",
+    "migration": "0005_downloader_analysis_cancel.sql",
+    "tables": [
+      {
+        "name": "downloader_usage_daily",
+        "columns": [
+          "day_jst",
+          "identity_id",
+          "metric",
+          "dimension",
+          "event_count",
+          "byte_count",
+          "value_sum",
+          "value_max",
+          "updated_at"
+        ],
+        "sourceColumns": "day_jst,identity_id,metric,dimension,event_count,byte_count,value_sum,value_max,updated_at"
+      }
+    ],
+    "knownTables": [
+      "downloader_rate_events",
+      "downloader_usage_daily",
+      "downloader_jobs",
+      "downloader_file_delivery_attempts"
+    ]
+  },
+  "calendar": {
+    "label": "\u30AB\u30EC\u30F3\u30C0\u30FC",
+    "binding": "CALENDAR_DB",
+    "database": "calendar-db",
+    "migration": "0001_calendar.sql",
+    "tables": [
+      {
+        "name": "calendar_accounts",
+        "columns": [
+          "id",
+          "display_name",
+          "is_active",
+          "session_version",
+          "created_at"
+        ],
+        "sourceColumns": "id,display_name,is_active,session_version,created_at"
+      },
+      {
+        "name": "calendar_clock",
+        "columns": [
+          "id",
+          "value"
+        ],
+        "sourceColumns": "id,value"
+      },
+      {
+        "name": "calendar_entities",
+        "columns": [
+          "account_id",
+          "owner_identity",
+          "kind",
+          "id",
+          "payload",
+          "version",
+          "purged",
+          "updated_seq",
+          "updated_at"
+        ],
+        "sourceColumns": "account_id,owner_identity,kind,id,payload,version,purged,updated_seq,updated_at"
+      },
+      {
+        "name": "calendar_requests",
+        "columns": [
+          "account_id",
+          "owner_identity",
+          "request_id",
+          "payload_hash",
+          "kind",
+          "entity_id",
+          "response_json",
+          "created_at"
+        ],
+        "sourceColumns": "account_id,owner_identity,request_id,payload_hash,kind,entity_id,response_json,created_at"
+      }
+    ],
+    "knownTables": [
+      "calendar_accounts",
+      "calendar_clock",
+      "calendar_entities",
+      "calendar_requests"
+    ]
+  }
+};
+function archiveSpec(service, migration) {
+  const spec = SERVICES[service];
+  if (service !== "household" || migration !== "0006_independent_households.sql") return spec;
+  const tables2 = spec.tables.filter((t) => !t.name.startsWith("household_crypto_")).map((t) => t.name === "household_datasets" ? { ...t, columns: t.columns.filter((c) => c !== "crypto_version"), sourceColumns: t.sourceColumns.replace(",crypto_version", "") } : t);
+  return { ...spec, migration, tables: tables2, knownTables: tables2.map((t) => t.name) };
+}
+
+// backup-worker/src/billing-encrypted.js
+var BILLING_ENCRYPTED_MIGRATION = "billing-encryption-v1";
+var SECURITY_BILLING_MIGRATION = "security-diary-billing-keys-v1";
+function table(name, sourceColumns, columns = sourceColumns.split(",")) {
+  return { name, sourceColumns, columns };
+}
+var BILLING_ENCRYPTED_TABLES = [
+  table("billing_encryption_migration", "id,generation,started_at,audit_through_id,writer_public_key,activated_at,verified_checkpoint"),
+  table("billing_encryption_candidate_ledgers", "generation,ledger_id,account_id,recovery_wrapped_key,revision,digest,signature,record_count,staged_count,staged_bytes"),
+  table("billing_encryption_candidate_records", "generation,ledger_id,id,revision,iv,ciphertext"),
+  table("billing_encryption_grants", "generation,ledger_id,identity_id,credential_id,service_link_id,key_source,wrapped_key"),
+  table("billing_encryption_live_ledgers", "generation,ledger_id,revision,digest,signature,writer_public_key,records_json"),
+  table("billing_encryption_operations", "generation,id,actor_id,fingerprint,expected_revisions")
+];
+var SECURITY_BILLING_VAULTS = table(
+  "security_billing_vaults",
+  "credential_id,identity_id,recipient_public_key,recipient_iv,recipient_ciphertext,writer_public_key,writer_iv,writer_ciphertext"
+);
+function billingEncryptedSpec(spec) {
+  const protectedTables = /* @__PURE__ */ new Set(["billing_entries", "billing_opening_balances", "billing_settlements"]);
+  const metadata = spec.tables.filter((item) => !protectedTables.has(item.name)).map((item) => item.name === "billing_audit_logs" ? { ...item, columns: item.columns.filter((column) => column !== "details_json" && column !== "entry_id") } : item);
+  return { ...spec, migration: BILLING_ENCRYPTED_MIGRATION, tables: [...metadata, ...BILLING_ENCRYPTED_TABLES] };
+}
+
+// backup-worker/src/schema-guard.js
+var EXPECTED = {
+  "portfolio": "0f996aabee4cfcdec8a1ee2f5d5429b170727d19eba88351ec82577bdedc939a",
+  "household": "2f7780c5512b5b1fbd610fc9860e4417832050d941773542871189032bfca10f",
+  "cloud": "c319c54132d640262b215ffdac570407df82f54e07a1f2395ea3b68291a7625c",
+  "security": "597cec608e96b2eb5e7704d8e3216a12aaab1ab5279c8355c0291899dad3313e",
+  "billing": "e3d7d3288312675f4635221c89d6dde4a9a5cdccd4d53848feaa308b1b7c725f",
+  "payments": "a74f9ffcabf4a59f3ae58f552de94adc14738883ea1f07baf670c9c6fc3c740f",
+  "health": "5d74bfd7ac54779545e86f1e0bd948b29ce3f578c68c309e445f1542d47f98ac",
+  "inventory": "ed4811be91f73a7a58cdf29e0c6aade079b4f74529e9042b82399fa8aa13e6f3",
+  "ai": "d7e265eac65afddd4301e02adb081123c3ab7d1d0444f427cf8cec3d57b9ca0c",
+  "downloader": "b367e88bee856222f72cfdf97a35794d381a13a3a7126c07ab50a3c43e6fe6a9",
+  "calendar": "cdae4a460294b4cefb9b9392b5ea2214fc335124315ad420ccf9644b88611d4c",
+  "diary": "6b8f6ae0973caf134513739e7f30efdf7a2dd5f0886a1ec4f85cb725f34cfb70"
+};
+var REVIEWED = {
+  billing: ["e3d7d3288312675f4635221c89d6dde4a9a5cdccd4d53848feaa308b1b7c725f", "0caa9787a64446caa2e5062638713c9d9978f884d2e0215dc9c7802a152af42e"],
+  inventory: ["ed4811be91f73a7a58cdf29e0c6aade079b4f74529e9042b82399fa8aa13e6f3", "d583deb887f1a14e802b50a550dca0e54e41dfeb5fadeca9a2cc6c9f3bbe10bd"],
+  // Reviewed Diary DDL plus additive migration 0022 (not a new production audit).
+  diary: ["6b8f6ae0973caf134513739e7f30efdf7a2dd5f0886a1ec4f85cb725f34cfb70", "ac391629ad0de78bd2ac2390429c5021722528ae129a27f1043dfef5b2de014e"]
+};
+function reviewedSchemaMatches(service, baseline, actual) {
+  return typeof baseline === "string" && (actual === baseline || REVIEWED[service]?.[0] === baseline && REVIEWED[service][1] === actual);
+}
+async function assertSchema(service, rows) {
+  const extension = service === "billing" ? (name) => /^billing_(encryption|candidate|freeze)_/.test(name) : service === "security" ? (name) => name === "security_billing_vaults" : () => false;
+  const extra = rows.filter((row) => extension(row.name));
+  if (extra.length) {
+    const expected = service === "billing" ? "78f4defbcb4a6662c28ca926de959be22d33da90f9a416f4bb832e5d23e7a7a2" : "b0d6dd06625913b84b28ee5dd371c170ddddee5a84121cc98276a2bfc8cbade4";
+    const shape = extra.map((r) => [r.type, r.name, r.tbl_name, r.sql.replace(/\r\n?/g, "\n")]);
+    if (await digest(new TextEncoder().encode(JSON.stringify(shape))) !== expected) throw new Error("SchemaReviewRequired");
+    rows = rows.filter((row) => !extension(row.name));
+  }
+  const schema2 = rows.filter((r) => r.tbl_name !== "d1_migrations").map((r) => [r.type, r.name, r.tbl_name, r.sql.replace(/\r\n?/g, "\n")]);
+  if (!reviewedSchemaMatches(service, EXPECTED[service], await digest(new TextEncoder().encode(JSON.stringify(schema2))))) throw new Error("SchemaReviewRequired");
+}
+var ENCRYPTED_FRAGMENTS = { diary: "609160b000a7bfe17c02101a3e18fc941890bc46058edadc3256d064c2ee639c", security: "fba11d54f4e7ffbabff26541b688517007da622dbf4c3c75fed5c05b6802247e" };
+async function assertEncryptedSchema(service, rows) {
+  const encrypted = (row) => service === "diary" ? row.name.startsWith("diary_e2ee_") || row.name.startsWith("diary_plaintext_") : service === "security" && row.name.startsWith("security_diary_key_");
+  const fragment = rows.filter(encrypted).map((r) => [r.type, r.name, r.tbl_name, r.sql.replace(/\r\n?/g, "\n")]);
+  if (!ENCRYPTED_FRAGMENTS[service] || await digest(new TextEncoder().encode(JSON.stringify(fragment))) !== ENCRYPTED_FRAGMENTS[service]) throw new Error("SchemaReviewRequired");
+  await assertSchema(service, rows.filter((row) => !encrypted(row)));
+}
+async function assertArchiveSchema(service, migration, rows) {
+  if (service === "billing" && migration === BILLING_ENCRYPTED_MIGRATION) {
+    if (!rows.some((row) => row.name === "billing_encryption_live_ledgers")) throw new Error("SchemaReviewRequired");
+    return assertSchema(service, rows);
+  }
+  if (service === "security" && migration === SECURITY_BILLING_MIGRATION) {
+    if (!rows.some((row) => row.name === "security_billing_vaults")) throw new Error("SchemaReviewRequired");
+    return rows.some((row) => row.name === "security_diary_key_config") ? assertEncryptedSchema(service, rows) : assertSchema(service, rows);
+  }
+  if (service === "diary" && (migration === "diary-e2ee-v1" || migration === "0022_photo_backup_identity.sql" && rows.some((row) => row.name === "diary_e2ee_control")) || service === "security" && migration === "security-diary-keys-v1") return assertEncryptedSchema(service, rows);
+  if (service === "household" && migration === "0006_independent_households.sql") {
+    const schema2 = rows.filter((r) => r.tbl_name !== "d1_migrations").map((r) => [r.type, r.name, r.tbl_name, r.sql.replace(/\r\n?/g, "\n")]);
+    if (await digest(new TextEncoder().encode(JSON.stringify(schema2))) !== "87c3caeb5b1bd4363759e93de4fe377f03064dc96e226fc531546a16146a2ede") throw new Error("SchemaReviewRequired");
+    return;
+  }
+  return assertSchema(service, rows);
+}
+
+// backup-worker/src/snapshot.js
+var SNAPSHOT_DATA_BYTES = 8 * 1024 * 1024;
+var SNAPSHOT_JSON_BYTES = 16 * 1024 * 1024;
+var ROW_BYTES = 1024 * 1024;
+
+// backup-worker/src/backup.js
+function validateSnapshot(p, service) {
+  const spec = archiveSpec(service, p?.expectedMigration);
+  if (!p || ![1, 2].includes(p.formatVersion) || p.service !== service || p.database !== spec.database || !Array.isArray(p.schema)) throw new Error("SnapshotInvalid");
+  if (Object.keys(p.tables || {}).sort().join(",") !== spec.tables.map((t) => t.name).sort().join(",")) throw new Error("SnapshotInvalid");
+  for (const t of spec.tables) {
+    const table3 = p.tables[t.name];
+    if (JSON.stringify(table3.columns) !== JSON.stringify(t.columns) || !Array.isArray(table3.rows) || table3.rowCount !== table3.rows.length) throw new Error("SnapshotInvalid");
+    if (table3.rows.some((r) => !r || Object.keys(r).sort().join(",") !== [...t.columns].sort().join(","))) throw new Error("SnapshotInvalid");
+  }
+}
+
+// diary-worker/e2ee/investment.mjs
+var INVESTMENT_VALUES = Object.freeze(["total", "cash", "stocks", "funds", "bonds", "crypto", "futures", "points", "other"]);
+
+// diary-worker/e2ee/rollout.mjs
+var READ_FORMATS = Object.freeze([1, 2]);
+
+// diary-worker/e2ee/store.mjs
+var recordBytesSQL = ["envelope", "summary", "key_box", "photo_ids", "attestation"].map((column) => `length(CAST(${column} AS BLOB))`).join("+") + "+1000";
+
+// diary-worker/src/entry-domain.js
+function createDiaryEntryDomain({ HttpError, basePath }) {
+  function validateEntryInput(body, { draft = false, allowEmptyContent = false } = {}) {
+    const entryDate = typeof body.entryDate === "string" ? body.entryDate.trim() : "";
+    const title = typeof body.title === "string" ? body.title.trim() : "";
+    const content = typeof body.content === "string" ? body.content.trim() : "";
+    if (!isValidDate(entryDate)) throw new HttpError(400, "\u65E5\u4ED8\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+    if (!draft && !title || title.length > 200) throw new HttpError(400, "\u30BF\u30A4\u30C8\u30EB\u306F1\u6587\u5B57\u4EE5\u4E0A200\u6587\u5B57\u4EE5\u5185\u3067\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+    if (!draft && !allowEmptyContent && !content || content.length > 2e5) throw new HttpError(400, "\u672C\u6587\u306F1\u6587\u5B57\u4EE5\u4E0A20\u4E07\u6587\u5B57\u4EE5\u5185\u3067\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+    const rawTags = Array.isArray(body.tags) ? body.tags : [];
+    const tags = [...new Set(rawTags.map(normalizeTag).filter(Boolean))];
+    if (tags.length > 100 || tags.some((tag) => tag.length > 30)) {
+      throw new HttpError(400, "\u30BF\u30B0\u306F100\u500B\u307E\u3067\u30011\u500B30\u6587\u5B57\u4EE5\u5185\u3067\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+    }
+    const contentFormat = validateContentFormat(body.contentFormat, content);
+    const excludedPhotoIds = parsePhotoIdList(body.excludedPhotoIds);
+    const weather = body.weather ?? null;
+    if (weather !== null && !["sunny", "cloudy", "partly_cloudy", "cloudy_rain", "rain", "heavy_rain", "thunder", "snow"].includes(weather)) {
+      throw new HttpError(400, "\u5929\u6C17\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+    }
+    return { entryDate, title, content, contentFormat, tags, excludedPhotoIds, weather };
+  }
+  function normalizeEntryStatus(value) {
+    return value === "draft" ? "draft" : "published";
+  }
+  function parsePhotoIdList(value) {
+    let source = value;
+    if (typeof source === "string") {
+      try {
+        source = JSON.parse(source);
+      } catch {
+        source = [];
+      }
+    }
+    if (!Array.isArray(source)) return [];
+    return [...new Set(source.map((item) => String(item || "").toLowerCase()).filter(isUuid))];
+  }
+  function validateContentFormat(value, content) {
+    if (value == null || value === "") return null;
+    if (!value || typeof value !== "object" || value.version !== 1 || !Array.isArray(value.runs)) {
+      throw new HttpError(400, "\u672C\u6587\u306E\u66F8\u5F0F\u60C5\u5831\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+    }
+    if (value.runs.length > 5e3) {
+      throw new HttpError(400, "\u672C\u6587\u306E\u66F8\u5F0F\u304C\u591A\u3059\u304E\u307E\u3059\u3002");
+    }
+    const colors = /* @__PURE__ */ new Set(["red", "blue", "green", "orange", "purple", "gray", "light-blue", "brown"]);
+    const normalized = [];
+    let previousEnd = 0;
+    for (const run of value.runs) {
+      const start = Number(run?.start);
+      const end = Number(run?.end);
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start < previousEnd || start < 0 || end <= start || end > content.length) {
+        throw new HttpError(400, "\u672C\u6587\u306E\u66F8\u5F0F\u7BC4\u56F2\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+      }
+      const color = run.color == null || run.color === "" ? null : String(run.color);
+      if (color && !colors.has(color)) {
+        throw new HttpError(400, "\u672C\u6587\u306E\u6587\u5B57\u8272\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+      }
+      const item = {
+        start,
+        end,
+        bold: run.bold === true,
+        italic: run.italic === true,
+        underline: run.underline === true,
+        color
+      };
+      if (!item.bold && !item.italic && !item.underline && !item.color) {
+        throw new HttpError(400, "\u672C\u6587\u306E\u66F8\u5F0F\u60C5\u5831\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+      }
+      normalized.push(item);
+      previousEnd = end;
+    }
+    return normalized.length ? JSON.stringify({ version: 1, runs: normalized }) : null;
+  }
+  function serializePhoto(row) {
+    return {
+      id: row.id,
+      entryId: Number(row.entry_id),
+      entryDate: row.entry_date || null,
+      entryTitle: row.entry_title || null,
+      authorId: row.author_id || null,
+      authorName: row.author_name || null,
+      fileName: row.file_name,
+      contentType: row.content_type,
+      originalSize: Number(row.original_size || 0),
+      width: row.width == null ? null : Number(row.width),
+      height: row.height == null ? null : Number(row.height),
+      createdByName: row.created_by_name,
+      createdAt: row.created_at,
+      thumbnailUrl: `${basePath}/api/photos/${row.id}/thumbnail`,
+      displayUrl: `${basePath}/api/photos/${row.id}/display`,
+      originalUrl: `${basePath}/api/photos/${row.id}/original`
+    };
+  }
+  function serializeEntry(row) {
+    let tags = [];
+    try {
+      tags = JSON.parse(row.tags || "[]");
+    } catch {
+      tags = [];
+    }
+    return {
+      id: Number(row.id),
+      entryDate: row.entry_date,
+      lastPublishedAt: row.last_published_at ?? null,
+      title: row.title,
+      weather: row.weather ?? null,
+      content: row.content,
+      contentFormat: parseContentFormat(row.content_format),
+      authorId: row.author_id,
+      authorName: row.author_name,
+      tags,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      deletedAt: row.deleted_at,
+      deletedById: row.deleted_by_id || null,
+      deletedByName: row.deleted_by_name || null,
+      status: row.status || "published",
+      isFavorite: Number(row.is_favorite || 0) === 1,
+      draftOfEntryId: row.draft_of_entry_id == null ? null : Number(row.draft_of_entry_id),
+      draftOfRevision: row.draft_of_revision == null ? null : Number(row.draft_of_revision),
+      excludedPhotoIds: parsePhotoIdList(row.draft_excluded_photo_ids),
+      revision: Number(row.revision)
+    };
+  }
+  function parseContentFormat(value) {
+    if (!value) return null;
+    try {
+      const parsed = JSON.parse(value);
+      return parsed?.version === 1 && Array.isArray(parsed.runs) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  function normalizeTag(value) {
+    return String(value || "").trim().replace(/^#+/, "").replace(/\s+/g, " ");
+  }
+  function isUuid(value) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[45][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
+  }
+  function isValidDate(value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const date = /* @__PURE__ */ new Date(`${value}T00:00:00Z`);
+    return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  }
+  return Object.freeze({ validateEntryInput, normalizeEntryStatus, parsePhotoIdList, validateContentFormat, serializePhoto, serializeEntry, parseContentFormat, normalizeTag, isUuid, isValidDate });
+}
+
+// diary-worker/e2ee/migration.mjs
+var domain = createDiaryEntryDomain({ HttpError: Error, basePath: "/diary" });
+var LEGACY_TABLES = Object.freeze(["diary_entries", "diary_tags", "diary_photos", "diary_trash_scopes", "diary_favorites", "investment_history"]);
+
+// diary-worker/e2ee/trust.mjs
+var TRUST_PIN = "tlain-diary-authority-public-v1";
+var FLOOR = TRUST_PIN + "-floor";
+
+// backup-worker/src/diary-encrypted.js
+var DIARY_ENCRYPTED_MIGRATION = "diary-e2ee-v1";
+var SECURITY_DIARY_MIGRATION = "security-diary-keys-v1";
+var table2 = (name, columns) => ({ name, columns: columns.split(","), sourceColumns: columns });
+var ENCRYPTED_DIARY_TABLES = [
+  table2("diary_e2ee_control", "id,phase,generation,ever_encrypted,evidence"),
+  table2("diary_e2ee_records", "id,household,scope,state,author,revision,epoch,source_id,source_revision,retained_for,envelope,summary,photo_ids,request_id,mutation_id,key_box,attestation"),
+  table2("diary_e2ee_changes", "seq,id,household,revision,deleted"),
+  table2("diary_e2ee_requests", "household,account_id,request_id,fingerprint,result"),
+  table2("diary_e2ee_media_gc", "photo_id,household,mutation_id"),
+  table2("diary_e2ee_media", "id,household,account_id,session_id,status,original_key,display_key,thumbnail_key,metadata,epoch,request_hash,expires_at,retired_at"),
+  table2("diary_e2ee_uploads", "id,household,account_id,target_id,status,expires_at,committed_entry,committed_ids")
+];
+var SECURITY_DIARY_TABLES = [
+  table2("security_diary_key_config", "id,generation,anchor_json,directory_json,recovery_json"),
+  table2("security_diary_key_vaults", "recipient_id,credential_id,identity_id,service_link_id,account_id,vault_json"),
+  table2("security_diary_key_grants", "recipient_id,service_link_id,generation,grants_json,record_grants_json")
+];
+
+// diary-worker/src/photo-backup.js
+var PHOTO_REVERIFY_MS = 30 * 864e5;
+
+// diary-worker/src/backup.js
+var JST_OFFSET_MS = 9 * 60 * 60 * 1e3;
+var BACKUP_TABLES = [
+  {
+    name: "diary_entries",
+    columns: [
+      "id",
+      "entry_date",
+      "last_published_at",
+      "entry_time",
+      "title",
+      "content",
+      "created_at",
+      "updated_at",
+      "deleted_at",
+      "revision",
+      "author_id",
+      "author_name",
+      "deleted_by_id",
+      "deleted_by_name",
+      "household_id",
+      "content_format",
+      "status",
+      "draft_of_entry_id",
+      "draft_of_revision",
+      "draft_excluded_photo_ids",
+      "client_request_id",
+      "client_request_hash",
+      "last_mutation_id",
+      "weather"
+    ],
+    orderBy: "id ASC"
+  },
+  {
+    name: "diary_tags",
+    columns: ["entry_id", "tag", "created_at", "sort_order"],
+    orderBy: "entry_id ASC, sort_order ASC"
+  },
+  {
+    name: "diary_photos",
+    columns: [
+      "id",
+      "entry_id",
+      "file_name",
+      "content_type",
+      "original_size",
+      "original_key",
+      "display_key",
+      "thumbnail_key",
+      "width",
+      "height",
+      "created_by_id",
+      "created_by_name",
+      "created_at",
+      "backup_identity"
+    ],
+    orderBy: "entry_id ASC, created_at ASC, id ASC"
+  },
+  {
+    name: "diary_trash_scopes",
+    columns: [
+      "id",
+      "entry_id",
+      "owner_account_id",
+      "household_id",
+      "scope_type",
+      "entry_revision",
+      "deleted_by_id",
+      "deleted_at",
+      "created_at"
+    ],
+    orderBy: "id ASC"
+  },
+  {
+    name: "diary_favorites",
+    columns: ["account_id", "entry_id", "created_at"],
+    orderBy: "account_id ASC, entry_id ASC"
+  },
+  {
+    name: "diary_accounts",
+    columns: [
+      "id",
+      "household_id",
+      "display_name",
+      "role",
+      "can_manage_entries",
+      "can_view_trash",
+      "can_permanently_delete",
+      "can_view_investment",
+      "active",
+      "created_at",
+      "updated_at"
+    ],
+    orderBy: "id ASC"
+  },
+  {
+    name: "investment_history",
+    columns: [
+      "recorded_at",
+      "total",
+      "cash",
+      "stocks",
+      "funds",
+      "bonds",
+      "crypto",
+      "futures",
+      "points",
+      "other",
+      "updated_at"
+    ],
+    orderBy: "recorded_at ASC"
+  }
+];
+var RESTORE_TABLE_ORDER = Object.freeze([
+  "diary_accounts",
+  "diary_entries",
+  "diary_tags",
+  "diary_photos",
+  "diary_trash_scopes",
+  "diary_favorites",
+  "investment_history"
+]);
+
+// backup-worker/src/export-sql.js
+var MAX_STATEMENT = 16 * 1024 * 1024;
+
+// backup-worker/src/export-backup.js
+var FORMAT = "troom-d1-export-v3";
+var PART_BYTES = 1024 * 1024;
+var MAX_PARTS = 2e4;
+var UUID = /^[a-f0-9-]{36}$/;
+function exportSpec(service, migration) {
+  if (service === "billing" && migration === BILLING_ENCRYPTED_MIGRATION) return billingEncryptedSpec(SERVICES.billing);
+  if (service === "security" && migration === SECURITY_BILLING_MIGRATION) return {
+    ...SERVICES.security,
+    migration,
+    tables: [...SERVICES.security.tables, ...SECURITY_DIARY_TABLES, SECURITY_BILLING_VAULTS]
+  };
+  if (service === "diary" && migration === DIARY_ENCRYPTED_MIGRATION) return { database: "diary-db", binding: "DIARY_DB", migration, tables: [...BACKUP_TABLES.filter((t) => t.name === "diary_accounts").map((t) => ({ ...t, sourceColumns: t.columns.join(",") })), ...ENCRYPTED_DIARY_TABLES] };
+  if (service === "security" && migration === SECURITY_DIARY_MIGRATION) return { ...SERVICES.security, migration, tables: [...SERVICES.security.tables, ...SECURITY_DIARY_TABLES] };
+  if (service === "diary") return {
+    database: "diary-db",
+    binding: "DIARY_DB",
+    migration: "0022_photo_backup_identity.sql",
+    tables: BACKUP_TABLES.map((t) => ({ ...t, sourceColumns: t.columns.join(",") }))
+  };
+  if (!Object.hasOwn(SERVICES, service)) throw new Error("SourceUnavailable");
+  return SERVICES[service];
+}
+var exportPrefix = (service, migration) => service === "diary" ? migration === DIARY_ENCRYPTED_MIGRATION ? "v10/" : "v9/" : migration === SECURITY_BILLING_MIGRATION ? "d1/security/v5/" : migration === BILLING_ENCRYPTED_MIGRATION ? "d1/billing/v4/" : service === "security" && migration === SECURITY_DIARY_MIGRATION ? "d1/security/v4/" : `d1/${service}/v3/`;
+var exportDay = (now) => new Date(now + 9 * 36e5).toISOString().slice(0, 10);
+function validateExportManifest(manifest, service) {
+  const spec = service === "household" ? archiveSpec(service, manifest?.expectedMigration) : exportSpec(service, manifest?.expectedMigration), prefix = exportPrefix(service, manifest?.expectedMigration);
+  if (manifest?.format !== FORMAT || manifest.service !== service || manifest.database !== spec.database || manifest.expectedMigration !== spec.migration || manifest.consistency !== "single-database-export" || !Number.isFinite(Date.parse(manifest.scheduledFor)) || !Number.isFinite(Date.parse(manifest.createdAt)) || !Number.isFinite(Date.parse(manifest.completedAt)) || typeof manifest.bookmark !== "string" || !manifest.bookmark || manifest.bookmark.length > 256 || !Array.isArray(manifest.schema) || !Array.isArray(manifest.parts) || manifest.parts.length > MAX_PARTS || Object.keys(manifest.tables || {}).sort().join(",") !== spec.tables.map((t) => t.name).sort().join(",")) throw new Error("SnapshotInvalid");
+  if (spec.migration === DIARY_ENCRYPTED_MIGRATION && (!manifest.keyMetadata?.directory || !manifest.keyMetadata?.anchor || !manifest.keyMetadata?.recoveryEnvelope)) throw new Error("SnapshotInvalid");
+  const counts = Object.fromEntries(spec.tables.map((t) => [t.name, 0]));
+  const keys = /* @__PURE__ */ new Set();
+  let bytes = 0;
+  for (const part of manifest.parts) {
+    if (!part || !part.key?.startsWith(prefix + "data/") || !new RegExp(`^${prefix}data/[a-f0-9-]{36}/[0-9]{6}\\.json\\.gz$`).test(part.key) || keys.has(part.key) || !Object.hasOwn(counts, part.table) || !/^[a-f0-9]{64}$/.test(part.sha256) || !Number.isSafeInteger(part.bytes) || part.bytes <= 0 || part.bytes > 16 * 1024 * 1024 || !Number.isSafeInteger(part.rowCount) || part.rowCount <= 0) throw new Error("SnapshotInvalid");
+    keys.add(part.key);
+    counts[part.table] += part.rowCount;
+    bytes += part.bytes;
+  }
+  for (const t of spec.tables) {
+    const stored = manifest.tables[t.name];
+    if (JSON.stringify(stored.columns) !== JSON.stringify(t.columns) || stored.rowCount !== counts[t.name]) throw new Error("SnapshotInvalid");
+  }
+  if (manifest.bytes !== bytes || manifest.rowCount !== Object.values(counts).reduce((a, b) => a + b, 0)) throw new Error("SnapshotInvalid");
+}
+async function* readExportParts(bucket, manifest, service) {
+  validateExportManifest(manifest, service);
+  for (const part of manifest.parts) {
+    const verified = await verifiedGeneration(bucket, part.key, (p) => {
+      if (p?.table !== part.table || !Array.isArray(p.rows) || p.rows.length !== part.rowCount) throw new Error("VerificationFailed");
+      const columns = manifest.tables[part.table].columns;
+      if (p.rows.some((row) => !row || Object.keys(row).sort().join(",") !== [...columns].sort().join(",") || Object.values(row).some((v) => v !== null && typeof v !== "string" && (typeof v !== "number" || !Number.isFinite(v) || Number.isInteger(v) && !Number.isSafeInteger(v))))) throw new Error("SnapshotInvalid");
+    });
+    if (!verified || verified.sha256 !== part.sha256 || verified.bytes.length !== part.bytes) throw new Error("VerificationFailed");
+    yield verified.payload;
+  }
+}
+async function readExportManifest(bucket, key, service, deep = true) {
+  const verified = await verifiedGeneration(bucket, key, (p) => validateExportManifest(p, service));
+  if (!verified) return null;
+  const day = exportDay(Date.parse(verified.payload.scheduledFor)), prefix = exportPrefix(service, verified.payload.expectedMigration);
+  if (key !== `${prefix}daily/${day}.json.gz` && key !== `${prefix}monthly/${day.slice(0, 7)}.json.gz` && !(verified.payload.expectedMigration === DIARY_ENCRYPTED_MIGRATION && key.startsWith(prefix + "checkpoints/") && key.endsWith(".json.gz") && UUID.test(key.slice((prefix + "checkpoints/").length, -8)))) throw new Error("SnapshotInvalid");
+  await assertArchiveSchema(service, verified.payload.expectedMigration, verified.payload.schema);
+  if (deep) for await (const _part of readExportParts(bucket, verified.payload, service)) {
+  }
+  return verified;
+}
+
+// backup-worker/src/billing-legacy-profile.js
+var billingLegacyProfile = {
+  service: "billing",
+  errorPrefix: "BillingArchive",
+  format: "troom-billing-legacy-backup-archive",
+  destinationPrefix: "sealed/billing-legacy/v1/",
+  exportPrefix: exportPrefix("billing"),
+  generationKey: /^d1\/billing\/(?:v[23]\/)?(?:daily\/\d{4}-\d{2}-\d{2}|monthly\/\d{4}-\d{2})\.json\.gz$/,
+  partKey: /^d1\/billing\/v3\/data\/[a-f0-9-]{36}\/\d{6}\.json\.gz$/,
+  requireRecordedHash: (key) => /^d1\/billing\/v[23]\//.test(key),
+  verifyRestored(db, payload, key) {
+    const isExport = key.startsWith(exportPrefix("billing"));
+    if (isExport ? payload.format !== "troom-d1-export-v3" : ![1, 2].includes(payload.formatVersion)) {
+      throw new Error("BillingArchiveFormatMismatch");
+    }
+    const date = Date.parse(payload.scheduledFor ?? payload.createdAt);
+    if (!Number.isFinite(date)) throw new Error("BillingArchiveGenerationMismatch");
+    const day = exportDay(date);
+    const expected = key.includes("/monthly/") ? day.slice(0, 7) : day;
+    if (key.split("/").at(-1) !== `${expected}.json.gz`) throw new Error("BillingArchiveGenerationMismatch");
+    if (db.prepare("SELECT EXISTS (SELECT 1 FROM billing_accounts WHERE is_active != 0) AS active").get().active) {
+      throw new Error("BillingArchiveAccountsActive");
+    }
+  }
+};
+
+// backup-worker/tools/d1-legacy-archive.mjs
+var maxSourceBytes = 8 * 1024 * 1024;
+var maxPayloadBytes = 16 * 1024 * 1024;
+var maxCiphertextLength = Math.ceil((maxPayloadBytes + 16) * 4 / 3);
+var maxArchiveBytes = maxCiphertextLength + 4096;
+var maxObjects = 1e3;
+var uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+var sha256 = /^[a-f0-9]{64}$/;
+var same = (a, b) => new TextDecoder().decode(encode(a)) === new TextDecoder().decode(encode(b));
+var isMetadata = (value) => value && typeof value === "object" && !Array.isArray(value) && Object.values(value).every((item) => typeof item === "string");
+function createLegacyArchive(profile, restoreIsolated) {
+  const { service, format, destinationPrefix, exportPrefix: exportPrefix2, generationKey, partKey, requireRecordedHash, verifyRestored } = profile;
+  const error = (code) => new Error(profile.errorPrefix + code);
+  function sourceMap(inventory) {
+    if (!Array.isArray(inventory) || !inventory.length) throw error("InventoryInvalid");
+    const sources = /* @__PURE__ */ new Map();
+    for (const { key, etag, size } of inventory) {
+      if (typeof key !== "string" || !generationKey.test(key) && !partKey.test(key) || sources.has(key) || typeof etag !== "string" || !etag || etag.length > 128 || !Number.isSafeInteger(size) || size < 1 || size > maxSourceBytes) throw error("InventoryInvalid");
+      sources.set(key, { key, etag, size });
+    }
+    return sources;
+  }
+  async function readSource(bucket, source) {
+    async function read() {
+      const object = await bucket.get(source.key, { onlyIf: { etagMatches: source.etag } });
+      if (!object?.body || object.etag !== source.etag || object.size !== source.size) throw error("SourceChanged");
+      const metadata = object.customMetadata ?? {};
+      if (!isMetadata(metadata)) throw error("SourceChanged");
+      const bytes = await readBounded(object.body, source.size);
+      if (bytes.length !== source.size) throw error("SourceChanged");
+      return { bytes, metadata: { ...metadata }, sha256: await digest(bytes) };
+    }
+    const first = await read();
+    try {
+      const recorded = first.metadata.sha256;
+      if (recorded !== void 0) {
+        if (recorded !== first.sha256) throw error("SourceHashMismatch");
+      } else {
+        if (requireRecordedHash(source.key)) throw error("SourceHashMissing");
+        const second = await read();
+        try {
+          if (second.sha256 !== first.sha256 || !same(second.metadata, first.metadata)) throw error("SourceChanged");
+        } finally {
+          second.bytes.fill(0);
+        }
+      }
+      return { ...source, ...first };
+    } catch (error2) {
+      first.bytes.fill(0);
+      throw error2;
+    }
+  }
+  function memoryBucket(objects) {
+    return { async get(key) {
+      const object = objects.get(key);
+      if (!object) return null;
+      return {
+        body: new Blob([object.bytes]).stream(),
+        etag: object.etag,
+        customMetadata: { ...object.metadata, sha256: object.sha256 }
+      };
+    } };
+  }
+  async function exportPartKeys(bucket, key) {
+    const { payload } = await readExportManifest(bucket, key, service, false);
+    return payload.parts.map((part) => part.key).sort();
+  }
+  async function planArchives(bucket, inventory) {
+    const sources = sourceMap(inventory);
+    const batches = [], byParts = /* @__PURE__ */ new Map(), referenced = /* @__PURE__ */ new Set();
+    for (const key of [...sources.keys()].sort().filter((value) => generationKey.test(value))) {
+      if (!key.startsWith(exportPrefix2)) {
+        batches.push([sources.get(key)]);
+        continue;
+      }
+      const manifest = await readSource(bucket, sources.get(key));
+      try {
+        const keys = await exportPartKeys(memoryBucket(/* @__PURE__ */ new Map([[key, manifest]])), key);
+        const identity = JSON.stringify(keys);
+        if (!byParts.has(identity)) {
+          const parts = keys.map((part) => {
+            if (!sources.has(part)) throw error("PartMissing");
+            referenced.add(part);
+            return sources.get(part);
+          });
+          byParts.set(identity, parts);
+          batches.push(parts);
+        }
+        byParts.get(identity).push(sources.get(key));
+      } finally {
+        manifest.bytes.fill(0);
+      }
+    }
+    if (!batches.length) throw error("GenerationMissing");
+    const unreferencedParts = [...sources.keys()].filter((key) => partKey.test(key) && !referenced.has(key)).sort();
+    return { batches, unreferencedParts };
+  }
+  function sourceSummary(objects) {
+    return [...objects.values()].map(({ key, etag, size, sha256: sha2562, metadata }) => ({
+      key,
+      etag,
+      size,
+      sha256: sha2562,
+      verification: metadata.sha256 ? "recorded-sha256" : "repeated-source-read"
+    })).sort((a, b) => a.key.localeCompare(b.key));
+  }
+  async function restoreGeneration(bucket, key) {
+    const { db, payload } = await restoreIsolated(bucket, key, service);
+    try {
+      verifyRestored(db, payload, key);
+      return db;
+    } catch (error2) {
+      db.close();
+      throw error2;
+    }
+  }
+  async function rehearse(objects) {
+    const bucket = memoryBucket(objects);
+    const generationKeys = [...objects.keys()].filter((key) => generationKey.test(key)).sort();
+    if (!generationKeys.length) throw error("GenerationMissing");
+    const referenced = new Set(generationKeys);
+    for (const key of generationKeys) {
+      if (key.startsWith(exportPrefix2)) for (const part of await exportPartKeys(bucket, key)) referenced.add(part);
+      const db = await restoreGeneration(bucket, key);
+      db.close();
+    }
+    if (objects.size !== referenced.size || [...referenced].some((key) => !objects.has(key))) throw error("ReferenceMismatch");
+    return generationKeys;
+  }
+  const binding = (id) => ({ household: "recovery", scope: `${service}-backup-archive`, id, revision: 1, epoch: 1, kind: "backup-archive" });
+  function header(archive) {
+    const { format: type, version, id, recipientFingerprint } = archive;
+    if (type !== format || version !== 1 || !uuid.test(id) || !/^[A-Za-z0-9_-]{43}$/.test(recipientFingerprint) || Object.keys(archive).sort().join(",") !== "ciphertext,format,id,iv,keyBox,recipientFingerprint,version" || Object.keys(archive.keyBox ?? {}).join(",") !== RECOVERY_RECIPIENT || !/^(?:[A-Za-z0-9_-]{512}|[A-Za-z0-9_-]{683})$/.test(archive.keyBox[RECOVERY_RECIPIENT]) || !/^[A-Za-z0-9_-]{16}$/.test(archive.iv) || typeof archive.ciphertext !== "string" || archive.ciphertext.length > maxCiphertextLength || !/^[A-Za-z0-9_-]+$/.test(archive.ciphertext)) throw error("Invalid");
+    return { format: type, version, id, recipientFingerprint };
+  }
+  function assertBatchSize(sources) {
+    if (sources.size > maxObjects || [...sources.values()].reduce((total, source) => total + source.size, 0) > maxSourceBytes) {
+      throw error("BatchTooLarge");
+    }
+  }
+  async function sealArchive(bucket, batch, { recoveryPublicKey, expectedRecoveryFingerprint, archiveId = crypto.randomUUID() }) {
+    if (!uuid.test(archiveId)) throw error("Invalid");
+    validatePublicKey(recoveryPublicKey, "recovery");
+    const recipientFingerprint = await fingerprint(recoveryPublicKey);
+    if (recipientFingerprint !== expectedRecoveryFingerprint) throw new Error("UntrustedRecoveryKey");
+    const sources = sourceMap(batch);
+    assertBatchSize(sources);
+    const objects = /* @__PURE__ */ new Map();
+    let plaintext;
+    try {
+      for (const [key2, source] of sources) objects.set(key2, await readSource(bucket, source));
+      const generations = await rehearse(objects);
+      const key = await newKey();
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const identity = { format, version: 1, id: archiveId, recipientFingerprint };
+      plaintext = encode([...objects.values()].map(({ bytes, ...object }) => ({ ...object, body: b64(bytes) })));
+      if (plaintext.length > maxPayloadBytes) throw error("BatchTooLarge");
+      const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: encode(identity) }, key, plaintext);
+      const keyBox = await recipientKeyBox(key, binding(identity.id), [], recoveryPublicKey);
+      return {
+        archive: { ...identity, iv: b64(iv), ciphertext: b64(ciphertext), keyBox },
+        sourceReport: { generations, sources: sourceSummary(objects) }
+      };
+    } finally {
+      plaintext?.fill(0);
+      for (const { bytes } of objects.values()) bytes.fill(0);
+    }
+  }
+  async function openArchiveObjects(archive, { recoveryPrivateKey, expectedRecoveryFingerprint }) {
+    const identity = header(archive);
+    if (identity.recipientFingerprint !== expectedRecoveryFingerprint) throw new Error("UntrustedRecoveryKey");
+    const iv = unb64(archive.iv, 16);
+    const key = await openRecipientKey(archive.keyBox, binding(identity.id), RECOVERY_RECIPIENT, recoveryPrivateKey);
+    const ciphertext = unb64(archive.ciphertext, maxCiphertextLength);
+    const plaintext = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv, additionalData: encode(identity) }, key, ciphertext));
+    const objects = /* @__PURE__ */ new Map();
+    try {
+      if (plaintext.length > maxPayloadBytes) throw error("BatchTooLarge");
+      const rows = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(plaintext));
+      const sources = sourceMap(rows);
+      assertBatchSize(sources);
+      for (const row of rows) {
+        const bytes = unb64(row.body, Math.ceil(row.size * 4 / 3));
+        objects.set(row.key, { ...sources.get(row.key), sha256: row.sha256, metadata: row.metadata, bytes });
+        if (bytes.length !== row.size || !sha256.test(row.sha256) || await digest(bytes) !== row.sha256 || !isMetadata(row.metadata) || row.metadata.sha256 !== void 0 && row.metadata.sha256 !== row.sha256) throw error("SourceHashMismatch");
+      }
+      return objects;
+    } catch (error2) {
+      for (const { bytes } of objects.values()) bytes.fill(0);
+      throw error2;
+    } finally {
+      plaintext.fill(0);
+    }
+  }
+  async function verifyArchive(archive, options) {
+    const objects = await openArchiveObjects(archive, options);
+    try {
+      const actual = { generations: await rehearse(objects), sources: sourceSummary(objects) };
+      const inventory = actual.sources.map(({ key, etag, size }) => ({ key, etag, size }));
+      const expected = options.inventory?.slice().sort((a, b) => a.key.localeCompare(b.key));
+      if (expected && !same(inventory, expected) || options.sourceReport && !same(actual, options.sourceReport) || !expected && !options.sourceReport) throw error("SourceReportMismatch");
+      return { ...actual, recipientPrivateKeyVerified: true, isolatedRestoreVerified: true };
+    } finally {
+      for (const { bytes } of objects.values()) bytes.fill(0);
+    }
+  }
+  async function restoreArchiveGeneration(archive, key, options) {
+    if (!generationKey.test(key)) throw error("GenerationMissing");
+    const objects = await openArchiveObjects(archive, options);
+    try {
+      if (!objects.has(key)) throw error("GenerationMissing");
+      return await restoreGeneration(memoryBucket(objects), key);
+    } finally {
+      for (const { bytes } of objects.values()) bytes.fill(0);
+    }
+  }
+  async function readSealedArchive(destination, { key, sha256: expectedDigest }) {
+    const stored = await destination.get(key);
+    if (!stored?.body || stored.customMetadata?.sha256 !== expectedDigest) throw error("ReadbackMismatch");
+    const bytes = await readBounded(stored.body, maxArchiveBytes);
+    if (await digest(bytes) !== expectedDigest) throw error("ReadbackMismatch");
+    return bytes;
+  }
+  async function publishArchive(destination, archive) {
+    const { id } = header(archive);
+    const bytes = encode(archive);
+    if (bytes.length > maxArchiveBytes) throw error("BatchTooLarge");
+    const receipt = { key: `${destinationPrefix}${id}.json`, sha256: await digest(bytes) };
+    await destination.put(receipt.key, bytes, {
+      onlyIf: { etagDoesNotMatch: "*" },
+      httpMetadata: { contentType: "application/json" },
+      customMetadata: { format, sha256: receipt.sha256 }
+    });
+    await readSealedArchive(destination, receipt);
+    return receipt;
+  }
+  async function readArchive(destination, receipt) {
+    const id = receipt.key?.slice(destinationPrefix.length, -5);
+    if (!uuid.test(id) || receipt.key !== `${destinationPrefix}${id}.json` || !sha256.test(receipt.sha256)) {
+      throw error("Invalid");
+    }
+    const bytes = await readSealedArchive(destination, receipt);
+    const archive = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    if (archive.id !== id) throw error("ReadbackMismatch");
+    header(archive);
+    return archive;
+  }
+  async function verifyStoredArchive(destination, receipt, options) {
+    return verifyArchive(await readArchive(destination, receipt), options);
+  }
+  return { planArchives, sealArchive, verifyArchive, restoreArchiveGeneration, publishArchive, readArchive, verifyStoredArchive };
+}
+
+// billing-worker/migrations/0001_init.sql
+var init_default = "PRAGMA foreign_keys = ON;\n\nCREATE TABLE IF NOT EXISTS billing_accounts (\n  id TEXT PRIMARY KEY,\n  login_id TEXT NOT NULL COLLATE NOCASE UNIQUE,\n  display_name TEXT NOT NULL,\n  role TEXT NOT NULL CHECK (role IN ('owner', 'member')),\n  password_salt TEXT,\n  password_hash TEXT,\n  password_iterations INTEGER NOT NULL DEFAULT 100000,\n  session_version INTEGER NOT NULL DEFAULT 1,\n  is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),\n  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\n\nINSERT OR IGNORE INTO billing_accounts (id, login_id, display_name, role) VALUES\n  ('owner', 'sub@a-tanaka.jp', '\u7530\u4E2D\u5B8F\u77E5', 'owner'),\n  ('chiharu', 'chiharu', '\u7530\u4E2D\u5343\u6674', 'member'),\n  ('hideaki', 'hideaki', '\u7530\u4E2D\u79C0\u6643', 'member'),\n  ('masami', 'masami', '\u7530\u4E2D\u66A2\u7F8E', 'member'),\n  ('yuuka', 'yuuka', '\u7530\u4E2D\u4F51\u679C', 'member');\n\nCREATE TABLE IF NOT EXISTS billing_opening_balances (\n  account_id TEXT PRIMARY KEY,\n  effective_date TEXT NOT NULL CHECK (effective_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),\n  balance_yen INTEGER NOT NULL,\n  updated_by TEXT NOT NULL,\n  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  FOREIGN KEY (account_id) REFERENCES billing_accounts(id),\n  FOREIGN KEY (updated_by) REFERENCES billing_accounts(id)\n);\n\nCREATE TABLE IF NOT EXISTS billing_entries (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  account_id TEXT NOT NULL,\n  entry_date TEXT NOT NULL CHECK (entry_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),\n  category TEXT NOT NULL CHECK (category IN ('deposit', 'purchase', 'adjustment')),\n  amount_yen INTEGER NOT NULL CHECK (\n    (category = 'deposit' AND amount_yen > 0) OR\n    (category = 'purchase' AND amount_yen < 0) OR\n    (category = 'adjustment' AND amount_yen != 0)\n  ),\n  description TEXT NOT NULL,\n  note TEXT NOT NULL DEFAULT '',\n  created_by TEXT NOT NULL,\n  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  deleted_at TEXT,\n  FOREIGN KEY (account_id) REFERENCES billing_accounts(id),\n  FOREIGN KEY (created_by) REFERENCES billing_accounts(id)\n);\n\nCREATE INDEX IF NOT EXISTS idx_billing_entries_account_date\n  ON billing_entries(account_id, entry_date, id);\nCREATE INDEX IF NOT EXISTS idx_billing_entries_active\n  ON billing_entries(account_id, deleted_at, entry_date);\n\nCREATE TABLE IF NOT EXISTS billing_audit_logs (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  event_type TEXT NOT NULL,\n  actor_account_id TEXT,\n  target_account_id TEXT,\n  entry_id INTEGER,\n  attempted_login_id TEXT,\n  details_json TEXT NOT NULL DEFAULT '{}',\n  occurred_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  FOREIGN KEY (actor_account_id) REFERENCES billing_accounts(id),\n  FOREIGN KEY (target_account_id) REFERENCES billing_accounts(id)\n);\n\nCREATE INDEX IF NOT EXISTS idx_billing_audit_logs_occurred\n  ON billing_audit_logs(occurred_at DESC, id DESC);\n";
+
+// billing-worker/migrations/0002_documents.sql
+var documents_default = "PRAGMA foreign_keys = OFF;\n\nALTER TABLE billing_entries RENAME TO billing_entries_legacy;\n\nCREATE TABLE billing_entries (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  account_id TEXT NOT NULL,\n  document_type TEXT NOT NULL CHECK (document_type IN ('invoice', 'payment_notice')),\n  entry_date TEXT NOT NULL CHECK (entry_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),\n  category TEXT NOT NULL CHECK (category IN ('purchase', 'discount', 'income', 'offset', 'other')),\n  amount_yen INTEGER NOT NULL CHECK (\n    (category = 'purchase' AND amount_yen > 0) OR\n    (category IN ('discount', 'income', 'offset') AND amount_yen < 0) OR\n    (category = 'other' AND amount_yen != 0)\n  ),\n  description TEXT NOT NULL,\n  note TEXT NOT NULL DEFAULT '',\n  created_by TEXT NOT NULL,\n  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  deleted_at TEXT,\n  CHECK (document_type = 'invoice' OR category != 'discount'),\n  FOREIGN KEY (account_id) REFERENCES billing_accounts(id),\n  FOREIGN KEY (created_by) REFERENCES billing_accounts(id)\n);\n\nINSERT INTO billing_entries (\n  id, account_id, document_type, entry_date, category, amount_yen,\n  description, note, created_by, created_at, updated_at, deleted_at\n)\nSELECT\n  id,\n  account_id,\n  'invoice',\n  entry_date,\n  CASE category WHEN 'purchase' THEN 'purchase' WHEN 'deposit' THEN 'income' ELSE 'other' END,\n  CASE category WHEN 'purchase' THEN ABS(amount_yen) WHEN 'deposit' THEN -ABS(amount_yen) ELSE amount_yen END,\n  description,\n  note,\n  created_by,\n  created_at,\n  updated_at,\n  deleted_at\nFROM billing_entries_legacy;\n\nDROP TABLE billing_entries_legacy;\n\nCREATE INDEX idx_billing_entries_account_date\n  ON billing_entries(account_id, entry_date, id);\nCREATE INDEX idx_billing_entries_active\n  ON billing_entries(account_id, deleted_at, entry_date);\nCREATE INDEX idx_billing_entries_document\n  ON billing_entries(account_id, document_type, entry_date, deleted_at);\n\nPRAGMA foreign_keys = ON;\n";
+
+// billing-worker/migrations/0003_add_machiko.sql
+var add_machiko_default = "INSERT OR IGNORE INTO billing_accounts (id, login_id, display_name, role)\nVALUES ('machiko', 'machiko', '\u5317\u89D2\u771F\u77E5\u5B50', 'member');\n";
+
+// billing-worker/migrations/0004_login_limits.sql
+var login_limits_default = "ALTER TABLE billing_accounts ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0;\nALTER TABLE billing_accounts ADD COLUMN locked_until TEXT;\n";
+
+// billing-worker/migrations/0005_settlements.sql
+var settlements_default = "CREATE TABLE billing_settlements (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  account_id TEXT NOT NULL,\n  settlement_date TEXT NOT NULL CHECK (settlement_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),\n  direction TEXT NOT NULL CHECK (direction IN ('incoming', 'outgoing')),\n  method TEXT NOT NULL CHECK (method IN ('bank_transfer', 'cash', 'offset', 'other', 'unspecified')),\n  amount_yen INTEGER NOT NULL CHECK (amount_yen > 0),\n  note TEXT NOT NULL DEFAULT '',\n  created_by TEXT NOT NULL,\n  legacy_entry_id INTEGER UNIQUE,\n  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  deleted_at TEXT,\n  FOREIGN KEY (account_id) REFERENCES billing_accounts(id),\n  FOREIGN KEY (created_by) REFERENCES billing_accounts(id)\n);\n\nINSERT INTO billing_settlements (\n  account_id, settlement_date, direction, method, amount_yen, note,\n  created_by, legacy_entry_id, created_at, updated_at, deleted_at\n)\nSELECT\n  account_id,\n  entry_date,\n  CASE document_type WHEN 'invoice' THEN 'incoming' ELSE 'outgoing' END,\n  'unspecified',\n  ABS(amount_yen),\n  note,\n  created_by,\n  id,\n  created_at,\n  updated_at,\n  deleted_at\nFROM billing_entries\nWHERE category = 'income';\n\nCREATE INDEX idx_billing_settlements_account_date\n  ON billing_settlements(account_id, settlement_date, deleted_at, id);\n\nPRAGMA optimize;\n";
+
+// billing-worker/migrations/0006_change_owner_login_id.sql
+var change_owner_login_id_default = "UPDATE billing_accounts\nSET login_id = 'contact@a-tanaka.jp', updated_at = CURRENT_TIMESTAMP\nWHERE id = 'owner' AND login_id = 'sub@a-tanaka.jp' COLLATE NOCASE;\n";
+
+// billing-worker/migrations/0007_password_security.sql
+var password_security_default = "ALTER TABLE billing_accounts\nADD COLUMN password_pepper_version INTEGER NOT NULL DEFAULT 0;\n\nCREATE TABLE IF NOT EXISTS billing_login_attempts (\n  fingerprint TEXT PRIMARY KEY,\n  failed_count INTEGER NOT NULL DEFAULT 0,\n  first_failed_at INTEGER NOT NULL,\n  locked_until INTEGER,\n  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\n\nCREATE INDEX IF NOT EXISTS idx_billing_login_attempts_locked_until\nON billing_login_attempts(locked_until);\n";
+
+// billing-worker/migrations/0008_password_auth_policy.sql
+var password_auth_policy_default = "-- Schema only. No account is stopped by migration; explicit per-account\n-- changes require tools/password-auth.mjs after account/Passkey preflight.\n-- Independent from billing_accounts.is_active and credential columns.\nCREATE TABLE password_auth_policy (\n  service TEXT NOT NULL CHECK (service = 'billing'),\n  account_id TEXT NOT NULL,\n  password_auth_enabled INTEGER NOT NULL CHECK (password_auth_enabled IN (0, 1)),\n  password_session_epoch INTEGER NOT NULL CHECK (password_session_epoch >= 1),\n  changed_by TEXT NOT NULL,\n  reason TEXT NOT NULL,\n  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  PRIMARY KEY (service, account_id)\n);\nCREATE TABLE password_auth_policy_audit (\n  id INTEGER PRIMARY KEY AUTOINCREMENT,\n  service TEXT NOT NULL,\n  account_id TEXT NOT NULL,\n  event_type TEXT NOT NULL,\n  password_session_epoch INTEGER NOT NULL,\n  changed_by TEXT NOT NULL,\n  reason TEXT NOT NULL,\n  occurred_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\nCREATE TRIGGER password_auth_policy_insert_audit AFTER INSERT ON password_auth_policy BEGIN\n  INSERT INTO password_auth_policy_audit (service, account_id, event_type, password_session_epoch, changed_by, reason)\n  VALUES (NEW.service, NEW.account_id, CASE NEW.password_auth_enabled WHEN 1 THEN 'password_auth_enabled' ELSE 'password_auth_disabled' END,\n    NEW.password_session_epoch, NEW.changed_by, NEW.reason);\nEND;\nCREATE TRIGGER password_auth_policy_update_audit AFTER UPDATE ON password_auth_policy BEGIN\n  INSERT INTO password_auth_policy_audit (service, account_id, event_type, password_session_epoch, changed_by, reason)\n  VALUES (NEW.service, NEW.account_id, CASE NEW.password_auth_enabled WHEN 1 THEN 'password_auth_enabled' ELSE 'password_auth_disabled' END,\n    NEW.password_session_epoch, NEW.changed_by, NEW.reason);\nEND;\n\n-- Removing or rolling back a policy could resurrect pre-disable cookies.\nCREATE TRIGGER password_auth_policy_no_delete BEFORE DELETE ON password_auth_policy BEGIN\n  SELECT RAISE(ABORT, 'Password policy rows must be retained');\nEND;\nCREATE TRIGGER password_auth_policy_monotonic BEFORE UPDATE ON password_auth_policy\nWHEN NEW.service != OLD.service OR NEW.account_id != OLD.account_id OR NEW.password_session_epoch <= OLD.password_session_epoch BEGIN\n  SELECT RAISE(ABORT, 'Password policy identity is immutable and epoch must advance');\nEND;\n";
+
+// billing-worker/restore-legacy.mjs
+var migrations = [init_default, documents_default, add_machiko_default, login_limits_default, settlements_default, change_owner_login_id_default, password_security_default, password_auth_policy_default];
+var tables = SERVICES.billing.tables;
+async function billingLegacyArchive(options = {}) {
+  const SQL = await (0, import_sql.default)({ locateFile: () => "/security/vendor/sql-wasm.wasm", ...options });
+  return createLegacyArchive(billingLegacyProfile, async (bucket, key) => {
+    const exported = key.startsWith(billingLegacyProfile.exportPrefix);
+    const archive = await verifiedGeneration(bucket, key, (payload2) => exported ? validateExportManifest(payload2, "billing") : validateSnapshot(payload2, "billing"));
+    if (!archive) throw new Error("BillingArchiveGenerationMissing");
+    const { payload } = archive;
+    if (exported) await assertArchiveSchema("billing", payload.expectedMigration, payload.schema);
+    const db = new SQL.Database();
+    try {
+      db.run("PRAGMA foreign_keys=ON");
+      for (const sql of migrations) db.exec(sql);
+      db.run("BEGIN");
+      db.run("PRAGMA defer_foreign_keys=ON");
+      const triggers = db.exec("SELECT name,sql FROM sqlite_schema WHERE type='trigger'")[0]?.values ?? [];
+      for (const [name] of triggers) db.run(`DROP TRIGGER "${name}"`);
+      for (const { name } of [...tables].reverse()) db.run(`DELETE FROM ${name}`);
+      const inserts = /* @__PURE__ */ new Map();
+      try {
+        for (const { name, columns } of tables) {
+          inserts.set(name, db.prepare(`INSERT INTO ${name} (${columns.join(",")})
+            VALUES (${columns.map(() => "?").join(",")}) RETURNING ${columns.join(",")}`));
+        }
+        const parts = exported ? readExportParts(bucket, payload, "billing") : tables.map(({ name }) => ({ table: name, rows: payload.tables[name].rows }));
+        for await (const { table: table3, rows } of parts) {
+          const { columns } = tables.find(({ name }) => name === table3);
+          for (const row of rows) {
+            const values = columns.map((column) => row[column]);
+            if (values.some((value) => value !== null && typeof value !== "string" && (typeof value !== "number" || !Number.isFinite(value) || Number.isInteger(value) && !Number.isSafeInteger(value)))) {
+              throw new Error("BillingArchiveInvalidCell");
+            }
+            const insert = inserts.get(table3);
+            insert.bind(values);
+            if (!insert.step() || insert.get().some((value, index) => value !== values[index])) {
+              throw new Error("BillingArchiveRestoreMismatch");
+            }
+            insert.reset();
+          }
+        }
+      } finally {
+        for (const insert of inserts.values()) insert.free();
+      }
+      for (const { name } of tables) {
+        if (db.exec(`SELECT COUNT(*) FROM ${name}`)[0].values[0][0] !== payload.tables[name].rowCount) {
+          throw new Error("BillingArchiveRestoreMismatch");
+        }
+      }
+      db.run("UPDATE billing_accounts SET is_active=0,session_version=session_version+1");
+      for (const [, sql] of triggers) db.run(sql);
+      if (db.exec("PRAGMA integrity_check")[0]?.values[0]?.[0] !== "ok" || db.exec("PRAGMA foreign_key_check").length) {
+        throw new Error("BillingArchiveRestoreMismatch");
+      }
+      db.run("COMMIT");
+      return { payload, db: {
+        prepare(sql) {
+          return { get() {
+            const statement = db.prepare(sql);
+            try {
+              return statement.step() ? statement.getAsObject() : void 0;
+            } finally {
+              statement.free();
+            }
+          } };
+        },
+        close: () => db.close()
+      } };
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+  });
+}
+
+// billing-worker/legacy-client.mjs
+var path = "/encryption/legacy";
+var label = new TextEncoder().encode("T-lain Billing archive recovery challenge v1");
+async function prepareBillingLegacyMaintenance(api, keys, authentication, options = {}) {
+  const context2 = await api(`${path}/challenge`);
+  if (await fingerprint(context2.publicKey) !== context2.fingerprint) throw new Error("\u65E7\u30D0\u30C3\u30AF\u30A2\u30C3\u30D7\u306E\u5FA9\u65E7\u9375\u3092\u7167\u5408\u3067\u304D\u307E\u305B\u3093\u3002");
+  const unlock = options.unlockRecovery ?? globalThis.TRoomCrypto.unlockAdminPrivateKeyWithPasskey;
+  const recoveryPrivateKey = await unlock(authentication.prfOutput, context2.envelope);
+  const proof = new Uint8Array(await crypto.subtle.decrypt(
+    { name: "RSA-OAEP", label },
+    recoveryPrivateKey,
+    unb64(context2.challenge, 684)
+  ));
+  const headers = { "X-Billing-Recovery-Proof": b64(proof), "X-Billing-Recovery-Key": context2.fingerprint };
+  proof.fill(0);
+  const fallbackSource = { async get(key, { onlyIf: { etagMatches } } = {}) {
+    const query = new URLSearchParams({ key, etag: etagMatches, size: String(sizes.get(key)) });
+    const response = await call(`/source?${query}`, { raw: true });
+    return {
+      body: response.body,
+      etag: response.headers.get("X-Billing-Etag"),
+      size: Number(response.headers.get("X-Billing-Size")),
+      customMetadata: JSON.parse(decodeURIComponent(response.headers.get("X-Billing-Metadata")))
+    };
+  } };
+  const sizes = /* @__PURE__ */ new Map();
+  const call = (endpoint, init = {}) => api(path + endpoint, { ...init, headers });
+  const archiveTools = await billingLegacyArchive(options.sqlite);
+  let report;
+  return {
+    status: () => call("/status"),
+    async verify(progress) {
+      report = null;
+      const plan = await call("/plan");
+      const archives = [];
+      let generations = 0;
+      for (const { id, sources } of plan.batches) {
+        const query = new URLSearchParams({ id });
+        const archivePath = `/archive?${query}`;
+        let saved = await call(archivePath);
+        let sourceReport;
+        if (!saved) {
+          for (const source of sources) sizes.set(source.key, source.size);
+          const sealed = await archiveTools.sealArchive(fallbackSource, sources, {
+            archiveId: id,
+            recoveryPublicKey: context2.publicKey,
+            expectedRecoveryFingerprint: context2.fingerprint
+          });
+          await call("/archive", { method: "POST", body: sealed.archive });
+          sourceReport = sealed.sourceReport;
+          saved = await call(archivePath);
+        }
+        if (!saved || saved.archive.id !== id || saved.receipt.id !== id || await digest(encode(saved.archive)) !== saved.receipt.sha256) {
+          throw new Error("\u4FDD\u5B58\u3057\u305F\u6697\u53F7\u5316\u30D0\u30C3\u30AF\u30A2\u30C3\u30D7\u3092\u78BA\u8A8D\u3067\u304D\u307E\u305B\u3093\u3002");
+        }
+        const verified = await archiveTools.verifyArchive(saved.archive, {
+          inventory: sources,
+          sourceReport,
+          recoveryPrivateKey,
+          expectedRecoveryFingerprint: context2.fingerprint
+        });
+        archives.push({ id, sha256: saved.receipt.sha256, etag: saved.receipt.etag });
+        generations += verified.generations.length;
+        progress(generations, plan.generations);
+      }
+      if (generations !== plan.generations) throw new Error("\u5FA9\u5143\u3057\u305F\u65E7\u30D0\u30C3\u30AF\u30A2\u30C3\u30D7\u306E\u4E16\u4EE3\u6570\u304C\u4E00\u81F4\u3057\u307E\u305B\u3093\u3002");
+      const result = await signed({
+        protocol: legacyProtocol,
+        generation: plan.generation,
+        checkpoint: plan.checkpoint,
+        recoveryFingerprint: context2.fingerprint,
+        archives,
+        generations
+      }, keys.writer);
+      await call("/verified", { method: "POST", body: { report: result } });
+      report = result;
+      return { generations, unreferencedParts: plan.unreferencedParts };
+    },
+    async cleanup(confirmation) {
+      if (!report) throw new Error("\u65E7\u30D0\u30C3\u30AF\u30A2\u30C3\u30D7\u306E\u5FA9\u5143\u3092\u5148\u306B\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\u3002");
+      return call("/cleanup", { method: "POST", body: { report, confirmation } });
+    }
+  };
+}
+
+// billing-worker/restore-checkpoint.mjs
 var schema = `
 CREATE TABLE ledger (id TEXT PRIMARY KEY, account TEXT, recovery_wrapped_key TEXT NOT NULL,
   revision INTEGER NOT NULL, digest TEXT NOT NULL, signature TEXT NOT NULL);
@@ -2169,11 +4373,11 @@ CREATE TABLE grant_key (ledger TEXT NOT NULL REFERENCES ledger(id), identity_id 
 async function restoreBillingCheckpoint(receipt, options = {}) {
   const payload = receipt.payload;
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(payload)));
-  const hex = [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  if (hex !== receipt.payloadSha256 || payload.format !== "troom-billing-encrypted-checkpoint" || payload.version !== 1) {
+  const hex2 = [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  if (hex2 !== receipt.payloadSha256 || payload.format !== "troom-billing-encrypted-checkpoint" || payload.version !== 1) {
     throw new Error("\u30D0\u30C3\u30AF\u30A2\u30C3\u30D7\u306E\u7167\u5408\u306B\u5931\u6557\u3057\u307E\u3057\u305F\u3002");
   }
-  const SQL = await (0, import_sql.default)({ locateFile: () => "/security/vendor/sql-wasm.wasm", ...options });
+  const SQL = await (0, import_sql2.default)({ locateFile: () => "/security/vendor/sql-wasm.wasm", ...options });
   const db = new SQL.Database();
   try {
     db.run("PRAGMA foreign_keys=ON");
@@ -2236,5 +4440,6 @@ async function restoreBillingCheckpoint(receipt, options = {}) {
   }
 }
 export {
+  prepareBillingLegacyMaintenance,
   restoreBillingCheckpoint
 };

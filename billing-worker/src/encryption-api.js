@@ -1,3 +1,4 @@
+import { billingLegacyApi, billingLegacyRecovery } from "./legacy-api.js";
 import { billingEncryptedDigest, verifyBillingState } from "../public/billing-crypto.mjs";
 import { billingMigrationState, freezeBillingMigrationSource, readBillingMigrationPage } from "./migration-source.js";
 import { attestBillingCandidate, readBillingCandidate, reserveBillingCandidate, validateBillingCiphertext, writeBillingCandidatePage } from "./migration-candidate.js";
@@ -6,6 +7,8 @@ const keyEpoch = 1;
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const wrappedKey = /^(?:[A-Za-z0-9_-]{512}|[A-Za-z0-9_-]{683})$/;
 const aad = new TextEncoder().encode("T-lain Billing migration challenge v1");
+const legacyAad = new TextEncoder().encode("T-lain Billing archive recovery challenge v1");
+const legacyPath = "/api/encryption/legacy";
 const b64 = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll("+","-").replaceAll("/","_").replace(/=+$/,"");
 const encode = value => new TextEncoder().encode(JSON.stringify(value));
 const eventTypes = new Set(["entry_created","entry_updated","entry_deleted","settlement_created","settlement_updated","settlement_deleted"]);
@@ -15,10 +18,10 @@ function id(value, HttpError) {
   return value;
 }
 
-async function recoveryProof(env, session) {
+async function recoveryProof(env, session, purpose = "billing-migration") {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.SESSION_SECRET),
     { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  return crypto.subtle.sign("HMAC", key, encode(["billing-migration", session.sessionId, session.startedAt, session.credentialId]));
+  return crypto.subtle.sign("HMAC", key, encode([purpose, session.sessionId, session.startedAt, session.credentialId]));
 }
 
 function proofMatches(expected, actual) {
@@ -147,7 +150,7 @@ export async function billingEncryptionApi(request, env, url, path, session, hel
   const optIn = env.BILLING_MIGRATION_ENABLED === "true";
   if (path === "/api/encryption/status" && method === "GET") {
     return json({ mode: active ? "encrypted" : state ? "migrating" : "legacy",
-      canStage: primary && optIn && !active, checkpointEnabled: Boolean(env.BILLING_BACKUP),
+      canStage: primary && optIn && !active, canMaintain: primary && active && Boolean(env.BILLING_BACKUP), checkpointEnabled: Boolean(env.BILLING_BACKUP),
       canActivate: primary && env.BILLING_CUTOVER_ENABLED === "true" && !active });
   }
   if (path === "/api/encryption/ledgers" && method === "GET" && active) {
@@ -164,6 +167,25 @@ export async function billingEncryptionApi(request, env, url, path, session, hel
       writer: JSON.parse(row.writer_public_key), records: JSON.parse(row.records_json) });
   }
   if (!primary) throw new HttpError(403, "第一管理者のみ操作できます。");
+  if (path.startsWith(`${legacyPath}/`)) {
+    const authorizeLegacy = async challenge => {
+      if (!challenge) {
+        const fingerprint = request.headers.get("X-Billing-Recovery-Key");
+        if (!/^[A-Za-z0-9_-]{43}$/.test(fingerprint ?? "") || !proofMatches(
+          await recoveryProof(env, session, `billing-legacy-archive:${fingerprint}`), request.headers.get("X-Billing-Recovery-Proof")
+        )) throw new HttpError(403, "旧バックアップの復旧鍵を解除してください。");
+        return { fingerprint };
+      }
+      requireRecentPasskey(session);
+      const recovery = await billingLegacyRecovery(env, actor);
+      if (!recovery) throw new HttpError(409, "復旧用の鍵を確認できません。");
+      const proof = await recoveryProof(env, session, `billing-legacy-archive:${recovery.fingerprint}`);
+      const publicKey = await crypto.subtle.importKey("jwk", recovery.publicKey,{ name:"RSA-OAEP",hash:"SHA-256" },false,["encrypt"]);
+      const encrypted = await crypto.subtle.encrypt({ name:"RSA-OAEP",label:legacyAad }, publicKey, proof);
+      return { ...recovery, challenge: b64(encrypted) };
+    };
+    return billingLegacyApi(request, env, url, path.slice(legacyPath.length), state, actor, { ...helpers, authorizeLegacy });
+  }
   if (path === "/api/encryption/commit" && method === "POST" && active) {
     const context = await env.SECURITY.getBillingVaultContext(actor);
     if (!context?.primaryOwner || !context.vault?.writer) throw new HttpError(403, "署名用のパスキーを確認できません。");

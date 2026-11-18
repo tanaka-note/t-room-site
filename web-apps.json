@@ -329,6 +329,8 @@
       "buildFiles": ["diary-worker/public/dialog-navigation.js", "assets/session-secret.mjs", "assets/session-policy.mjs", "billing-worker/src/index.js", "billing-worker/src/finance.js", "assets/password-auth-policy.mjs", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js", "assets/passkey-rolling.mjs",
         "cloud-worker/public/crypto-vault.js",
         "billing-worker/src/encryption-api.js",
+        "billing-worker/src/legacy-api.js",
+        "billing-worker/src/legacy-cleanup.js",
         "billing-worker/src/migration-candidate.js",
         "billing-worker/src/migration-source.js",
         "tools/shared/tlain-login.css",

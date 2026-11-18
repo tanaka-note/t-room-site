@@ -1,4 +1,5 @@
 import initSqlJs from "sql.js";
+export { prepareBillingLegacyMaintenance } from "./legacy-client.mjs";
 
 const schema = `
 CREATE TABLE ledger (id TEXT PRIMARY KEY, account TEXT, recovery_wrapped_key TEXT NOT NULL,
