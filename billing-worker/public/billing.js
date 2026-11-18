@@ -114,6 +114,10 @@
     try {
       authentication = await TRoomPasskeys.authenticate("billing", choosePasskeyLink);
       const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
+      if (session.prepareEncryptionKey) {
+        const { prepareBillingVault } = await import(`${basePath()}/billing-key-client.mjs`);
+        await prepareBillingVault(api, authentication);
+      }
       await enterApp(session);
     } catch (error) {
       el["login-error"].textContent = error.message;

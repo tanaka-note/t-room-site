@@ -3,6 +3,7 @@ import { runState } from '../../backup-worker/src/monitor.js';
 import { archiveAuditEvents, archiveIfPending } from './audit-archive.js';
 import {handleHouseholdKeys} from './household-keys.js';
 import {householdAutomaticContext} from './household-automatic.js';
+import { billingKeyRecipients, billingVaultContext, enrollBillingVault } from "./billing-vaults.js";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName, identityDisplayName, auditDisplayNames, OWNER_DISPLAY_NAME } from "../../assets/account-display.mjs";
@@ -212,6 +213,18 @@ export default class SecurityWorker extends WorkerEntrypoint {
       publicKey: config.publicKeyJwk,
       envelope: { encryptedPayload: envelope.encryptedPayload, payloadIv: envelope.payloadIv }
     };
+  }
+
+  async getBillingVaultContext(input) {
+    return billingVaultContext(this.env, input, validatePasskeySession);
+  }
+
+  async enrollBillingVault(input, vault) {
+    return enrollBillingVault(this.env, input, vault, validatePasskeySession);
+  }
+
+  async getBillingKeyRecipients(input) {
+    return billingKeyRecipients(this.env, input, validatePasskeySession);
   }
 
   async getAiBudgetPolicy(identityId) {

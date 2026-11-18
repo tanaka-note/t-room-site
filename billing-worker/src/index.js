@@ -152,7 +152,11 @@ async function handleApi(request, env, url, path, context, getSession) {
     const headers = new Headers({ "Set-Cookie": sessionCookie(token, policy, url.protocol === "https:") });
     await writeAudit(env, { eventType: "passkey_login_success", actorAccountId: account.id, targetAccountId: account.id });
     await recordSecurityAudit(env, request, { service: "billing", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: account.role, authMethod: "passkey", sessionId, credentialId: handoff.credentialId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt: new Date().toISOString(), sessionVersion: billingSessionVersion(env, account.session_version), passkeySessionEpoch: handoff.sessionEpoch });
-    return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name, accountDisplayName: accountDisplayName({ service: "billing", accountId: account.id, role: account.role }, `${account.display_name}${account.role === "owner" ? "（管理者）" : ""}`), authMethod: "passkey" }, 200, headers);
+    return json({
+      authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name,
+      accountDisplayName: accountDisplayName({ service: "billing", accountId: account.id, role: account.role }, `${account.display_name}${account.role === "owner" ? "（管理者）" : ""}`),
+      authMethod: "passkey", ...(env.BILLING_KEY_PREPARATION_ENABLED === "true" ? { prepareEncryptionKey: true } : {})
+    }, 200, headers);
   }
 
   if (path === "/api/logout" && request.method === "POST") {
@@ -179,16 +183,33 @@ async function handleApi(request, env, url, path, context, getSession) {
     if (session.authMethod !== "passkey" || session.identityId !== "primary-admin" || session.accountId !== "owner") {
       throw new HttpError(403, "第一管理者のパスキーが必要です。");
     }
-    const elapsed = Date.now() - Date.parse(session.startedAt);
-    if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed > 300000) {
-      throw new HttpError(409, "復旧用の鍵を解除するには、パスキーで本人確認してください。");
-    }
-    const recovery = await env.SECURITY.getBillingRecoveryContext({
-      service: "billing", identityId: session.identityId, credentialId: session.credentialId,
-      serviceAccountId: session.accountId, serviceLinkId: session.serviceLinkId, sessionEpoch: session.passkeySessionEpoch
-    });
+    requireRecentPasskey(session);
+    const recovery = await env.SECURITY.getBillingRecoveryContext(billingKeySession(session));
     if (!recovery) throw new HttpError(409, "このパスキーの復旧用鍵を確認できません。");
     return json(recovery);
+  }
+
+  if (env.BILLING_KEY_PREPARATION_ENABLED === "true" && path === "/api/encryption/vault") {
+    if (request.method === "GET") {
+      const result = await env.SECURITY.getBillingVaultContext(billingKeySession(session));
+      if (!result) throw new HttpError(403, "請求書の暗号鍵を利用できません。");
+      return json(result);
+    }
+    if (request.method === "POST") {
+      requireRecentPasskey(session);
+      const body = await readJson(request, 18432);
+      const result = await env.SECURITY.enrollBillingVault(billingKeySession(session), body.vault);
+      if (result?.status === "invalid") throw new HttpError(400, "請求書の暗号鍵の形式を確認してください。");
+      if (result?.status !== "ok") throw new HttpError(403, "請求書の暗号鍵を登録できません。");
+      return json({ vault: result.vault });
+    }
+  }
+
+  if (env.BILLING_KEY_PREPARATION_ENABLED === "true" && path === "/api/encryption/recipients" && request.method === "GET") {
+    requireOwner(session);
+    const recipients = await env.SECURITY.getBillingKeyRecipients(billingKeySession(session));
+    if (!recipients) throw new HttpError(403, "第一管理者のパスキーが必要です。");
+    return json({ recipients });
   }
 
   if (path === "/api/accounts" && request.method === "GET") {
@@ -537,6 +558,7 @@ async function serveAsset(request, env, url, path) {
     ["/tlain-login.js", "/tlain-login.js"],
     ["/billing.js", "/billing.js"],
     ["/billing-crypto.mjs", "/billing-crypto.mjs"],
+    ["/billing-key-client.mjs", "/billing-key-client.mjs"],
     ["/billing-finance.mjs", "/billing-finance.mjs"],
     ["/billing-migration.mjs", "/billing-migration.mjs"],
     ["/pwa-install.js", "/pwa-install.js"],
@@ -791,6 +813,20 @@ function clampNumber(value, min, max, fallback) {
 
 function requireOwner(session) {
   if (session.role !== "owner") throw new HttpError(403, "この操作を行う権限がありません。");
+}
+
+function billingKeySession(session) {
+  return {
+    service: "billing", identityId: session.identityId, credentialId: session.credentialId,
+    serviceAccountId: session.accountId, serviceLinkId: session.serviceLinkId, sessionEpoch: session.passkeySessionEpoch
+  };
+}
+
+function requireRecentPasskey(session) {
+  const elapsed = Date.now() - Date.parse(session.startedAt);
+  if (session.authMethod !== "passkey" || !Number.isFinite(elapsed) || elapsed < 0 || elapsed > 300000) {
+    throw new HttpError(409, "暗号鍵を準備するには、パスキーで本人確認してください。");
+  }
 }
 
 class HttpError extends Error {

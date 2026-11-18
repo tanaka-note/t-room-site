@@ -89,9 +89,9 @@ export function fixture() {
       await Promise.all(pending.splice(0));
       return { status: response.status, body: await response.json(), headers: response.headers, cookie: response.headers.get('set-cookie')?.split(';', 1)[0], ms };
     },
-    async login(account = 'owner', identityId = 'fixture-identity', serviceLinkId = `link-${account}`) {
+    async login(account = 'owner', identityId = 'fixture-identity', serviceLinkId = `link-${account}`, credentialId = 'Y3JlZGVudGlhbA') {
       const token = crypto.randomUUID();
-      handoffs.set(token, { identityId, credentialId: 'Y3JlZGVudGlhbA', serviceLinkId, serviceAccountId: account, sessionEpoch: 1 });
+      handoffs.set(token, { identityId, credentialId, serviceLinkId, serviceAccountId: account, sessionEpoch: 1 });
       return f.request('passkey/handoff', null, { method: 'POST', body: { handoffToken: token } });
     },
     sign(payload) { const data = Buffer.from(JSON.stringify(payload)).toString('base64url'); return `troom_billing_session=${data}.${createHmac('sha256', env.SESSION_SECRET).update(data).digest('base64url')}`; },
@@ -111,6 +111,9 @@ export function fixture() {
     },
     validatePasskeySession: input => security.validatePasskeySession(input),
     getBillingRecoveryContext: input => security.getBillingRecoveryContext(input),
+    getBillingVaultContext: input => security.getBillingVaultContext(input),
+    enrollBillingVault: (input, vault) => security.enrollBillingVault(input, vault),
+    getBillingKeyRecipients: input => security.getBillingKeyRecipients(input),
     // Preserve the synchronous service audit boundary; avoid unrelated audit D1
     // writes when counting authentication queries. No event contents are logged.
     recordAuditEvent: async event => { metrics.audits.push(event.eventType); },
