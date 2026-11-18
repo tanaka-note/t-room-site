@@ -95,6 +95,7 @@ test('Downloader 2 components select only Downloader 2 while unknown files remai
 test('T-Cloud Windows is verified on Windows without selecting a production Worker', () => {
   assert.deepEqual(affected(['tcloud-windows/src/TCloud.Sync.Core/SyncPlanner.cs']), ['tcloud-windows']);
   assert.deepEqual(affected(['tools/verify-tcloud-windows.mjs']), ['tooling', 'tcloud-windows']);
+  assert.deepEqual(affected(['tools/build-tcloud-shell-probe.mjs']), ['tooling', 'tcloud-windows']);
   assert.ok(affected(['cloud-worker/public/crypto-vault.js']).includes('tcloud-windows'));
   assert.deepEqual(affected(['tcloud-windows/README.md']), []);
   assert.deepEqual(commands('tcloud-windows'), [{cwd:'.',args:['tools/verify-tcloud-windows.mjs']}]);

@@ -7,11 +7,27 @@ for await (const chunk of process.stdin) { input += chunk; if (input.length > 2 
 const request = JSON.parse(input);
 const context = { crypto: webcrypto, TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, Blob, btoa, atob };
 context.window = context;
+vm.runInNewContext(await readFile(new URL('../../cloud-worker/public/vendor/argon2.umd.min.js', import.meta.url), 'utf8'), context);
 vm.runInNewContext(await readFile(new URL('../../cloud-worker/public/crypto-vault.js', import.meta.url), 'utf8'), context);
-const keyBytes = Buffer.from(request.key, 'base64');
-try {
-  const key = await webcrypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
-  const envelope = await context.TRoomCrypto.encryptFileChunk(key, Buffer.from(request.plain, 'base64'), request.index);
-  const decrypted = await context.TRoomCrypto.decryptFileChunk(key, Buffer.from(request.envelope, 'base64'), request.index);
-  process.stdout.write(JSON.stringify({ envelope: Buffer.from(envelope).toString('base64'), plain: Buffer.from(decrypted).toString('base64') }));
-} finally { keyBytes.fill(0); }
+if (request.mode === 'passkey-envelope') {
+  const prf = Buffer.from(request.prf, 'base64');
+  try {
+    const member = await context.TRoomCrypto.createPasskeyClientVault(prf);
+    const accountKey = await webcrypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    const admin = await context.TRoomCrypto.createVault(accountKey);
+    const wrappedAdmin = await context.TRoomCrypto.wrapAdminPrivateKeyForPasskey(accountKey, admin.payload, prf);
+    process.stdout.write(JSON.stringify({ member: { publicKeyJwk: member.publicKeyJwk,
+      encryptedPayload: member.encryptedPayload, payloadIv: member.payloadIv },
+      // Security stores a null public key for admin envelopes; Cloud serves it separately.
+      administrator: { ...wrappedAdmin, publicKeyJwk: null },
+      cryptoConfig: { initialized: true, cryptoVersion: 1, publicKeyJwk: admin.publicKeyJwk } }));
+  } finally { prf.fill(0); }
+} else {
+  const keyBytes = Buffer.from(request.key, 'base64');
+  try {
+    const key = await webcrypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+    const envelope = await context.TRoomCrypto.encryptFileChunk(key, Buffer.from(request.plain, 'base64'), request.index);
+    const decrypted = await context.TRoomCrypto.decryptFileChunk(key, Buffer.from(request.envelope, 'base64'), request.index);
+    process.stdout.write(JSON.stringify({ envelope: Buffer.from(envelope).toString('base64'), plain: Buffer.from(decrypted).toString('base64') }));
+  } finally { keyBytes.fill(0); }
+}

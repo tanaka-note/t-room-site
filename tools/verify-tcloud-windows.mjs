@@ -11,3 +11,7 @@ const run = args => {
 };
 run(['build', 'tcloud-windows/TCloud.Sync.slnx', '--configuration', 'Release', '-warnaserror', '--nologo']);
 run(['run', '--project', 'tcloud-windows/tests/TCloud.Sync.Tests/TCloud.Sync.Tests.csproj', '--configuration', 'Release', '--no-build', '--', '--native']);
+const nativeBuild = spawnSync(process.execPath, ['tools/build-tcloud-shell-probe.mjs'], { cwd, stdio: 'inherit', shell: false });
+if (nativeBuild.error) throw nativeBuild.error;
+if (nativeBuild.status !== 0) process.exit(nativeBuild.status || 1);
+run(['run', '--project', 'tcloud-windows/tests/TCloud.Sync.Tests/TCloud.Sync.Tests.csproj', '--configuration', 'Release', '--no-build', '--', '--folder-view-probe']);

@@ -1,6 +1,6 @@
 namespace TCloud.Sync.Core;
 
-public enum SyncAction { None, Pause, UpdatePlaceholder, Download, UploadNew, UploadRevision, Move, ConflictCopy, TrashRemote, RecycleLocal, PreserveDeletedEdit }
+public enum SyncAction { None, Pause, UpdatePlaceholder, Download, UploadNew, UploadRevision, Move, ConflictCopy, RejectLocalDelete, RecycleLocal, PreserveDeletedEdit }
 public enum RemoteState { Present, Trashed, Unknown }
 
 public sealed record VolumeBinding(string GuidPath, uint SerialNumber, string RelativeRoot);
@@ -26,28 +26,29 @@ public static class SyncPlanner
             return new(SyncAction.Pause, "オンラインの状態を確認できません。");
         if (baseline is not null && !StringComparer.Ordinal.Equals(baseline.Id, remote.Id))
             return new(SyncAction.Pause, "ファイルの識別情報が一致しません。");
+        if (baseline is not null && remote.Revision < baseline.Revision)
+            return new(SyncAction.Pause, "オンラインの版を再確認します。");
         if (remote.State == RemoteState.Trashed)
             return new(local.Exists ? (local.Dirty ? SyncAction.PreserveDeletedEdit : SyncAction.RecycleLocal) : SyncAction.None,
                 "オンラインのゴミ箱への移動を反映します。再アップロードしません。");
-        if (baseline is not null && remote.Revision < baseline.Revision)
-            return new(SyncAction.Pause, "オンラインの版を再確認します。");
         var remoteChanged = baseline is not null && remote.Revision != baseline.Revision;
-        if (local.UserDeleteConfirmed)
-            return new(remoteChanged ? SyncAction.ConflictCopy : SyncAction.TrashRemote,
-                remoteChanged ? "削除とオンラインの更新が競合しています。" : "オンラインのゴミ箱へ移動します。");
+        // Legacy callers may still report a confirmed delete. It must never delete the online original.
+        if (local.UserDeleteConfirmed && local.Exists)
+            return new(SyncAction.RejectLocalDelete, "削除はT-CloudのWeb画面から行ってください。");
         if (!local.Exists)
-            return new(local.Pinned || local.Opened ? SyncAction.Download : SyncAction.UpdatePlaceholder,
-                "ローカル本体がないだけではオンラインを削除しません。");
+            return new(local.Dirty ? SyncAction.Pause : SyncAction.Download,
+                local.Dirty ? "未送信の編集の所在を確認します。" : "オンラインの原本を取得します。オンラインは削除しません。");
         if (baseline is null) return new(SyncAction.ConflictCopy, "同じ場所のオンラインファイルと追加ファイルを保全します。");
         var pathChanged = !StringComparer.Ordinal.Equals(local.RelativePath, baseline.RelativePath);
         if ((local.Dirty || pathChanged) && remoteChanged)
             return new(SyncAction.ConflictCopy, "両端末の変更を保全します。");
         if (local.Dirty) return new(SyncAction.UploadRevision, "内容の新しい版を送信します。");
         if (pathChanged) return new(SyncAction.Move, "名前または移動先を反映します。");
+        if (!local.HasContent) return new(SyncAction.Download, "オフライン保存用の原本を取得します。");
         if (remoteChanged)
         {
             var contentChanged = !StringComparer.Ordinal.Equals(remote.ContentVersion, baseline.ContentVersion);
-            return new(contentChanged && (local.HasContent || local.Pinned || local.Opened)
+            return new(contentChanged
                 ? SyncAction.Download : SyncAction.UpdatePlaceholder, "オンラインの新しい版を反映します。");
         }
         return new(SyncAction.None, "同期済みです。");

@@ -2,7 +2,8 @@ using System.Text.Json;
 
 namespace TCloud.Sync.Core;
 
-public enum TransferKind { UploadNew, UploadRevision, Download, TrashRemote, RecycleLocal }
+// Value 3 belonged to the abandoned local-to-online deletion policy. Never reuse it.
+public enum TransferKind { UploadNew = 0, UploadRevision = 1, Download = 2, LegacyTrashRemote = 3, RecycleLocal = 4 }
 // Deliberately no Cookie, PRF output or keys in the journal's data contract.
 public sealed record PendingTransfer(string OperationId, string FileId, TransferKind Kind, long BaseRevision,
     string RelativePath, DateTimeOffset CreatedAt);
@@ -69,7 +70,8 @@ public sealed class TransferJournal(string path)
         foreach (var item in snapshot.Pending)
         {
             if (string.IsNullOrWhiteSpace(item.OperationId) || string.IsNullOrWhiteSpace(item.FileId)
-                || !Enum.IsDefined(item.Kind) || item.BaseRevision < 0) throw new InvalidDataException("転送記録が不正です。");
+                || !Enum.IsDefined(item.Kind) || item.Kind == TransferKind.LegacyTrashRemote || item.BaseRevision < 0)
+                throw new InvalidDataException("転送記録が不正です。旧仕様のオンライン削除は実行できません。");
             _ = LocalPaths.ResolveUnderRoot(Path.GetTempPath(), item.RelativePath);
         }
     }

@@ -1,4 +1,8 @@
 <Solution>
+  <Folder Name="/src/" />
+  <Folder Name="/tests/">
+    <Project Path="tests/TCloud.Sync.AuthProbe/TCloud.Sync.AuthProbe.csproj" />
+  </Folder>
   <Project Path="src/TCloud.Sync.Core/TCloud.Sync.Core.csproj" />
   <Project Path="src/TCloud.Sync.Windows/TCloud.Sync.Windows.csproj" />
   <Project Path="src/TCloud.Sync.Host/TCloud.Sync.Host.csproj" />

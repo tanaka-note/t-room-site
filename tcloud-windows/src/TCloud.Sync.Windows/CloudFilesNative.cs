@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 
 namespace TCloud.Sync.Windows;
 
@@ -121,6 +122,9 @@ internal static class CloudFilesNative
     internal static extern int CfCreatePlaceholders(string path, [In, Out] Placeholder[] placeholders, uint count, uint flags, out uint processed);
     [DllImport("cldapi.dll", PreserveSig = true)]
     internal static extern int CfExecute(in OperationInfo info, in TransferParameters parameters);
+    [DllImport("cldapi.dll", PreserveSig = true)]
+    internal static extern int CfConvertToPlaceholder(SafeFileHandle handle, byte[] identity, uint identityLength,
+        uint flags, out long convertUsn, nint overlapped);
 
     internal static void Check(int result) { if (result < 0) Marshal.ThrowExceptionForHR(result); }
 }

@@ -89,7 +89,7 @@ export function affected(paths) {
     const path = raw.replaceAll('\\', '/');
     if (/^(docs\/|README\.md$|AGENTS\.md$)/.test(path) || /\.md$/.test(path)) continue;
     if (path.startsWith('tcloud-windows/')) { add('tcloud-windows'); continue; }
-    if (path === 'tools/verify-tcloud-windows.mjs') { add('tooling', 'tcloud-windows'); continue; }
+    if (['tools/verify-tcloud-windows.mjs', 'tools/build-tcloud-shell-probe.mjs'].includes(path)) { add('tooling', 'tcloud-windows'); continue; }
     if (['tools/web-app-registry.mjs', 'tools/test-web-app-build-freshness.mjs'].includes(path)) { add('tooling', 'site'); continue; }
     if (/^(tools\/(verify|install-verify|check-cloud-infrastructure|test-cloud-infrastructure|test-development|test-release|test-browser|browser-|local-dev|release|health-production-|worker-logs)|\.github\/|\.node-version$)/.test(path)) { add('tooling'); continue; }
     if (path === '.gitignore' || path === 'tools/test-secret-ignore.mjs') { add('tooling'); continue; }

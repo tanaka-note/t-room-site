@@ -15,22 +15,26 @@ public sealed class CloudFilesFixture : IDisposable
     private readonly string root;
     private readonly VolumeBinding volume;
     private readonly CloudFilesNative.Callback fetch;
+    private readonly CloudFilesNative.Callback rejectDelete;
     private readonly ConcurrentDictionary<string, byte[]> data = new(StringComparer.Ordinal);
     private long connection;
     private bool registered;
     private int disposed;
     private int fetchCount;
+    private int rejectedDeleteCount;
     public string Root => root;
     public int FetchCount => Volatile.Read(ref fetchCount);
+    public int RejectedDeleteCount => Volatile.Read(ref rejectedDeleteCount);
     public ConcurrentQueue<Exception> Errors { get; } = new();
 
-    private CloudFilesFixture(string root)
+    private CloudFilesFixture(string root, bool denyDeletes)
     {
         if (!OperatingSystem.IsWindows() || !Environment.Is64BitProcess)
             throw new PlatformNotSupportedException("Windows 64ビット環境が必要です。");
         this.root = root;
         volume = VolumeInspector.ValidateDestination(root, []);
         fetch = Fetch;
+        rejectDelete = RejectDelete;
         try
         {
             var registration = new CloudFilesNative.Registration
@@ -42,31 +46,36 @@ public sealed class CloudFilesFixture : IDisposable
             var policies = new CloudFilesNative.Policies
             {
                 StructSize = (uint)Marshal.SizeOf<CloudFilesNative.Policies>(),
-                Hydration = new() { Primary = 1 }, // PROGRESSIVE, never auto-dehydrate
+                Hydration = new() { Primary = 1 }, // PROGRESSIVE
                 Population = new() { Primary = 3 } // ALWAYS_FULL namespace
             };
             CloudFilesNative.Check(CloudFilesNative.CfRegisterSyncRoot(root, registration, policies, 0));
             registered = true;
-            CloudFilesNative.CallbackRegistration[] callbacks =
-            [new() { Type = 0, Function = Marshal.GetFunctionPointerForDelegate(fetch) }, new() { Type = -1 }];
-            CloudFilesNative.Check(CloudFilesNative.CfConnectSyncRoot(root, callbacks, 0, 2, out connection));
+            var callbacks = new List<CloudFilesNative.CallbackRegistration>
+            { new() { Type = 0, Function = Marshal.GetFunctionPointerForDelegate(fetch) } };
+            if (denyDeletes)
+                callbacks.Add(new() { Type = 9, Function = Marshal.GetFunctionPointerForDelegate(rejectDelete) });
+            callbacks.Add(new() { Type = -1 });
+            CloudFilesNative.Check(CloudFilesNative.CfConnectSyncRoot(root, callbacks.ToArray(), 0, 2, out connection));
         }
         catch { Dispose(); throw; }
     }
 
-    public static CloudFilesFixture Create()
+    public static CloudFilesFixture Create(bool denyDeletes = false)
     {
         // No path argument is exposed: a fixture can never adopt a real sync root.
         var root = Path.Combine(Path.GetTempPath(), "tcloud-cfapi-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        try { return new(root); }
+        try { return new(root, denyDeletes); }
         catch { if (Directory.Exists(root)) Directory.Delete(root); throw; }
     }
 
-    public void Add(string name, ReadOnlySpan<byte> plaintext)
+    public void Add(string name, ReadOnlySpan<byte> plaintext, string relativeDirectory = "")
     {
         ObjectDisposedException.ThrowIf(disposed != 0, this);
         if (!VolumeInspector.IsExpectedVolumePresent(root, volume)) throw new IOException("保存先が接続されていません。");
+        var destination = relativeDirectory.Length == 0 ? root : LocalPaths.ResolveUnderRoot(root, relativeDirectory);
+        Directory.CreateDirectory(destination);
         var safeName = LocalPaths.EncodeName(name);
         var identity = Guid.NewGuid().ToString("N");
         data[identity] = plaintext.ToArray();
@@ -86,12 +95,32 @@ public sealed class CloudFilesFixture : IDisposable
                         ChangeTime = timestamp, Attributes = (uint)FileAttributes.Normal }, FileSize = plaintext.Length
                 }
             }];
-            CloudFilesNative.Check(CloudFilesNative.CfCreatePlaceholders(root, placeholders, 1, 1, out var processed));
+            CloudFilesNative.Check(CloudFilesNative.CfCreatePlaceholders(destination, placeholders, 1, 1, out var processed));
             if (processed != 1) throw new IOException("プレースホルダーを作成できませんでした。");
             CloudFilesNative.Check(placeholders[0].Result);
         }
         catch { if (data.TryRemove(identity, out var bytes)) CryptographicOperations.ZeroMemory(bytes); throw; }
         finally { Marshal.FreeHGlobal(identityMemory); }
+    }
+
+    public void ConvertExisting(string relativePath)
+    {
+        ObjectDisposedException.ThrowIf(disposed != 0, this);
+        if (!VolumeInspector.IsExpectedVolumePresent(root, volume)) throw new IOException("保存先が接続されていません。");
+        var path = LocalPaths.ResolveUnderRoot(root, relativePath);
+        if (new FileInfo(path).LinkTarget is not null) throw new IOException("リンクは検証対象にできません。");
+        var identity = Guid.NewGuid().ToString("N");
+        var bytes = File.ReadAllBytes(path);
+        data[identity] = bytes;
+        try
+        {
+            using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete);
+            var identityBytes = Encoding.UTF8.GetBytes(identity);
+            // Preserve the complete local body; never mark a new edit uploaded or dehydrate it.
+            CloudFilesNative.Check(CloudFilesNative.CfConvertToPlaceholder(handle, identityBytes, (uint)identityBytes.Length,
+                8 /* ALWAYS_FULL */, out _, 0));
+        }
+        catch { data.TryRemove(identity, out _); CryptographicOperations.ZeroMemory(bytes); throw; }
     }
 
     private void Fetch(in CloudFilesNative.CallbackInfo info, in CloudFilesNative.CallbackParameters parameters)
@@ -136,6 +165,26 @@ public sealed class CloudFilesFixture : IDisposable
         }
     }
 
+    private void RejectDelete(in CloudFilesNative.CallbackInfo info, in CloudFilesNative.CallbackParameters parameters)
+    {
+        var operation = new CloudFilesNative.OperationInfo
+        {
+            StructSize = (uint)Marshal.SizeOf<CloudFilesNative.OperationInfo>(), Type = 6, // ACK_DELETE
+            ConnectionKey = info.ConnectionKey, TransferKey = info.TransferKey, RequestKey = info.RequestKey
+        };
+        var acknowledgement = new CloudFilesNative.TransferParameters
+        {
+            ParamSize = 16, // Header and ACK_DELETE flags/status, without the transfer-data fields.
+            CompletionStatus = unchecked((int)0xC000CF01) // STATUS_CLOUD_FILE_UNSUCCESSFUL
+        };
+        try
+        {
+            CloudFilesNative.Check(CloudFilesNative.CfExecute(operation, acknowledgement));
+            Interlocked.Increment(ref rejectedDeleteCount);
+        }
+        catch (Exception error) { Errors.Enqueue(error); }
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0) return;
@@ -151,5 +200,6 @@ public sealed class CloudFilesFixture : IDisposable
             throw new IOException("検証用フォルダの範囲を確認できません。");
         if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         GC.KeepAlive(fetch);
+        GC.KeepAlive(rejectDelete);
     }
 }
