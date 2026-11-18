@@ -61,6 +61,18 @@ class CalendarDomainTest {
         val source = event("2026-10-29", rule = RepeatRule("MONTHLY", monthly = "LAST"))
         assertEquals(source, CalendarEvent.parse(source.json()))
     }
+    @Test fun everyStandardReminderIsScheduledAndIndividualSettingsStayIndependent() {
+        val first = event("2026-10-30"); val second = event("2026-10-31")
+        val settings = CalendarSettings(reminders = listOf(10, 60, 1440), eventReminders = mapOf(second.id to listOf(30, 120)))
+        val now = LocalDateTime.parse("2026-10-29T12:00").atZone(JAPAN).toInstant()
+        val entries = reminderEntries(listOf(first, second), settings, now, now.epochSecond + 30 * 86400)
+        assertEquals(3, entries.count { it.eventId == first.id }); assertEquals(2, entries.count { it.eventId == second.id })
+        for ((event, offsets) in listOf(first to listOf(10, 60, 1440), second to listOf(30, 120))) {
+            assertEquals(offsets.map { event.start.atZone(JAPAN).toEpochSecond() - it * 60L }.sorted(), entries.filter { it.eventId == event.id }.map { it.at })
+        }
+        val changed = settings.copy(reminders = listOf(60, 1440))
+        assertEquals(listOf(30, 120), changed.minutesFor(second.id)); assertEquals(listOf(60, 1440), changed.minutesFor(first.id))
+    }
     @Test fun singleOccurrenceTrashRestoresItsPreviousEditAndPermanentDeleteRemovesContents() {
         val source = event("2026-10-01", rule = RepeatRule("MONTHLY"))
         val edited = source.copy(title = "予定を変更", repeat = RepeatRule())

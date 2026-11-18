@@ -27,6 +27,12 @@ val calendarPalettes = listOf(
     CalendarPalette("rose", "ローズ", Color(0xFFA34569), Color(0xFFF4B2C8), Color(0xFFFAE4ED), Color(0xFF513042), Color(0xFFFFF8FB), Color(0xFF2A1C23)),
     CalendarPalette("peach", "ピーチ", Color(0xFF975B29), Color(0xFFEFC09A), Color(0xFFF9EADB), Color(0xFF4B392B), Color(0xFFFFFBF6), Color(0xFF281F18)),
     CalendarPalette("gray", "グレー", Color(0xFF536977), Color(0xFFBDCED8), Color(0xFFE7EEF2), Color(0xFF33444E), Color(0xFFF9FBFC), Color(0xFF1B242A)),
+    CalendarPalette("sky", "スカイ", Color(0xFF176A80), Color(0xFF90D5E6), Color(0xFFE0F4F9), Color(0xFF254650), Color(0xFFF5FCFE), Color(0xFF13242A)),
+    CalendarPalette("turquoise", "ターコイズ", Color(0xFF14766F), Color(0xFF8BD8CF), Color(0xFFDEF5EF), Color(0xFF21453F), Color(0xFFF4FCFA), Color(0xFF12251F)),
+    CalendarPalette("navy", "ネイビー", Color(0xFF42599D), Color(0xFFBBC7FF), Color(0xFFE6ECFF), Color(0xFF303A59), Color(0xFFF8FAFF), Color(0xFF191F30)),
+    CalendarPalette("plum", "プラム", Color(0xFF88447C), Color(0xFFECB9E3), Color(0xFFF6E5F3), Color(0xFF4D3049), Color(0xFFFFF8FE), Color(0xFF281C27)),
+    CalendarPalette("amber", "アンバー", Color(0xFF866300), Color(0xFFE4C768), Color(0xFFFFF0C8), Color(0xFF493D22), Color(0xFFFFFCF3), Color(0xFF282214)),
+    CalendarPalette("coral", "コーラル", Color(0xFFA1473C), Color(0xFFFFB5AA), Color(0xFFFFE8E2), Color(0xFF52332D), Color(0xFFFFF9F7), Color(0xFF2D1E1B)),
 )
 
 fun calendarColorScheme(theme: String, dark: Boolean): ColorScheme {

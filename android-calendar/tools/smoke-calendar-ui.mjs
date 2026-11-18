@@ -32,15 +32,23 @@ const moveDate=(d,amount)=>{const dt=new Date(Date.UTC(d.y,d.m-1+amount,1));retu
 function assertMonth(d){assert.equal(heading(),`${d.y}年${d.m}月`);assert.deepEqual(selectedDate(),d);}
 function screenshot(name){writeFileSync(resolve(output,`${name}.png`),execFileSync(adb,['-s',serial,'exec-out','screencap','-p'],{timeout:30000}));}
 const checkedLabel=s=>{const p=bounds(text(s));return nodes.some(n=>{if(n.selected!=='true'&&n.checked!=='true')return false;const b=bounds(n);return b.left<=p.x&&p.x<=b.right&&b.top<=p.y&&p.y<=b.bottom;});};
+const size=run('shell','wm','size').match(/(\d+)x(\d+)/),w=+size[1],h=+size[2];
+let scrollAttempt=0;
+async function reveal(label,locate=text){for(let i=0;i<12;i++){const n=locate(label);if(n){const b=bounds(n);if(b.y>h*.12&&b.y<h*.88)return n;}run('shell','input','swipe',String(Math.round(w*.5)),String(Math.round(h*.78)),String(Math.round(w*.5)),String(Math.round(h*.3)),'450');await dump(`scroll-${scrollAttempt++}`);}throw new Error(`Could not reveal ${label}`);}
+async function openSettings(){tap(desc('メニュー'));await dump('settings-menu');tap(text('設定'));await dump('settings');}
 
-run('logcat','-b','crash','-c');run('shell','am','start','-W','-n',`${pkg}/.MainActivity`);await dump('initial');
+run('logcat','-b','crash','-c');run('shell','am','force-stop',pkg);run('shell','am','start','-W','-n',`${pkg}/.MainActivity`);await dump('initial');
 if(text('ログインせずこの端末で使う')){tap(text('ログインせずこの端末で使う'));await dump('local-choice');}
 tap(desc('メニュー'));await dump('local-menu');
 assert(text('利用方法を選び直す'),'This fixture may only edit device-local data');
 tap(text('月間カレンダー'));await dump('calendar');
 const initial=selectedDate();assertMonth(initial);
+assert.equal(nodes.filter(n=>n['content-desc']==='予定を追加').length,1,'Keep only the floating add button');
+assert(!text('予定を追加'),'The extra text add button must be removed');
+if(!process.argv.includes('--settings-only')){
 tap(desc('次へ'));await dump('next-month');const target=moveDate(initial,1);assertMonth(target);
-tap(text('予定を追加'));await dump('editor');
+tap(desc('予定を追加'));const editorXml=await dump('editor');
+assert(editorXml.includes('例：9:00-10:00 友達とお出かけ'),'Show the requested time/title example');
 const editorDate=new RegExp(`^${target.y}年${target.m}月${target.d}日`);
 assert.equal(nodes.filter(n=>editorDate.test(n.text)).length,2,'Both dates must use the visible selected day');
 assert(!checkedLabel('追跡する（任意）'),'Tracking must start off');
@@ -50,7 +58,23 @@ run('shell','input','keyevent','KEYCODE_BACK');await dump('title-entered');tap(t
 assert(nodes.some(n=>n.text==='CalendarUiSmoke'),'An untracked title/date-only appointment must save');screenshot('calendar');
 console.log('PASS selected date, title validation and untracked appointment entry');
 
-const size=run('shell','wm','size').match(/(\d+)x(\d+)/),w=+size[1],h=+size[2],y=Math.round(h*.38);
+tap(desc('予定を追加'));await dump('quick-editor');tap(nodes.find(n=>n.class==='android.widget.EditText'));
+run('shell','input','text','9:00-10:30%sQuickTimeFixture');run('shell','input','keyevent','KEYCODE_BACK');await dump('quick-preview');
+assert(text('09:00')&&text('10:30'),'One-line input must update the time controls');
+tap(text('保存'));await dump('quick-saved');assert(text('QuickTimeFixture'),'Save the title without its time prefix');
+assert(!text('9:00-10:30 QuickTimeFixture'));screenshot('quick-saved');
+tap(desc('予定を追加'));await dump('invalid-editor');tap(nodes.find(n=>n.class==='android.widget.EditText'));
+run('shell','input','text','25:00-26:00%sInvalidTimeFixture');run('shell','input','keyevent','KEYCODE_BACK');await dump('invalid-time-input');tap(text('保存'));await dump('invalid-time-error');
+assert(text('時刻は0:00〜23:59で入力してください。'),'Invalid one-line times must block saving');
+run('shell','input','keyevent','KEYCODE_BACK');await dump('invalid-keyboard-closed');if(!text('破棄して戻る')){tap(desc('戻る'));await dump('invalid-discard');}tap(text('破棄して戻る'));await dump('invalid-closed');
+tap(desc('予定を追加'));await dump('overnight-editor');tap(nodes.find(n=>n.class==='android.widget.EditText'));
+run('shell','input','text','23:00-1:00%sOvernightFixture');run('shell','input','keyevent','KEYCODE_BACK');await dump('overnight-preview');
+assert(nodes.some(n=>n.text.includes('翌日01:00')),'Make the overnight interpretation visible');
+tap(text('保存'));await dump('overnight-saved');assert(text('OvernightFixture'));tap(text('OvernightFixture'));await dump('overnight-detail');
+assert(nodes.some(n=>/23:00.*01:00/.test(n.text)),'Persist both overnight times');run('shell','input','keyevent','KEYCODE_BACK');await dump('after-quick-entry');
+console.log('PASS one-line time input, requested example, invalid ranges and overnight entry');
+
+const y=Math.round(h*.38);
 run('shell','input','swipe',String(Math.round(w*.78)),String(y),String(Math.round(w*.22)),String(y),'450');await dump('swipe-next');assertMonth(moveDate(target,1));
 run('shell','input','swipe',String(Math.round(w*.22)),String(y),String(Math.round(w*.78)),String(y),'450');await dump('swipe-back');assertMonth(target);
 assert(!text('利用方法を選び直す'),'A rightward month swipe must not open the drawer');
@@ -62,16 +86,29 @@ run('shell','input','swipe',String(Math.round(w*.78)),String(y),String(Math.roun
 const interrupted=selectedDate();assertMonth(interrupted);
 tap(desc('次へ'));await dump('after-interruption');assertMonth(moveDate(interrupted,1));
 console.log('PASS left/right paging, incomplete swipe and repeated navigation');
+}
 
-tap(desc('メニュー'));await dump('settings-menu');tap(text('設定'));await dump('settings');
-for(const label of ['ブルー','ミント','ラベンダー','ローズ','ピーチ','グレー'])assert(text(label),`Palette ${label} must be available`);
+const beforeSettings=selectedDate();await openSettings();tap(desc('カレンダーへ戻る'));await dump('toolbar-back');assertMonth(beforeSettings);
+await openSettings();run('shell','input','keyevent','KEYCODE_BACK');await dump('android-back');assertMonth(beforeSettings);await openSettings();
+for(const label of ['ブルー','ミント','ラベンダー','ローズ','ピーチ','グレー','スカイ','ターコイズ','ネイビー','プラム','アンバー','コーラル'])assert(text(label),`Palette ${label} must be available`);
 tap(text('ローズ'));await dump('rose');tap(text('ダーク'));await dump('dark');
 assert(checkedLabel('ローズ'));assert(checkedLabel('ダーク'));screenshot('rose-dark');
 run('shell','am','force-stop',pkg);run('shell','am','start','-W','-n',`${pkg}/.MainActivity`);await dump('reopened');
 tap(desc('メニュー'));await dump('reopened-menu');tap(text('設定'));await dump('restored-settings');
 assert(checkedLabel('ローズ'));assert(checkedLabel('ダーク'));
 tap(text('ブルー'));await dump('blue');tap(text('ライト'));await dump('light');screenshot('blue-light');
-tap(desc('メニュー'));await dump('return-menu');tap(text('月間カレンダー'));await dump('return-calendar');
+await reveal('標準の通知');
+if(nodes.some(n=>n.text.startsWith('設定した通知：'))){tap(await reveal('通知なしにする'));await dump('reminders-cleared');}
+tap(await reveal('1日前'));await dump('one-reminder');tap(await reveal('1時間前'));await dump('two-reminders');
+assert(desc('1日前の通知を削除')&&desc('1時間前の通知を削除'));screenshot('multiple-reminders');
+run('shell','am','force-stop',pkg);run('shell','am','start','-W','-n',`${pkg}/.MainActivity`);await dump('reminders-restart');await openSettings();
+await reveal('1日前の通知を削除',desc);await reveal('1時間前の通知を削除',desc);
+assert(desc('1日前の通知を削除')&&desc('1時間前の通知を削除'),'Both standard reminders must survive restart');
+tap(desc('1時間前の通知を削除'));await dump('reminder-removed');assert(desc('1日前の通知を削除'));assert(!desc('1時間前の通知を削除'));
+tap(await reveal('通知なしにする'));await dump('no-reminders');
+tap(await reveal('ゴミ箱（30日）'));await dump('settings-child');run('shell','input','keyevent','KEYCODE_BACK');await dump('settings-child-back');assert(desc('カレンダーへ戻る'),'Back from a settings child must return to settings first');
+tap(desc('カレンダーへ戻る'));await dump('settings-root-back');assert(heading());
+console.log('PASS settings back hierarchy, twelve palettes and persistent multiple reminders');
 tap(desc('予定を追加'));await dump('timed-editor');tap(text('終日'));await dump('times');
 assert(text('09:00')&&text('10:00'),'Timed entry must show an explicit one-hour end');screenshot('timed-editor');
 tap(desc('戻る'));await dump('discard');tap(text('破棄して戻る'));await dump('finished');
