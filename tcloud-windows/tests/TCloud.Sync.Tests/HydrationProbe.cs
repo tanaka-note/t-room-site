@@ -33,6 +33,7 @@ internal static class HydrationProbe
     public static async Task RunClientAsync(string path)
     {
         var stage = "validate";
+        ReadPlan? validatedPlan = null;
         try
         {
             var fullPath = Path.GetFullPath(path);
@@ -43,6 +44,7 @@ internal static class HydrationProbe
             var plan = JsonSerializer.Deserialize<ReadPlan>(input) ?? throw new InvalidDataException("Missing read plan.");
             if (plan.Length is < 2048 or > 16 * 1024 * 1024 || plan.Hash.Length != 64 || plan.Ranges.Length != 4)
                 throw new InvalidDataException("Invalid read plan.");
+            validatedPlan = plan;
             stage = "open-async-random";
             await using (var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 4096,
                 FileOptions.Asynchronous | FileOptions.RandomAccess))
@@ -68,7 +70,20 @@ internal static class HydrationProbe
         catch (Exception error)
         {
             // Synthetic fixture diagnostics only; never echo file contents or the input hashes.
-            Console.WriteLine(JsonSerializer.Serialize(new HydrationResult(false, stage, error.HResult)));
+            var recovery = "not-attempted";
+            if (validatedPlan is not null)
+            {
+                try
+                {
+                    using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    var head = new byte[1000];
+                    var count = RandomAccess.Read(handle, head, 0);
+                    recovery = count == head.Length && Convert.ToHexString(SHA256.HashData(head)) == validatedPlan.Ranges[^1].Hash
+                        ? "sync-head-verified" : "sync-head-differs";
+                }
+                catch (Exception retryError) { recovery = $"sync-head-0x{retryError.HResult:X8}"; }
+            }
+            Console.WriteLine(JsonSerializer.Serialize(new HydrationResult(false, stage + "; " + recovery, error.HResult)));
         }
     }
 
