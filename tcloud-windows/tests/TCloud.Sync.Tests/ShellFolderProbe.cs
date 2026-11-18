@@ -139,7 +139,7 @@ public static class ShellFolderProbe
             || new FileInfo(fullPath).LinkTarget is not null || Path.GetFileName(fullPath) is not ("probe.txt" or "new.txt")
             || File.ReadAllText(fullPath) != "synthetic")
             throw new ArgumentException("The Shell client requires an owned synthetic file.");
-        Console.WriteLine(JsonSerializer.Serialize(ShellProbe.Read(fullPath)));
+        Console.WriteLine(JsonSerializer.Serialize(ShellProbe.Read(fullPath, new Guid(ClassId))));
     }
 
     private static string NativeServerPath()

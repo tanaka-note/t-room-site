@@ -7,13 +7,13 @@ internal sealed record ShellCapabilities(bool CanDelete, bool HasDeleteCommand, 
 /// <summary>Reads the real Shell's capabilities and classic menu without displaying or invoking it.</summary>
 internal static class ShellProbe
 {
-    public static ShellCapabilities Read(string path)
+    public static ShellCapabilities Read(string path, Guid? requiredClass = null)
     {
         ShellCapabilities? result = null;
         Exception? failure = null;
         var thread = new Thread(() =>
         {
-            try { result = ReadCurrentApartment(path); }
+            try { result = ReadCurrentApartment(path, requiredClass); }
             catch (Exception error) { failure = error; }
         });
         thread.SetApartmentState(ApartmentState.STA);
@@ -23,8 +23,15 @@ internal static class ShellProbe
         return result!;
     }
 
-    internal static ShellCapabilities ReadCurrentApartment(string path)
+    internal static ShellCapabilities ReadCurrentApartment(string path, Guid? requiredClass = null)
     {
+        if (requiredClass is { } classId)
+        {
+            // A native class must actually activate; a fallback filesystem menu is not proof.
+            var unknown = new Guid("00000000-0000-0000-c000-000000000046");
+            Marshal.ThrowExceptionForHR(CoCreateInstance(classId, 0, 1, unknown, out var instance));
+            Marshal.Release(instance);
+        }
         var itemId = typeof(IShellItem).GUID;
         Marshal.ThrowExceptionForHR(SHCreateItemFromParsingName(path, 0, itemId, out var item));
         nint menuPointer = 0;
@@ -79,6 +86,8 @@ internal static class ShellProbe
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
     private static extern int SHCreateItemFromParsingName(string path, nint context, in Guid interfaceId, out IShellItem item);
+    [DllImport("ole32.dll", PreserveSig = true)]
+    private static extern int CoCreateInstance(in Guid classId, nint outer, uint context, in Guid interfaceId, out nint instance);
     [DllImport("user32.dll", SetLastError = true)] private static extern nint CreatePopupMenu();
     [DllImport("user32.dll")] private static extern int GetMenuItemCount(nint menu);
     [DllImport("user32.dll")] private static extern uint GetMenuItemID(nint menu, int index);

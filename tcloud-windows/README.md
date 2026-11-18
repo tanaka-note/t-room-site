@@ -70,6 +70,8 @@ dotnet run --project tcloud-windows/src/TCloud.Sync.Host -- inspect 'D:\T-Cloud'
 
 差分verifyは`tcloud-windows`を選び、CIは専用Windowsジョブで同じ検証を実行する。このクライアントの変更だけではWorkerを本番公開しない。
 
+Windows Server 2025のGitHub Windows runnerでは、部分取得済み領域の非同期読み直しが`0x8007017B`で断続的に失敗している。取得コールバックの転送は成功しており、別ハンドルの同期読み取りは成功、非同期読み取りは同じエラーになる例を確認した。Windows 11実機では再現しておらず、原因は未確定。保存データの検証を必須にする試行では解消しなかったため採用していない。試験の省略やエラーの成功扱いは行わない。native試験が失敗した場合も独立したShell試験を実行し、最終結果は失敗として残す。
+
 ## 残る工程
 
 ### 本人によるパスキー互換性確認
