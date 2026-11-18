@@ -30,6 +30,19 @@ export function reviewedSchemaMatches(service, baseline, actual) {
     (REVIEWED[service]?.[0] === baseline && REVIEWED[service][1] === actual));
 }
 export async function assertSchema(service, rows) {
+  // Optional Windows authorization schema; both the old production baseline
+  // and this exact additive extension are supported during Worker-first rollout.
+  // These are authorization records, excluded from automatic data restoration.
+  const windows = service==='security' ? row=>row.tbl_name==='security_windows_authority_versions'||row.name.startsWith('windows_')
+    : service==='cloud' ? row=>row.name.startsWith('cloud_windows_') : ()=>false;
+  const windowsRows=rows.filter(windows);
+  if(windowsRows.length) {
+    const expected=service==='security'?'953eaa6945a4f7dd167e467de9d500ff32c5ac304dce6d829683ccfcad088a8d'
+      :'dbb56d5e8aa53e704c71869088091fe5fefe5f7c923dee0dd23e107371956bef';
+    const shape=windowsRows.map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
+    if(await digest(new TextEncoder().encode(JSON.stringify(shape)))!==expected)throw new Error('SchemaReviewRequired');
+    rows=rows.filter(row=>!windows(row));
+  }
   const extension = service==='billing' ? name => /^billing_(encryption|candidate|freeze)_/.test(name)
     : service==='security' ? name => name === 'security_billing_vaults' : () => false;
   const extra = rows.filter(row=>extension(row.name));

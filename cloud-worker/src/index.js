@@ -5,6 +5,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit, withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
 import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAuthMethod, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
+import { handleWindowsSync, cleanupWindowsSync } from "./windows-sync.js";
 
 const BASE_PATH = "/cloud";
 const APP_BUILD_ID = "cloud-883da984e370";
@@ -156,6 +157,31 @@ export default {
             error: "T-Cloud Playerは廃止しました。Web版 https://tanaka-note.com/cloud/ をご利用ください。"
           }, 410));
         }
+        if (path.startsWith('/api/windows-sync/')) {
+          requireSessionSecret(env.SESSION_SECRET, HttpError);
+          return secureResponse(await handleWindowsSync(request, env, url, path, {
+            readWebSession: value => readSession(value, env), assertWebContext: assertSessionContext,
+            adminPublicKey: async () => {
+              const row = await env.DB.prepare('SELECT public_key_jwk FROM cloud_crypto_config WHERE id=1').first();
+              return row ? JSON.parse(row.public_key_jwk) : null;
+            },
+            audit: (eventType, binding, deviceId) => recordSecurityAudit(env, request, {
+              service: 'cloud', eventType, outcome: 'success', identityId: binding.identityId,
+              credentialId: binding.credentialId, serviceLinkId: binding.serviceLinkId,
+              serviceAccountId: binding.serviceAccountId, role: binding.role, authMethod: 'passkey',
+              sessionId: 'windows-' + deviceId, targetType: 'windows_device', targetId: deviceId
+            }),
+            dispatch: async (value, dataPath, binding, deviceId) => {
+              const account = binding.role === 'member' ? PASSKEY_MEMBER_ACCOUNT : ACCOUNTS.find(item => item.role === binding.role);
+              if (!account) throw new HttpError(403, '利用できるアカウントを確認できません。');
+              const nativeSession = { ...account, ...binding, authMethod: 'windows-device',
+                passkeySessionEpoch: binding.sessionEpoch, version: binding.sessionVersion,
+                sessionId: 'windows-' + deviceId, canDelete: false, canTrashUnlockedFiles: false,
+                canReviewDeletion: false, canRequestDelete: false, exp: Math.floor(Date.now()/1000)+900 };
+              return handleApi(value, env, url, dataPath, context, nativeSession);
+            }
+          }));
+        }
         const response = await withPasswordLoginAudit(env, request, "cloud", () => handleApi(request, env, url, path, context));
         return secureResponse(await refreshAuthenticatedSession(request, response, env, url, path));
       }
@@ -169,13 +195,14 @@ export default {
   },
 
   async scheduled(_controller, env) {
+    if (String(env.WINDOWS_SYNC_ENABLED || 'false') === 'true') await cleanupWindowsSync(env);
     const retention = await runTrashRetention(env);
     if (retention?.failed) return;
     await abortStaleUploads(env);
   }
 };
 
-async function handleApi(request, env, url, path, context) {
+async function handleApi(request, env, url, path, context, windowsSession = null) {
   requireSessionSecret(env.SESSION_SECRET, HttpError);
   if (path === "/api/password-login-audit" && request.method === "POST") return handlePasswordLoginClientAudit(env, request, "cloud");
   if (path === "/api/trash-transition-status" && request.method === "GET") {
@@ -265,7 +292,7 @@ async function handleApi(request, env, url, path, context) {
     return recordPublicShareEvent(publicShareEventsMatch[1], request, env);
   }
 
-  const session = await readSession(request, env);
+  const session = windowsSession || await readSession(request, env);
   assertSessionContext(request, session);
   if (!session) throw new HttpError(401, "ログインが必要です。");
   if (request.method !== "GET" && !validMutationRequest(request, url)) throw new HttpError(403, "不正なリクエストです。");

@@ -75,6 +75,7 @@ if (args.Contains("--native"))
     tests.Add(("persisted Windows RSA keys decrypt but cannot export private material or sign", NativePrivateKey));
     tests.Add(("DPAPI session protection rejects modified cookies and another session binding", NativeAccountProtection));
     tests.Add(("persistent device signatures interoperate without exporting private keys or reusing cookie protection", NativeDeviceKey));
+    tests.Add(("PC-protected registration resumes and renews without a Web cookie or another passkey", DeviceClientTests.PersistentDevice));
     tests.Add(("browser PRF envelopes unlock existing member and administrator keys in Windows", NativePasskeyEnvelope));
 }
 var failed = 0;

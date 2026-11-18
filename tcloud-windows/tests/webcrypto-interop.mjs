@@ -2,6 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import { webcrypto } from 'node:crypto';
 import vm from 'node:vm';
+import { deviceChallengeMessage } from '../../cloud-worker/src/windows-sync.js';
 let input = '';
 for await (const chunk of process.stdin) { input += chunk; if (input.length > 2 * 1024 * 1024) throw new Error('Fixture too large'); }
 const request = JSON.parse(input);
@@ -15,6 +16,8 @@ if (request.mode === 'device-signature') {
   const message = ['T-ROOM Cloud Storage Windows device authorization v1', 'https://tanaka-note.com/cloud/',
     c.DeviceId, c.ChallengeId, c.Nonce, c.ScopeHash, String(c.ExpiresAt)].join('\n');
   const valid = await webcrypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, Buffer.from(request.signature, 'base64'), new TextEncoder().encode(message));
+  const serverMessage = deviceChallengeMessage({deviceId:c.DeviceId,challengeId:c.ChallengeId,nonce:c.Nonce,scopeHash:c.ScopeHash,expiresAt:c.ExpiresAt});
+  if (Buffer.compare(Buffer.from(serverMessage),Buffer.from(message))!==0) throw new Error('Server device proof protocol mismatch');
   const wrongPurpose = await webcrypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, Buffer.from(request.signature, 'base64'), new TextEncoder().encode(message.replace('Windows device authorization', 'file metadata')));
   process.stdout.write(JSON.stringify({ valid, wrongPurpose }));
 } else if (request.mode === 'file-package') {

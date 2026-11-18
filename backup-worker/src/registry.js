@@ -270,6 +270,9 @@ export const SERVICES = {
       }
     ],
     "knownTables": [
+      "cloud_windows_devices",
+      "cloud_windows_challenges",
+      "cloud_windows_access",
       "cloud_folders",
       "cloud_files",
       "cloud_audit_logs",
@@ -470,6 +473,7 @@ export const SERVICES = {
       }
     ],
     "knownTables": [
+      "security_windows_authority_versions",
       "security_identities",
       "security_invitations",
       "security_credentials",

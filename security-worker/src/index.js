@@ -13,6 +13,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { sessionCookieValue, sessionPolicyForAuthMethod } from "../../assets/session-policy.mjs";
 import { rollingSessionInput, foregroundSessionActivity, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
 import { trackedPasskeySession } from "./rolling-sessions.js";
+import { cloudWindowsDeviceContext } from "./windows-device-context.js";
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -157,6 +158,10 @@ export default class SecurityWorker extends WorkerEntrypoint {
 
   async cloudPasskeySession(input) {
     return cloudPasskeySession(this.env, input);
+  }
+
+  async cloudWindowsDeviceContext(input) {
+    return cloudWindowsDeviceContext(this.env, input, validatePasskeySession);
   }
 
   async passkeyRollingSession(input) {
