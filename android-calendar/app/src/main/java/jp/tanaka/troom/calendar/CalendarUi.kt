@@ -103,6 +103,8 @@ private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
     var prefillTrack by remember { mutableStateOf<String?>(null) }; var detail by remember { mutableStateOf<Occurrence?>(null) }
     var logoutDialog by remember { mutableStateOf(false) }; var seriesChoice by remember { mutableStateOf<Occurrence?>(null) }
     var reviewConflict by remember { mutableStateOf(true) }
+    var settingsView by remember { mutableStateOf("settings") }
+    fun backFromSettings() { if (settingsView != "settings") settingsView = "settings" else { initialPageApplied = true; page = CalendarPage.MONTH } }
     fun addEvent() { editing = null; editingOccurrence = null; prefillTrack = trackDetail?.id; editMode = "ALL"; editorOpen = true }
     val savedScreens = rememberSaveableStateHolder()
     val events = model.events()
@@ -113,10 +115,11 @@ private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
     LaunchedEffect(Unit) { while (true) { delay(30000); if (CalendarActivityWindow.foreground) model.sync(false) } }
     BackHandler(drawer.isOpen) { scope.launch { drawer.close() } }
     BackHandler(trackDetail != null && !drawer.isOpen) { trackDetail = null }
+    BackHandler(page == CalendarPage.SETTINGS && !drawer.isOpen && !logoutDialog) { backFromSettings() }
     ModalNavigationDrawer(drawerState = drawer, gesturesEnabled = !editorOpen && (page != CalendarPage.MONTH || drawer.isOpen), drawerContent = {
         ModalDrawerSheet(Modifier.width(292.dp)) {
             Spacer(Modifier.height(12.dp)); Text(state.account?.name.orEmpty(), Modifier.padding(horizontal = 20.dp, vertical = 12.dp), style = MaterialTheme.typography.titleMedium)
-            CalendarPage.entries.forEach { item -> NavigationDrawerItem(label = { Text(item.label) }, selected = page == item, onClick = { initialPageApplied = true; page = item; trackFilter = null; trackDetail = null; query = ""; scope.launch { drawer.close() } }, modifier = Modifier.padding(horizontal = 8.dp, vertical = 1.dp)) }
+            CalendarPage.entries.forEach { item -> NavigationDrawerItem(label = { Text(item.label) }, selected = page == item, onClick = { initialPageApplied = true; page = item; settingsView = "settings"; trackFilter = null; trackDetail = null; query = ""; scope.launch { drawer.close() } }, modifier = Modifier.padding(horizontal = 8.dp, vertical = 1.dp)) }
             HorizontalDivider(Modifier.padding(vertical = 12.dp))
             TextButton(onClick = { scope.launch { drawer.close() }; logoutDialog = true }, modifier = Modifier.padding(horizontal = 12.dp)) { Text(if (state.account?.localOnly == true) "利用方法を選び直す" else "アカウントを選び直す") }
             if (state.account?.localOnly != true) TextButton(onClick = { model.sync(); scope.launch { drawer.close() } }, modifier = Modifier.padding(horizontal = 12.dp)) { Text("今すぐ同期") }
@@ -127,8 +130,10 @@ private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
         }) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
                 Row(Modifier.fillMaxWidth().height(48.dp).background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = .55f)), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { scope.launch { drawer.open() } }, modifier = Modifier.size(44.dp)) { Icon(Icons.Default.Menu, "メニュー") }
+                    if (page == CalendarPage.SETTINGS) IconButton(onClick = { backFromSettings() }, modifier = Modifier.size(44.dp)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, if (settingsView == "settings") "カレンダーへ戻る" else "設定へ戻る") }
+                    else IconButton(onClick = { scope.launch { drawer.open() } }, modifier = Modifier.size(44.dp)) { Icon(Icons.Default.Menu, "メニュー") }
                     Text(if (page in listOf(CalendarPage.MONTH, CalendarPage.WEEK, CalendarPage.AGENDA)) "${month.year}年${month.monthValue}月" else page.label, Modifier.weight(1f), maxLines = 1, style = MaterialTheme.typography.titleMedium)
+                    if (page == CalendarPage.SETTINGS) IconButton(onClick = { scope.launch { drawer.open() } }, modifier = Modifier.size(44.dp)) { Icon(Icons.Default.Menu, "メニュー") }
                     if (page in listOf(CalendarPage.MONTH, CalendarPage.WEEK, CalendarPage.AGENDA)) {
                         IconButton(onClick = { if (page == CalendarPage.WEEK) selectDay(selected.minusWeeks(1)) else showMonth(month.minusMonths(1)) }, enabled = month > YearMonth.of(1, 1), modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ChevronLeft, "前へ") }
                         IconButton(onClick = { if (page == CalendarPage.WEEK) selectDay(selected.plusWeeks(1)) else showMonth(month.plusMonths(1)) }, enabled = month < YearMonth.of(9999, 12), modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ChevronRight, "次へ") }
@@ -145,11 +150,11 @@ private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
                 Box(Modifier.weight(1f)) {
                     savedScreens.SaveableStateProvider(if (page == CalendarPage.TRACKS && trackDetail != null) "TRACK-${trackDetail!!.id}" else page.name) {
                     when (page) {
-                        CalendarPage.MONTH -> MonthScreen(month, selected, visible, model.holidays, onDay = { selectDay(it) }, onEvent = { detail = it }, onMonth = { showMonth(it) }, onAdd = { addEvent() }, matches = matches)
+                        CalendarPage.MONTH -> MonthScreen(month, selected, visible, model.holidays, onDay = { selectDay(it) }, onEvent = { detail = it }, onMonth = { showMonth(it) }, matches = matches)
                         CalendarPage.WEEK -> WeekScreen(selected, visible, model.holidays, onEvent = { detail = it }, matches = matches)
                         CalendarPage.AGENDA -> AgendaScreen(month, visible, model.holidays, onEvent = { detail = it }, matches = matches)
                         CalendarPage.TRACKS -> if (trackDetail == null) TrackingScreen(state, events, onSelect = { trackDetail = it }, onSettings = { model.settings(it) }, onNew = { name -> model.named("track", NamedItem(name = name)) }) else TrackingDetail(trackDetail!!, state, events, onBack = { trackDetail = null }, onAdd = { editing = null; editingOccurrence = null; prefillTrack = trackDetail?.id; editMode = "ALL"; editorOpen = true }, onCalendar = { trackFilter = trackDetail?.id; page = CalendarPage.MONTH; trackDetail = null }, onEvent = { detail = it }, onEdit = { model.named("track", it); trackDetail = it }, onMerge = { source, target -> scope.launch { model.merge("track", source, target); trackDetail = null; } })
-                        CalendarPage.SETTINGS -> SettingsScreen(state, model, activity, drawer.isOpen)
+                        CalendarPage.SETTINGS -> SettingsScreen(state, model, activity, settingsView) { settingsView = it }
                     }
                     }
                 }
@@ -209,7 +214,7 @@ private fun conflictPreview(kind: String, v: org.json.JSONObject): String = when
     else -> "${v.optString("name")}\n${if (v.optBoolean("archived")) "アーカイブ" else "使用中"}\n目安：${v.optionalLong("targetDays")?.let { "${it}日" } ?: "なし"}"
 }
 
-@Composable private fun MonthScreen(month: YearMonth, selected: LocalDate, events: List<CalendarEvent>, holidays: Map<LocalDate, String>, onDay: (LocalDate) -> Unit, onEvent: (Occurrence) -> Unit, onMonth: (YearMonth) -> Unit, onAdd: () -> Unit, matches: (Occurrence) -> Boolean) {
+@Composable private fun MonthScreen(month: YearMonth, selected: LocalDate, events: List<CalendarEvent>, holidays: Map<LocalDate, String>, onDay: (LocalDate) -> Unit, onEvent: (Occurrence) -> Unit, onMonth: (YearMonth) -> Unit, matches: (Occurrence) -> Boolean) {
     val pager = rememberPagerState(initialPage = calendarMonthPage(month), pageCount = { CALENDAR_MONTH_COUNT })
     val currentOnMonth by rememberUpdatedState(onMonth)
     var pendingPage by remember { mutableStateOf<Int?>(null) }
@@ -240,7 +245,6 @@ private fun conflictPreview(kind: String, v: org.json.JSONObject): String = when
         }
         Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 74.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) { Text(selected.format(dateFormat), style = MaterialTheme.typography.labelLarge); Text("選択中・${dayList.size}件", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary) }
-            TextButton(onClick = onAdd, contentPadding = PaddingValues(horizontal = 8.dp)) { Icon(Icons.Default.Add, null, Modifier.size(18.dp)); Text("予定を追加") }
         }
         if (dayList.isNotEmpty()) LazyColumn(Modifier.fillMaxWidth().heightIn(max = 124.dp), contentPadding = PaddingValues(end = 74.dp, bottom = 4.dp)) { items(dayList, key = { it.key }) { EventRow(it, onEvent) } }
     }
