@@ -61,6 +61,23 @@ DB単位のR2 CASリースを20分保持し、15分Workflow stepより長くす�
 
 隔離復元は0005形式の旧Household v2も扱う。元の列・行を照合してから信頼済み0006/0007 migrationを適用し、後から追加されるアカウントも含めて無効化する。本番のcapture schemaや復元APIは変更しない。
 
+## 日記の旧D1バックアップの暗号化
+
+`tools/diary-archive.mjs` は、第一管理者の信頼済み端末から使う Node.js 24 用の移行・復元ツール。旧`daily/`・`monthly/`、`v8/`、`v9/`のD1世代を扱う。v3・v6の元の列で隔離SQLiteに復元できる。v9は日次と月次の目録から分割ファイルを照合し、同じ参照集合を一つのアーカイブに保存する。参照されない分割ファイルは棚卸し結果に記録する。
+
+原本のgzip、キー、ETag、元のメタデータと検証用SHA-256を暗号化内容に保持する。記録済みのSHA-256があるファイルは照合する。古いファイルに記録がない場合は、一覧で固定したETagに条件付けて独立した2回の取得を行い、今回観測したSHA-256を照合する。結果は `recorded-sha256` と `repeated-source-read` で記録し、後者は作成時の状態を証明するものとは区別する。一つのアーカイブは原本合計8 MiB・1,000オブジェクトまで。
+
+アーカイブごとのAES-256-GCM鍵を、既存の第一管理者の復旧用公開鍵で包む。公開鍵の指紋には信頼済みの日記ディレクトリに記録された `recoveryFingerprint` を使う。第一管理者が既存の復旧経路で端末内に解除した `CryptoKey` で実際に開封してから、復元済みと扱う。平文、秘密鍵、PRFは端末内だけで扱う。詳細は[日記の中央復旧](../docs/security/diary-encryption.md#復旧失効)を参照。
+
+呼び出し元が、既存の認可を使ったR2互換の接続を渡す。`source.get(key, { onlyIf: { etagMatches } })` は独立したR2取得を行い、`body`、`size`、`etag`、`customMetadata` を返す。宛先は既存の非公開バックアップR2で、`put` の `etagDoesNotMatch: '*'` を条件付きで適用する。ツール側で接続や認証情報を生成しない。
+
+1. 日記の旧D1ファイルを一覧し、`{ key, etag, size }` を `planDiaryArchives(source, inventory)` に渡す。`batches` を処理し、`unreferencedParts` は別途参照を調べる。
+2. `sealDiaryArchive(source, batch, { recoveryPublicKey, expectedRecoveryFingerprint })` で暗号化する。原本の隔離復元が通ったバッチだけが暗号文を返す。返された `sourceReport` は管理者端末の信頼済み記録に保持する。
+3. `publishDiaryArchive(destination, archive)` で `sealed/diary-legacy/v1/` に新規保存する。R2から暗号文を読み戻してSHA-256を確認する。通信中断時は同じ `archive` を再送し、一致する既存オブジェクトから再開する。返された `receipt` と `sourceReport` の対応を管理者端末の信頼済み記録に保管する。
+4. `verifyStoredDiaryArchive(destination, receipt, { recoveryPrivateKey, expectedRecoveryFingerprint, sourceReport })` を実行する。実際に保存した暗号文を復号し、原本レポートとの一致、全世代の復元、行数・値、SQLiteの整合性と復元済みアカウントの無効化を確認する。保管後に個別世代を取り出す場合は `restoreDiaryArchiveGeneration(archive, originalKey, { recoveryPrivateKey, expectedRecoveryFingerprint })` でメモリー上のSQLiteを開き、使用後に閉じる。
+
+原本整理は全世代の合格を確認し、削除候補のキー・ETagと共有参照を再照合したうえで別途承認する。写真本体やD1 Time Travelの旧履歴は別の保管対象として扱う。
+
 ## 日記写真のバックアップ廃止
 
 日記写真は既存の `t-room-diary-media` を正本とし、別R2への差分コピー・再検証・初回追いつき処理を廃止する。日記WorkerのCronは `25 18 * * *`（03:25 JST）のみで、D1と従来の通常cleanupを維持する。アップロード・表示・写真管理と `diary/staging/` の正式写真は変更しない。`backup_identity` 列と旧形式のDB復元互換性は維持し、列削除・migrationは行わない。旧写真形式の読取・隔離復元helperは互換試験用に残すが、本番からコピー処理は呼び出さない。
