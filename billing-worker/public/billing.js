@@ -144,7 +144,6 @@
       import(`/cloud/crypto-vault.js?v=${encodeURIComponent(assetVersion)}`)
     ]);
     const keys = await prepareBillingVault(api,authentication);
-    el["legacy-link"].hidden = !status.canMaintain;
     if (legacyMode) {
       if (!status.canMaintain) throw new Error("暗号化後の旧バックアップは第一管理者が操作できます。");
       const { prepareBillingLegacyMaintenance } = await importModule("billing-checkpoint-restore.mjs");
@@ -277,7 +276,6 @@
     state.encryptedApp = null;
     state.legacyMaintenance = null;
     el["legacy-view"].hidden = true;
-    el["legacy-link"].hidden = true;
     el["legacy-confirmation"].value = "";
     el["legacy-cleanup-form"].hidden = true;
     for (const id of ["legacy-progress", "legacy-error", "legacy-counts"]) el[id].textContent = "";
