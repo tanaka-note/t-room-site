@@ -38,14 +38,20 @@ export async function storageSnapshot(env, refresh = false, cache = globalThis.c
   for (const id of serviceIds) {
     const spec = SERVICES[id];
     try {
-      const [v3Daily, v3Monthly, v2Daily, v2Monthly, legacyDaily, legacyMonthly, storedDataBytes,v4Daily,v4Monthly,v4Bytes] = await Promise.all([
+      const additional = id==='security' ? ['d1/security/v4','d1/security/v5'] : id==='billing' ? ['d1/billing/v4'] : [];
+      const [v3Daily, v3Monthly, v2Daily, v2Monthly, legacyDaily, legacyMonthly, storedDataBytes,...newer] = await Promise.all([
         listObjects(env.BACKUP, `d1/${id}/v3/daily/`), listObjects(env.BACKUP, `d1/${id}/v3/monthly/`),
         listObjects(env.BACKUP, `d1/${id}/v2/daily/`), listObjects(env.BACKUP, `d1/${id}/v2/monthly/`),
-        listObjects(env.BACKUP, `d1/${id}/daily/`), listObjects(env.BACKUP, `d1/${id}/monthly/`), dataBytes(env.BACKUP, `d1/${id}/v3/data/`),id==='security'?listObjects(env.BACKUP,'d1/security/v4/daily/'):[],id==='security'?listObjects(env.BACKUP,'d1/security/v4/monthly/'):[],id==='security'?dataBytes(env.BACKUP,'d1/security/v4/data/'):0]);
-      const daily = [...v4Daily,...v3Daily,...v2Daily], monthly = [...v4Monthly,...v3Monthly,...v2Monthly];
+        listObjects(env.BACKUP, `d1/${id}/daily/`), listObjects(env.BACKUP, `d1/${id}/monthly/`), dataBytes(env.BACKUP, `d1/${id}/v3/data/`),
+        ...additional.map(async prefix => Promise.all([
+          listObjects(env.BACKUP,prefix+'/daily/'),listObjects(env.BACKUP,prefix+'/monthly/'),dataBytes(env.BACKUP,prefix+'/data/')
+        ]))]);
+      const daily = [...newer.flatMap(value=>value[0]),...v3Daily,...v2Daily];
+      const monthly = [...newer.flatMap(value=>value[1]),...v3Monthly,...v2Monthly];
       services.push({ id, label: spec.label, storageAvailable: true,
         legacy: [...legacyDaily,...legacyMonthly].map(metadata),
-        bytes: storedDataBytes + v4Bytes + [...daily, ...monthly, ...legacyDaily, ...legacyMonthly].reduce((n, o) => n + o.size, 0),
+        bytes: storedDataBytes + newer.reduce((sum,value)=>sum+value[2],0)
+          + [...daily, ...monthly, ...legacyDaily, ...legacyMonthly].reduce((n, o) => n + o.size, 0),
         daily: daily.map(metadata).sort((a, b) => b.name.localeCompare(a.name)),
         monthly: monthly.map(metadata).sort((a, b) => b.name.localeCompare(a.name)) });
     } catch { services.push({ id, label: spec.label, storageAvailable: false }); }

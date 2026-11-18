@@ -3,7 +3,9 @@ import { isValidSessionSecret, requireSessionSecret } from "../../assets/session
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { validatePasswordSession } from "../../assets/password-auth-policy.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
-import { monthBounds, signedDocumentAmount, summarizeSettlements } from "./finance.js";
+import { entryInput, monthBounds, normalizeAccountId, serializeEntry, serializeSettlement, settlementInput, summarizeSettlements } from "./finance.js";
+import { billingEncryptionApi } from "./encryption-api.js";
+import { billingMigrationState } from "./migration-source.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit, withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
@@ -97,6 +99,7 @@ async function handleApi(request, env, url, path, context, getSession) {
   if (path === "/api/password-login-audit" && request.method === "POST") return handlePasswordLoginClientAudit(env, request, "billing");
   if (path === "/api/session" && request.method === "GET") {
     const session = await getSession();
+    const encryption = session && env.BILLING_KEY_PREPARATION_ENABLED === "true" ? await billingMigrationState(env.DB) : null;
     if (session) await recordSecurityAudit(env, request, {
       service: "billing", eventType: "session_resume", outcome: "success",
       identityId: session.identityId, serviceLinkId: session.serviceLinkId,
@@ -113,7 +116,8 @@ async function handleApi(request, env, url, path, context, getSession) {
       accountId: session?.accountId || null,
       accountName: session?.accountName || null,
       accountDisplayName: session ? accountDisplayName({ service: "billing", accountId: session.accountId, role: session.role }, `${session.accountName}${session.role === "owner" ? "（管理者）" : ""}`) : null,
-      authMethod: session?.authMethod || null
+      authMethod: session?.authMethod || null,
+      ...(encryption?.activated_at ? { encrypted: true } : {})
     });
   }
 
@@ -152,7 +156,11 @@ async function handleApi(request, env, url, path, context, getSession) {
     const headers = new Headers({ "Set-Cookie": sessionCookie(token, policy, url.protocol === "https:") });
     await writeAudit(env, { eventType: "passkey_login_success", actorAccountId: account.id, targetAccountId: account.id });
     await recordSecurityAudit(env, request, { service: "billing", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: account.role, authMethod: "passkey", sessionId, credentialId: handoff.credentialId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt: new Date().toISOString(), sessionVersion: billingSessionVersion(env, account.session_version), passkeySessionEpoch: handoff.sessionEpoch });
-    return json({ authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name, accountDisplayName: accountDisplayName({ service: "billing", accountId: account.id, role: account.role }, `${account.display_name}${account.role === "owner" ? "（管理者）" : ""}`), authMethod: "passkey" }, 200, headers);
+    return json({
+      authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name,
+      accountDisplayName: accountDisplayName({ service: "billing", accountId: account.id, role: account.role }, `${account.display_name}${account.role === "owner" ? "（管理者）" : ""}`),
+      authMethod: "passkey", ...(env.BILLING_KEY_PREPARATION_ENABLED === "true" ? { prepareEncryptionKey: true } : {})
+    }, 200, headers);
   }
 
   if (path === "/api/logout" && request.method === "POST") {
@@ -172,6 +180,51 @@ async function handleApi(request, env, url, path, context, getSession) {
   if (!session) throw new HttpError(401, "ログインが必要です。");
   if (request.method !== "GET" && !validMutationRequest(request, url)) {
     throw new HttpError(403, "不正なリクエストです。");
+  }
+
+  if (path === "/api/encryption/recovery-context" && request.method === "GET") {
+    requireOwner(session);
+    if (session.authMethod !== "passkey" || session.identityId !== "primary-admin" || session.accountId !== "owner") {
+      throw new HttpError(403, "第一管理者のパスキーが必要です。");
+    }
+    requireRecentPasskey(session);
+    const recovery = await env.SECURITY.getBillingRecoveryContext(billingKeySession(session));
+    if (!recovery) throw new HttpError(409, "このパスキーの復旧用鍵を確認できません。");
+    return json(recovery);
+  }
+
+  if (env.BILLING_KEY_PREPARATION_ENABLED === "true" && path === "/api/encryption/vault") {
+    if (request.method === "GET") {
+      const result = await env.SECURITY.getBillingVaultContext(billingKeySession(session));
+      if (!result) throw new HttpError(403, "請求書の暗号鍵を利用できません。");
+      return json(result);
+    }
+    if (request.method === "POST") {
+      requireRecentPasskey(session);
+      const body = await readJson(request, 18432);
+      const result = await env.SECURITY.enrollBillingVault(billingKeySession(session), body.vault);
+      if (result?.status === "invalid") throw new HttpError(400, "請求書の暗号鍵の形式を確認してください。");
+      if (result?.status !== "ok") throw new HttpError(403, "請求書の暗号鍵を登録できません。");
+      return json({ vault: result.vault });
+    }
+  }
+
+  if (env.BILLING_KEY_PREPARATION_ENABLED === "true" && path === "/api/encryption/recipients" && request.method === "GET") {
+    requireOwner(session);
+    const recipients = await env.SECURITY.getBillingKeyRecipients(billingKeySession(session));
+    if (!recipients) throw new HttpError(403, "第一管理者のパスキーが必要です。");
+    return json({ recipients });
+  }
+
+  if (env.BILLING_KEY_PREPARATION_ENABLED === "true" && path.startsWith("/api/encryption/")) {
+    return billingEncryptionApi(request, env, url, path, session, { json, readJson, HttpError, requireRecentPasskey, billingKeySession });
+  }
+  if (env.BILLING_KEY_PREPARATION_ENABLED === "true"
+    && (path === "/api/summary" || path.startsWith("/api/entries") || path.startsWith("/api/settlements")
+      || (path === "/api/accounts" && url.searchParams.get("includeSummary") === "1"))) {
+    const encryption = await billingMigrationState(env.DB);
+    if (encryption?.activated_at) throw new HttpError(409, "請求書管理の最新版を開き、パスキーで暗号鍵を解除してください。");
+    if (encryption && request.method !== "GET") throw new HttpError(409, "暗号化への移行が完了するまで、明細は閲覧できます。");
   }
 
   if (path === "/api/accounts" && request.method === "GET") {
@@ -369,31 +422,10 @@ async function deleteEntry(id, env, session) {
 }
 
 async function parseEntryInput(request, env) {
-  const body = await readJson(request, 16384);
-  const accountId = normalizeAccountId(body.accountId);
-  const documentType = ["invoice", "payment_notice"].includes(body.documentType) ? body.documentType : "";
-  const entryDate = normalizeDate(body.entryDate);
-  const allowedCategories = documentType === "invoice"
-    ? ["purchase", "discount", "offset", "other"]
-    : ["purchase", "offset", "other"];
-  const category = allowedCategories.includes(body.category) ? body.category : "";
-  const amount = normalizeInteger(body.amountYen, 1, 999999999999);
-  const otherDirection = body.otherDirection === "minus" ? "minus" : "plus";
-  const description = normalizeText(body.description, 100);
-  const note = normalizeText(body.note, 500, true);
-  if (!accountId || !documentType || !entryDate || !category || amount === null || !description) {
-    throw new HttpError(400, "明細の入力内容を確認してください。");
-  }
-  await assertTargetAccountExists(accountId, env);
-  return {
-    accountId,
-    documentType,
-    entryDate,
-    category,
-    amountYen: signedDocumentAmount(category, amount, otherDirection),
-    description,
-    note
-  };
+  const input = entryInput(await readJson(request, 16384));
+  if (!input) throw new HttpError(400, "明細の入力内容を確認してください。");
+  await assertTargetAccountExists(input.accountId, env);
+  return input;
 }
 
 async function createSettlement(request, env, session) {
@@ -460,18 +492,10 @@ async function deleteSettlement(id, env, session) {
 }
 
 async function parseSettlementInput(request, env) {
-  const body = await readJson(request, 16384);
-  const accountId = normalizeAccountId(body.accountId);
-  const settlementDate = normalizeDate(body.settlementDate);
-  const direction = ["incoming", "outgoing"].includes(body.direction) ? body.direction : "";
-  const method = ["bank_transfer", "cash", "offset", "other"].includes(body.method) ? body.method : "";
-  const amountYen = normalizeInteger(body.amountYen, 1, 999999999999);
-  const note = normalizeText(body.note, 500, true);
-  if (!accountId || !settlementDate || !direction || !method || amountYen === null) {
-    throw new HttpError(400, "入出金の入力内容を確認してください。");
-  }
-  await assertTargetAccountExists(accountId, env);
-  return { accountId, settlementDate, direction, method, amountYen, note };
+  const input = settlementInput(await readJson(request, 16384));
+  if (!input) throw new HttpError(400, "入出金の入力内容を確認してください。");
+  await assertTargetAccountExists(input.accountId, env);
+  return input;
 }
 
 async function listAuditLogs(url, env) {
@@ -519,6 +543,13 @@ async function serveAsset(request, env, url, path) {
     ["/tlain-login.css", "/tlain-login.css"],
     ["/tlain-login.js", "/tlain-login.js"],
     ["/billing.js", "/billing.js"],
+    ["/billing-crypto.mjs", "/billing-crypto.mjs"],
+    ["/billing-checkpoint-restore.mjs", "/billing-checkpoint-restore.mjs"],
+    ["/billing-key-client.mjs", "/billing-key-client.mjs"],
+    ["/billing-encrypted-app.mjs", "/billing-encrypted-app.mjs"],
+    ["/billing-migration-client.mjs", "/billing-migration-client.mjs"],
+    ["/billing-finance.mjs", "/billing-finance.mjs"],
+    ["/billing-migration.mjs", "/billing-migration.mjs"],
     ["/pwa-install.js", "/pwa-install.js"],
     ["/password-login-audit.js", "/password-login-audit.js"],
     ["/troom-date-picker.css", "/troom-date-picker.css"],
@@ -656,40 +687,13 @@ async function writeAudit(env, input) {
   ).run();
 }
 
-function serializeEntry(row) {
-  return {
-    id: Number(row.id),
-    documentType: row.document_type,
-    entryDate: row.entry_date,
-    category: row.category,
-    amountYen: Number(row.amount_yen),
-    description: row.description,
-    note: row.note || "",
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
-
-function serializeSettlement(row) {
-  return {
-    id: Number(row.id),
-    settlementDate: row.settlement_date,
-    direction: row.direction,
-    method: row.method,
-    amountYen: Number(row.amount_yen),
-    note: row.note || "",
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
-
 function secureResponse(response) {
   const headers = new Headers(response.headers);
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("X-Frame-Options", "DENY");
   headers.set("Referrer-Policy", "no-referrer");
   headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-  headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+  headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
@@ -704,9 +708,31 @@ function json(value, status = 200, inputHeaders = undefined) {
 async function readJson(request, maxBytes) {
   const contentLength = Number(request.headers.get("Content-Length") || 0);
   if (contentLength > maxBytes) throw new HttpError(413, "入力内容が大きすぎます。");
-  let body;
-  try { body = await request.json(); } catch { throw new HttpError(400, "入力内容を読み取れませんでした。"); }
-  return body && typeof body === "object" ? body : {};
+  const reader = request.body?.getReader();
+  if (!reader) throw new HttpError(400, "入力内容を読み取れませんでした。");
+  const utf8 = new TextDecoder("utf-8",{ fatal:true });
+  const text = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      size += chunk.value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        throw new HttpError(413, "入力内容が大きすぎます。");
+      }
+      text.push(utf8.decode(chunk.value,{ stream:true }));
+    }
+    text.push(utf8.decode());
+    const body = JSON.parse(text.join(""));
+    return body && typeof body === "object" ? body : {};
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(400, "入力内容を読み取れませんでした。");
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function validMutationRequest(request, url) {
@@ -758,33 +784,10 @@ function constantTimeEqual(left, right) {
   return difference === 0;
 }
 
-function normalizeAccountId(value) {
-  const id = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return /^[a-z0-9-]{1,50}$/.test(id) ? id : "";
-}
-
-function normalizeDate(value) {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return "";
-  const date = new Date(`${value}T00:00:00Z`);
-  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value ? "" : value;
-}
-
 function validMonth(value) {
   if (typeof value !== "string" || !/^\d{4}-\d{2}$/.test(value)) return "";
   const month = Number(value.slice(5));
   return month >= 1 && month <= 12 ? value : "";
-}
-
-function normalizeInteger(value, min, max) {
-  const number = typeof value === "number" ? value : Number(value);
-  return Number.isSafeInteger(number) && number >= min && number <= max ? number : null;
-}
-
-function normalizeText(value, maxLength, allowEmpty = false) {
-  if (typeof value !== "string") return "";
-  const text = value.trim().replace(/\r\n/g, "\n");
-  if ((!allowEmpty && !text) || text.length > maxLength) return "";
-  return text;
 }
 
 function currentJapanMonth() {
@@ -798,6 +801,20 @@ function clampNumber(value, min, max, fallback) {
 
 function requireOwner(session) {
   if (session.role !== "owner") throw new HttpError(403, "この操作を行う権限がありません。");
+}
+
+function billingKeySession(session) {
+  return {
+    service: "billing", identityId: session.identityId, credentialId: session.credentialId,
+    serviceAccountId: session.accountId, serviceLinkId: session.serviceLinkId, sessionEpoch: session.passkeySessionEpoch
+  };
+}
+
+function requireRecentPasskey(session) {
+  const elapsed = Date.now() - Date.parse(session.startedAt);
+  if (session.authMethod !== "passkey" || !Number.isFinite(elapsed) || elapsed < 0 || elapsed > 300000) {
+    throw new HttpError(409, "暗号鍵を準備するには、パスキーで本人確認してください。");
+  }
 }
 
 class HttpError extends Error {

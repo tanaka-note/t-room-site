@@ -12,6 +12,7 @@ import { verifiedGeneration } from '../src/integrity.js';
 import { BACKUP_TABLES } from '../../diary-worker/src/backup.js';
 import { validateExportManifest, readExportParts,exportSpec } from '../src/export-backup.js';
 import { assertArchiveSchema } from '../src/schema-guard.js';
+import { BILLING_ENCRYPTED_MIGRATION, SECURITY_BILLING_MIGRATION } from '../src/billing-encrypted.js';
 
 // Offline recovery only. This pre-family schema must never be used for live
 // capture, and all replay DDL still comes from checked-in migrations.
@@ -70,7 +71,9 @@ export async function restoreIsolated(bucket, key, service, {anchor,minimumGener
   if(service==='household')tables=recoverySpec(service,verified.payload.expectedMigration).tables;
   const exported=verified.payload.format==='troom-d1-export-v3';
   const encryptedDiary=service==='diary'&&verified.payload.expectedMigration===DIARY_ENCRYPTED_MIGRATION;
-  const encryptedSecurity=service==='security'&&verified.payload.expectedMigration===SECURITY_DIARY_MIGRATION;
+  const encryptedSecurity=service==='security'&&[SECURITY_DIARY_MIGRATION,SECURITY_BILLING_MIGRATION].includes(verified.payload.expectedMigration);
+  const encryptedBilling=service==='billing'&&verified.payload.expectedMigration===BILLING_ENCRYPTED_MIGRATION;
+  const billingVaults=service==='security'&&verified.payload.expectedMigration===SECURITY_BILLING_MIGRATION;
   let diaryDirectory;
   if(encryptedDiary){
     if(!anchor)throw new Error('DiaryTrustedAnchorRequired');
@@ -78,7 +81,7 @@ export async function restoreIsolated(bucket, key, service, {anchor,minimumGener
     diaryDirectory=await verifyDirectory(metadata.directory,anchor,minimumGeneration);
     await validateKeyMetadata(metadata,diaryDirectory,anchor);
   }
-  if(encryptedDiary||encryptedSecurity)tables=exportSpec(service,verified.payload.expectedMigration).tables;
+  if(encryptedDiary||encryptedSecurity||encryptedBilling)tables=exportSpec(service,verified.payload.expectedMigration).tables;
   if(exported)await assertArchiveSchema(service,verified.payload.expectedMigration,verified.payload.schema);
   const db=new DatabaseSync(':memory:');
   try {
@@ -88,6 +91,8 @@ export async function restoreIsolated(bucket, key, service, {anchor,minimumGener
     for(const file of migrations.filter(f=>!legacyHousehold||f<=verified.payload.expectedMigration))db.exec(readFileSync(new URL(file,dir),'utf8'));
     if(encryptedDiary)for(const file of ['schema.sql','legacy-fences.sql'])db.exec(readFileSync(new URL('../../diary-worker/e2ee/'+file,import.meta.url),'utf8'));
     if(encryptedSecurity)db.exec(readFileSync(new URL('../../security-worker/e2ee/diary-keys.sql',import.meta.url),'utf8'));
+    if(billingVaults)db.exec(readFileSync(new URL('../../security-worker/e2ee/billing-vaults.sql',import.meta.url),'utf8'));
+    if(encryptedBilling)db.exec(readFileSync(new URL('../../billing-worker/encryption/migration-preparation.sql',import.meta.url),'utf8'));
     // Triggers are from trusted migrations, never from the archive. Disable
     // replay side effects (inventory stock, immutable audit, etc.) only here.
     const triggers=db.prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger'").all();

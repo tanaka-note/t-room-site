@@ -8,13 +8,14 @@ const handler = script.slice(script.indexOf("  async function loginWithPasskey()
 for (const fail of [false, true]) test(`passkey login restores loading state after ${fail ? "failure" : "success"}`, async () => {
   const button = { disabled: false, setAttribute(name, value) { this[name] = value; }, removeAttribute(name) { delete this[name]; } };
   const label = { textContent: "パスキーでログイン" }, error = { textContent: "" }, calls = [];
+  const prfOutput = Uint8Array.of(1, 2, 3);
   const context = { el: { "passkey-login": button, "passkey-login-label": label, "login-error": error },
     choosePasskeyLink() {},
     TRoomPasskeys: { authenticate: async service => {
       assert.equal(service, "billing"); assert.equal(button.disabled, true); assert.equal(button["aria-busy"], "true");
       assert.equal(label.textContent, "確認中…");
       if (fail) throw Error("fixture failure");
-      return { handoff: { handoffToken: "fixture-token" } };
+      return { handoff: { handoffToken: "fixture-token" }, prfOutput };
     } },
     api: async (path, options) => { calls.push(path); assert.equal(options.body.handoffToken, "fixture-token"); return {authenticated:true}; },
     enterApp: async session => { assert.equal(session.authenticated, true); calls.push("enterApp"); }
@@ -25,4 +26,5 @@ for (const fail of [false, true]) test(`passkey login restores loading state aft
   assert.equal(label.textContent, "パスキーでログイン");
   assert.equal(error.textContent, fail ? "fixture failure" : "");
   assert.deepEqual(calls, fail ? [] : ["/passkey/handoff", "enterApp"]);
+  if (!fail) assert.ok(prfOutput.every(byte => byte === 0));
 });

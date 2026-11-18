@@ -34,7 +34,7 @@
     el["print-date"].textContent = formatDateJp(japanToday());
     try {
       const session = await api("/session");
-      if (session.authenticated) await enterApp(session);
+      if (session.authenticated && !session.encrypted) await enterApp(session);
       else showLogin();
     } catch {
       showLogin();
@@ -110,13 +110,17 @@
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
     el["passkey-login-label"].textContent = "確認中…";
+    let authentication;
     try {
-      const authentication = await TRoomPasskeys.authenticate("billing", choosePasskeyLink);
+      authentication = await TRoomPasskeys.authenticate("billing", choosePasskeyLink);
       const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
+      const staged = session.prepareEncryptionKey && await prepareEncryptedSession(session,authentication);
       await enterApp(session);
+      if (staged) setSummaryStatus("暗号化した台帳を保存しました。バックアップの復元確認後に切り替わります。");
     } catch (error) {
       el["login-error"].textContent = error.message;
     } finally {
+      authentication?.prfOutput?.fill(0);
       button.disabled = false;
       button.removeAttribute("aria-busy");
       el["passkey-login-label"].textContent = "パスキーでログイン";
@@ -125,6 +129,30 @@
 
   async function choosePasskeyLink(links) {
     return TRoomPasskeys.chooseLinkDialog(links, "billing");
+  }
+
+  async function prepareEncryptedSession(session, authentication) {
+    const assetVersion = document.querySelector('meta[name="troom-app-build"]')?.content ?? "";
+    const importModule = name => import(`${basePath()}/${name}?v=${encodeURIComponent(assetVersion)}`);
+    const [status, { prepareBillingVault }] = await Promise.all([
+      api("/encryption/status"), importModule("billing-key-client.mjs"),
+      import(`/cloud/crypto-vault.js?v=${encodeURIComponent(assetVersion)}`)
+    ]);
+    const keys = await prepareBillingVault(api,authentication);
+    let staged = null;
+    if (status.canStage) {
+      const { stageBillingMigration } = await importModule("billing-migration-client.mjs");
+      const restore = status.checkpointEnabled ? (await importModule("billing-checkpoint-restore.mjs")).restoreBillingCheckpoint : null;
+      staged = await stageBillingMigration(api,keys,authentication,(count,total) => {
+        el["passkey-login-label"].textContent = `暗号化を準備中（${count}/${total}）`;
+      },{ restore,activate:status.canActivate });
+    }
+    if (status.mode === "encrypted" || staged?.activated) {
+      const { encryptedBillingApp, refreshBillingGrants } = await importModule("billing-encrypted-app.mjs");
+      await refreshBillingGrants(api,keys,authentication);
+      state.encryptedApp = encryptedBillingApp(api,session,keys);
+    }
+    return Boolean(staged && !staged.activated);
   }
 
   async function logout() {
@@ -171,6 +199,8 @@
   function showLogin() {
     el["boot-view"].hidden = true;
     state.session = null;
+    state.encryptedApp?.close();
+    state.encryptedApp = null;
     state.summaryGeneration++;
     state.summaryController?.abort();
     state.summary = null;
@@ -807,6 +837,19 @@
       month: (options.body?.entryDate || options.body?.settlementDate || state.summary?.month || el["month-input"].value).slice(0, 7),
       documentType: options.body?.documentType || el["document-filter"].value
     } : null;
+    if (state.encryptedApp && (financialMutation || path.startsWith("/summary?") || path.startsWith("/accounts?includeSummary=1"))) {
+      try {
+        return await state.encryptedApp.request(path, options, state.summary?.account.id || state.session?.accountId);
+      } catch (error) {
+        if (error.status === 401 && financialMutation) {
+          state.uncertainOperationView = operationView;
+          el["login-operation-note"].textContent = uncertainOperationMessage;
+          el["login-operation-note"].hidden = false;
+          throw Object.assign(new Error(uncertainOperationMessage), { status:401 });
+        }
+        throw error;
+      }
+    }
     const response = await fetch(`${basePath()}/api${path}`, {
       method: options.method || "GET",
       headers: { ...options.headers, ...(options.body ? { "Content-Type": "application/json" } : {}) },

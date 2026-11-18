@@ -1,5 +1,6 @@
 // Generated from checked-in migrations using Node SQLite; review alongside schema changes.
 import { digest } from './integrity.js';
+import { BILLING_ENCRYPTED_MIGRATION, SECURITY_BILLING_MIGRATION } from './billing-encrypted.js';
 const EXPECTED = {
   "portfolio": "0f996aabee4cfcdec8a1ee2f5d5429b170727d19eba88351ec82577bdedc939a",
   "household": "2f7780c5512b5b1fbd610fc9860e4417832050d941773542871189032bfca10f",
@@ -29,6 +30,16 @@ export function reviewedSchemaMatches(service, baseline, actual) {
     (REVIEWED[service]?.[0] === baseline && REVIEWED[service][1] === actual));
 }
 export async function assertSchema(service, rows) {
+  const extension = service==='billing' ? name => /^billing_(encryption|candidate|freeze)_/.test(name)
+    : service==='security' ? name => name === 'security_billing_vaults' : () => false;
+  const extra = rows.filter(row=>extension(row.name));
+  if (extra.length) {
+    const expected = service==='billing' ? '78f4defbcb4a6662c28ca926de959be22d33da90f9a416f4bb832e5d23e7a7a2'
+      : 'b0d6dd06625913b84b28ee5dd371c170ddddee5a84121cc98276a2bfc8cbade4';
+    const shape = extra.map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
+    if (await digest(new TextEncoder().encode(JSON.stringify(shape))) !== expected) throw new Error('SchemaReviewRequired');
+    rows = rows.filter(row=>!extension(row.name));
+  }
   const schema=rows.filter(r=>r.tbl_name!=='d1_migrations').map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
   if(!reviewedSchemaMatches(service, EXPECTED[service], await digest(new TextEncoder().encode(JSON.stringify(schema))))) throw new Error('SchemaReviewRequired');
 }
@@ -42,6 +53,14 @@ export async function assertEncryptedSchema(service,rows) {
   await assertSchema(service,rows.filter(row=>!encrypted(row)));
 }
 export async function assertArchiveSchema(service,migration,rows) {
+  if (service==='billing' && migration===BILLING_ENCRYPTED_MIGRATION) {
+    if (!rows.some(row=>row.name==='billing_encryption_live_ledgers')) throw new Error('SchemaReviewRequired');
+    return assertSchema(service,rows);
+  }
+  if (service==='security' && migration===SECURITY_BILLING_MIGRATION) {
+    if (!rows.some(row=>row.name==='security_billing_vaults')) throw new Error('SchemaReviewRequired');
+    return rows.some(row=>row.name==='security_diary_key_config') ? assertEncryptedSchema(service,rows) : assertSchema(service,rows);
+  }
   if(service==='diary'&&(migration==='diary-e2ee-v1'||migration==='0022_photo_backup_identity.sql'&&rows.some(row=>row.name==='diary_e2ee_control'))||service==='security'&&migration==='security-diary-keys-v1')return assertEncryptedSchema(service,rows);
   if(service==='household'&&migration==='0006_independent_households.sql') {
     const schema=rows.filter(r=>r.tbl_name!=='d1_migrations').map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
