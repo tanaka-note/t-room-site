@@ -6,6 +6,8 @@ namespace TCloud.Sync.Windows;
 // Win64 Cloud Files ABI. The native fixture tests validate sizes and real calls.
 internal static class CloudFilesNative
 {
+    internal const int StatusUnsuccessful = unchecked((int)0xC000CF12);
+    internal const int StatusAccessDenied = unchecked((int)0xC000CF18);
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     internal struct Registration
     {

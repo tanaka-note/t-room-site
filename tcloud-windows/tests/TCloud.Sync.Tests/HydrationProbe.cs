@@ -75,13 +75,13 @@ internal static class HydrationProbe
             {
                 try
                 {
-                    using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, FileOptions.Asynchronous);
                     var head = new byte[1000];
-                    var count = RandomAccess.Read(handle, head, 0);
+                    var count = await RandomAccess.ReadAsync(handle, head, 0);
                     recovery = count == head.Length && Convert.ToHexString(SHA256.HashData(head)) == validatedPlan.Ranges[^1].Hash
-                        ? "sync-head-verified" : "sync-head-differs";
+                        ? "async-native-head-verified" : "async-native-head-differs";
                 }
-                catch (Exception retryError) { recovery = $"sync-head-0x{retryError.HResult:X8}"; }
+                catch (Exception retryError) { recovery = $"async-native-head-0x{retryError.HResult:X8}"; }
             }
             Console.WriteLine(JsonSerializer.Serialize(new HydrationResult(false, stage + "; " + recovery, error.HResult)));
         }

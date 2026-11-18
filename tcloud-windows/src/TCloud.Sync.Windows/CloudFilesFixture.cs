@@ -161,7 +161,7 @@ public sealed class CloudFilesFixture : IDisposable
         {
             Errors.Enqueue(error);
             transfer.Buffer = 0;
-            transfer.CompletionStatus = unchecked((int)0xC000CF01); // STATUS_CLOUD_FILE_UNSUCCESSFUL
+            transfer.CompletionStatus = CloudFilesNative.StatusUnsuccessful;
             _ = CloudFilesNative.CfExecute(operation, transfer);
         }
     }
@@ -176,7 +176,7 @@ public sealed class CloudFilesFixture : IDisposable
         var acknowledgement = new CloudFilesNative.TransferParameters
         {
             ParamSize = 16, // Header and ACK_DELETE flags/status, without the transfer-data fields.
-            CompletionStatus = unchecked((int)0xC000CF01) // STATUS_CLOUD_FILE_UNSUCCESSFUL
+            CompletionStatus = CloudFilesNative.StatusAccessDenied
         };
         try
         {

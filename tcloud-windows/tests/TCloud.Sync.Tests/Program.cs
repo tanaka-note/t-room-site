@@ -292,6 +292,7 @@ static async Task NativeDeleteVeto()
     _ = await File.ReadAllBytesAsync(path);
     var result = FixtureClient.Run($"[System.IO.File]::Delete({FixtureClient.PathArgument(path)})");
     Check(!result.Succeeded, "separate-process delete was rejected");
+    Check(result.Error == "0x8007018B", "delete reports Cloud Files access denied, not a stopped provider");
     Check(File.Exists(path), "rejected delete preserved the file");
     Check(fixture.RejectedDeleteCount > 0, "delete rejection callback ran");
     Check(fixture.Errors.IsEmpty, "provider callback errors");
