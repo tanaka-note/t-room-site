@@ -220,7 +220,8 @@ test("administrator Identity disable is atomic, fail-closed, and keeps historica
     "client vaults and key envelopes remain immutable history");
   assert.match(securityUi, /過去の履歴を表示/);
   assert.match(securityUi, /data\.credentials\.filter\(\(item\) => \["pending", "active"\]\.includes\(item\.status\)\)/);
-  assert.match(securityUi, /data\.links\.filter\(\(item\) => \["pending", "active"\]\.includes\(item\.status\)\)/);
+  assert.match(securityUi, /const serviceLinks = data\.links\.filter\(\(item\) => item\.service !== "health"\)/);
+  assert.match(securityUi, /serviceLinks\.filter\(\(item\) => \["pending", "active"\]\.includes\(item\.status\)\)/);
   assert.match(securityUi, /ユーザーを停止/);
 });
 
@@ -455,7 +456,7 @@ test("all service passkey sessions carry revocable Security identifiers and vali
 test("member registration remains retryable and primary-admin registration requires Cloud preparation", () => {
   assert.match(client, /obtainPrfSafely/);
   assert.match(client, /prfPreparationFailed/);
-  assert.match(worker, /UPDATE security_service_links SET status = 'active'.*service != 'cloud'/);
+  assert.match(worker, /UPDATE security_service_links SET status = 'active'.*service NOT IN \('cloud', 'health'\)/);
   assert.match(worker, /envelopeType === "admin_private_prf"[\s\S]*UPDATE security_service_links SET status = 'active'/);
   assert.match(worker, /security_setup_sessions/);
   assert.match(worker, /last_user_verification_at/);
