@@ -6,9 +6,9 @@ import { readFile } from "node:fs/promises";
 export function createDiaryFixtureServer(handler) {
   return createServer(async (request, response) => {
     const url = new URL(request.url, "http://localhost");
-    if (url.pathname === "/diary/diary-bootstrap.js") {
+    if (["/diary/diary-bootstrap.js", "/diary/diary-photo-images.js"].includes(url.pathname)) {
       response.writeHead(200, { "Content-Type": "text/javascript" });
-      return response.end(await readFile(new URL("../../public/diary-bootstrap.js", import.meta.url)));
+      return response.end(await readFile(new URL(`../../public/${url.pathname.split('/').at(-1)}`, import.meta.url)));
     }
     if (url.pathname !== "/diary/api/bootstrap") return handler(request, response);
     const collect = path => new Promise((resolve, reject) => {

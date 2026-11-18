@@ -1,3 +1,4 @@
+import {encryptPhotoParts} from '../../e2ee/photo-crypto.mjs';
 import assert from 'node:assert/strict';
 import { before,after,test } from 'node:test';
 import { systemFixture } from './system-fixture.mjs';
@@ -52,8 +53,9 @@ test('photo staging keeps filename/dimensions encrypted, attaches atomically, an
   const a=await client(),scope=preferencesScope(a.household,a.actor.accountId),epoch=a.directory.epochs[scope];
   const session=await (await call('/encryption/uploads',{method:'POST',body:{targetEntryId:null}})).json();
   const sid=session.uploadSession.id,id=crypto.randomUUID(),photo={id,fileName:'PHOTO_PRIVATE_CANARY.jpg',contentType:'image/jpeg',originalSize:3,width:123,height:456,createdAt:'2026-11-11T00:00:00Z',thumbnailUrl:`/diary/api/photos/${id}/thumbnail`,displayUrl:`/diary/api/photos/${id}/display`,originalUrl:`/diary/api/photos/${id}/original`};
+  const encrypted=await encryptPhotoParts(Object.fromEntries(['original','display','thumbnail'].map(kind=>[kind,new Blob([new Uint8Array([1,2,3])],{type:'image/jpeg'})])),a.household,id);photo.crypto=encrypted.descriptor;
   const metadata=await seal(a.keys.get(scope),photo,{household:a.household,scope,id,revision:1,epoch,kind:'photo-staging',sourceId:sid});
-  const form=()=>{const value=new FormData();value.set('id',id);value.set('epoch',String(epoch));value.set('metadata',JSON.stringify(metadata));for(const kind of ['original','display','thumbnail'])value.set(kind,new Blob([new Uint8Array([1,2,3])],{type:'application/octet-stream'}),`${kind}.bin`);return value;};
+  const form=()=>{const value=new FormData();value.set('id',id);value.set('epoch',String(epoch));value.set('metadata',JSON.stringify(metadata));for(const kind of ['original','display','thumbnail'])value.set(kind,encrypted.parts[kind],`${kind}.bin`);return value;};
   const route=`/encryption/uploads/${sid}/photos`;
   assert.equal((await call(route,{method:'POST',rawBody:form()})).status,200);
   assert.equal((await call(route,{method:'POST',rawBody:form()})).status,200,'retry is idempotent');
