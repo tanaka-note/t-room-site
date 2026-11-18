@@ -112,6 +112,22 @@ test("all seven production entrypoints reject LINE before any DB, authentication
     }
   }
 });
+test("Calendar passkeys associate the production package and certificate with both Android relations", () => {
+  const statements = JSON.parse(readFileSync(".well-known/assetlinks.json", "utf8"));
+  const calendar = statements.find(entry => entry.target?.package_name === "jp.tanaka.troom.calendar");
+  assert(calendar, "Calendar needs a domain association");
+  assert.equal(calendar.target.namespace, "android_app");
+  for (const relation of ["delegate_permission/common.handle_all_urls", "delegate_permission/common.get_login_creds"]) {
+    assert(calendar.relation.includes(relation), `Calendar passkeys require ${relation}`);
+  }
+  const fingerprint = "34:C8:E9:61:CB:1D:35:31:66:7E:57:1C:C2:02:5A:3B:2E:1A:FC:48:1A:8C:74:12:DE:DE:12:88:FF:E5:05:56";
+  assert.deepEqual(calendar.target.sha256_cert_fingerprints, [fingerprint]);
+  const origin = `android:apk-key-hash:${Buffer.from(fingerprint.replaceAll(":", ""), "hex").toString("base64url")}`;
+  assert(readFileSync("security-worker/wrangler.jsonc", "utf8").includes(origin), "Security must verify the same signed Android origin");
+  assert(readFileSync("android-calendar/app/src/main/AndroidManifest.xml", "utf8").includes('android:name="asset_statements"'));
+  assert(readFileSync("android-calendar/app/src/main/res/values/strings.xml", "utf8").includes("https://tanaka-note.com/.well-known/assetlinks.json"));
+});
+
 test("all tracked HTML uses the shared first script; Android links/brands and passkey code are retained", () => {
   const files = execFileSync("git", ["ls-files", "*.html"], { encoding: "utf8" }).trim().split("\n");
   for (const path of files) {
