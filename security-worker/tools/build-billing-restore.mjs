@@ -8,7 +8,7 @@ const { build } = createRequire(require.resolve("wrangler/package.json"))("esbui
 const result = await build({
   absWorkingDir:fileURLToPath(root),
   entryPoints:["billing-worker/restore-checkpoint.mjs"],
-  bundle:true,platform:"browser",format:"esm",target:"es2022",write:false,legalComments:"inline",
+  bundle:true,loader:{".sql":"text"},platform:"browser",format:"esm",target:"es2022",write:false,legalComments:"inline",
   nodePaths:[fileURLToPath(new URL("security-worker/node_modules",root))]
 });
 const output = new URL("billing-worker/public/billing-checkpoint-restore.mjs",root);

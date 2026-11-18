@@ -62,17 +62,17 @@
   <title>請求書管理システム</title>
   <meta name="application-name" content="請求書管理システム">
   <meta name="theme-color" content="#577263">
-  <link rel="manifest" href="/billing/manifest.webmanifest?v=billing-8fe8b94ed881">
-  <script src="./pwa-install.js?v=billing-8fe8b94ed881"></script>
-  <link rel="stylesheet" href="./billing.css?v=billing-8fe8b94ed881">
-  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-8fe8b94ed881">
-  <script src="./troom-date-picker.js?v=billing-8fe8b94ed881" defer></script>
-  <script src="/diary/dialog-navigation.js?v=billing-8fe8b94ed881" defer></script>
-  <script src="./billing.js?v=billing-8fe8b94ed881" defer></script>
-  <meta name="troom-app-build" content="billing-8fe8b94ed881">
+  <link rel="manifest" href="/billing/manifest.webmanifest?v=billing-faa71fc2db4d">
+  <script src="./pwa-install.js?v=billing-faa71fc2db4d"></script>
+  <link rel="stylesheet" href="./billing.css?v=billing-faa71fc2db4d">
+  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-faa71fc2db4d">
+  <script src="./troom-date-picker.js?v=billing-faa71fc2db4d" defer></script>
+  <script src="/diary/dialog-navigation.js?v=billing-faa71fc2db4d" defer></script>
+  <script src="./billing.js?v=billing-faa71fc2db4d" defer></script>
+  <meta name="troom-app-build" content="billing-faa71fc2db4d">
   <meta name="troom-auto-update" content="enabled">
-  <link rel="stylesheet" href="/billing/tlain-login.css?v=billing-8fe8b94ed881">
-  <script src="/billing/tlain-login.js?v=billing-8fe8b94ed881" defer></script>
+  <link rel="stylesheet" href="/billing/tlain-login.css?v=billing-faa71fc2db4d">
+  <script src="/billing/tlain-login.js?v=billing-faa71fc2db4d" defer></script>
 </head>
 <body>
   <main>
@@ -98,6 +98,25 @@
       </div>
     </section>
 
+    <section id="legacy-view" class="login-view tlain-login-view" aria-labelledby="legacy-title" hidden>
+      <div class="login-card tlain-login-card">
+        <h1 id="legacy-title">旧バックアップの暗号化</h1>
+        <p id="legacy-counts"></p>
+        <p id="legacy-progress" role="status"></p>
+        <p id="legacy-error" class="error-message" role="alert"></p>
+        <div class="login-actions">
+          <button id="legacy-verify" class="button primary full" type="button">暗号化して復元を確認</button>
+          <form id="legacy-cleanup-form" hidden>
+            <label for="legacy-confirmation">平文原本を整理するには「平文原本を整理」と入力してください。</label>
+            <input id="legacy-confirmation" type="text" autocomplete="off" required>
+            <button id="legacy-cleanup" class="button secondary full" type="submit">現行DBの平文原本を整理する</button>
+          </form>
+          <a href="/billing/">請求書管理に戻る</a>
+          <button id="legacy-logout" class="text-button" type="button">ログアウト</button>
+        </div>
+      </div>
+    </section>
+
     <section id="app-view" class="app-view" hidden>
       <header class="app-header">
         <div>
@@ -106,6 +125,7 @@
         </div>
         <div class="account-actions">
           <span id="account-label"></span>
+          <a id="legacy-link" href="/billing/?maintenance=legacy" class="no-print" hidden>旧バックアップの暗号化</a>
           <button id="logout-button" class="text-button" type="button">ログアウト</button>
         </div>
       </header>
@@ -264,7 +284,7 @@
       <div class="logs-wrap"><table><thead><tr><th>日時</th><th>操作</th><th>操作した人</th><th>対象者</th></tr></thead><tbody id="logs-body"></tbody></table></div>
     </div>
   </dialog>
-  <script src="/security/passkey-client.js?v=billing-8fe8b94ed881" defer></script>
-  <script src="/assets/pwa-auto-update.js?v=billing-8fe8b94ed881" defer></script>
+  <script src="/security/passkey-client.js?v=billing-faa71fc2db4d" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=billing-faa71fc2db4d" defer></script>
 </body>
 </html>

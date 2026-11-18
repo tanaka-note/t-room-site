@@ -1,12 +1,10 @@
 // Run on the administrator's trusted device. The source interface only reads.
-import { isDeepStrictEqual } from 'node:util';
 import {
   RECOVERY_RECIPIENT, b64, encode, fingerprint, newKey, openRecipientKey,
   recipientKeyBox, unb64, validatePublicKey
 } from '../../diary-worker/e2ee/crypto.mjs';
 import { readExportManifest } from '../src/export-backup.js';
 import { digest, readBounded } from '../src/integrity.js';
-import { restoreIsolated } from './restore-isolated.mjs';
 
 const maxSourceBytes = 8 * 1024 * 1024;
 const maxPayloadBytes = 16 * 1024 * 1024;
@@ -15,10 +13,11 @@ const maxArchiveBytes = maxCiphertextLength + 4096;
 const maxObjects = 1000;
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const sha256 = /^[a-f0-9]{64}$/;
+const same = (a, b) => new TextDecoder().decode(encode(a)) === new TextDecoder().decode(encode(b));
 const isMetadata = value => value && typeof value === 'object' && !Array.isArray(value)
   && Object.values(value).every(item => typeof item === 'string');
 
-export function createLegacyArchive(profile) {
+export function createLegacyArchive(profile, restoreIsolated) {
   const { service, format, destinationPrefix, exportPrefix, generationKey, partKey, requireRecordedHash, verifyRestored } = profile;
   const error = code => new Error(profile.errorPrefix + code);
 
@@ -55,7 +54,7 @@ export function createLegacyArchive(profile) {
         if (requireRecordedHash(source.key)) throw error('SourceHashMissing');
         const second = await read();
         try {
-          if (second.sha256 !== first.sha256 || !isDeepStrictEqual(second.metadata, first.metadata)) throw error('SourceChanged');
+          if (second.sha256 !== first.sha256 || !same(second.metadata, first.metadata)) throw error('SourceChanged');
         } finally { second.bytes.fill(0); }
       }
       return { ...source, ...first };
@@ -161,7 +160,8 @@ export function createLegacyArchive(profile) {
     }
   }
 
-  async function sealArchive(bucket, batch, { recoveryPublicKey, expectedRecoveryFingerprint }) {
+  async function sealArchive(bucket, batch, { recoveryPublicKey, expectedRecoveryFingerprint, archiveId = crypto.randomUUID() }) {
+    if (!uuid.test(archiveId)) throw error('Invalid');
     validatePublicKey(recoveryPublicKey, 'recovery');
     const recipientFingerprint = await fingerprint(recoveryPublicKey);
     if (recipientFingerprint !== expectedRecoveryFingerprint) throw new Error('UntrustedRecoveryKey');
@@ -174,7 +174,7 @@ export function createLegacyArchive(profile) {
       const generations = await rehearse(objects);
       const key = await newKey();
       const iv = crypto.getRandomValues(new Uint8Array(12));
-      const identity = { format, version: 1, id: crypto.randomUUID(), recipientFingerprint };
+      const identity = { format, version: 1, id: archiveId, recipientFingerprint };
       plaintext = encode([...objects.values()].map(({ bytes, ...object }) => ({ ...object, body: b64(bytes) })));
       if (plaintext.length > maxPayloadBytes) throw error('BatchTooLarge');
       const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: encode(identity) }, key, plaintext);
@@ -219,7 +219,10 @@ export function createLegacyArchive(profile) {
     const objects = await openArchiveObjects(archive, options);
     try {
       const actual = { generations: await rehearse(objects), sources: sourceSummary(objects) };
-      if (!isDeepStrictEqual(actual, options.sourceReport)) throw error('SourceReportMismatch');
+      const inventory = actual.sources.map(({ key, etag, size }) => ({ key, etag, size }));
+      const expected = options.inventory?.slice().sort((a, b) => a.key.localeCompare(b.key));
+      if (expected && !same(inventory, expected) || options.sourceReport && !same(actual, options.sourceReport)
+        || !expected && !options.sourceReport) throw error('SourceReportMismatch');
       return { ...actual, recipientPrivateKeyVerified: true, isolatedRestoreVerified: true };
     } finally {
       for (const { bytes } of objects.values()) bytes.fill(0);
@@ -258,8 +261,7 @@ export function createLegacyArchive(profile) {
     return receipt;
   }
 
-  /** Read back the immutable R2 object before checking it with the recovery key. */
-  async function verifyStoredArchive(destination, receipt, options) {
+  async function readArchive(destination, receipt) {
     const id = receipt.key?.slice(destinationPrefix.length, -5);
     if (!uuid.test(id) || receipt.key !== `${destinationPrefix}${id}.json` || !sha256.test(receipt.sha256)) {
       throw error('Invalid');
@@ -267,8 +269,14 @@ export function createLegacyArchive(profile) {
     const bytes = await readSealedArchive(destination, receipt);
     const archive = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
     if (archive.id !== id) throw error('ReadbackMismatch');
-    return verifyArchive(archive, options);
+    header(archive);
+    return archive;
   }
 
-  return { planArchives, sealArchive, verifyArchive, restoreArchiveGeneration, publishArchive, verifyStoredArchive };
+  /** Read back the immutable R2 object before checking it with the recovery key. */
+  async function verifyStoredArchive(destination, receipt, options) {
+    return verifyArchive(await readArchive(destination, receipt), options);
+  }
+
+  return { planArchives, sealArchive, verifyArchive, restoreArchiveGeneration, publishArchive, readArchive, verifyStoredArchive };
 }
