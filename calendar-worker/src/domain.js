@@ -43,7 +43,7 @@ export function validatePayload(kind,id,v,depth=0){
     v.name=v.name.trim().normalize('NFC');
   }else{
     fields(v,['theme','appearance','startPage','durationMinutes','reminders','eventReminders','pinned','manualOrder','sort','descending','cacheMiB']);
-    if(!['blue','mint','lavender','rose','peach','gray'].includes(v.theme)||(v.appearance!==undefined&&!['system','light','dark'].includes(v.appearance))||!['MONTH','WEEK','AGENDA','TRACKS','SETTINGS'].includes(v.startPage)||!integer(v.durationMinutes,1,1440)
+    if(!['blue','mint','lavender','rose','peach','gray','sky','turquoise','navy','plum','amber','coral'].includes(v.theme)||(v.appearance!==undefined&&!['system','light','dark'].includes(v.appearance))||!['MONTH','WEEK','AGENDA','TRACKS','SETTINGS'].includes(v.startPage)||!integer(v.durationMinutes,1,1440)
       ||!reminderList(v.reminders)||!object(v.eventReminders)||Object.keys(v.eventReminders).length>10000||Object.entries(v.eventReminders).some(([key,value])=>!reminderKey(key)||!reminderList(value))
       ||!Array.isArray(v.pinned)||v.pinned.length>10000||!v.pinned.every(i=>idPattern.test(i))||!Array.isArray(v.manualOrder)||v.manualOrder.length>10000||!v.manualOrder.every(i=>idPattern.test(i))
       ||!['MANUAL','ELAPSED','NAME'].includes(v.sort)||typeof v.descending!=='boolean'||!integer(v.cacheMiB,20,500))fail('設定を確認してください。');

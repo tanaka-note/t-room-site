@@ -74,10 +74,9 @@ import java.util.Locale
     AlertDialog(onDismissRequest = onDismiss, title = { Text("${label}を統合") }, text = { Column { Text("「${source.name}」を選択した項目へ統合します。同じ予定の関連は1つにまとまります。"); all.filter { it.id != source.id && it.mergedInto == null && !it.archived }.forEach { item -> Row(Modifier.fillMaxWidth().clickable { selected = item }, verticalAlignment = Alignment.CenterVertically) { RadioButton(selected?.id == item.id, onClick = { selected = item }); Text(item.name) } } } }, confirmButton = { TextButton(enabled = selected != null, onClick = { selected?.let(onMerge) }) { Text("統合") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("戻る") } })
 }
 
-@Composable fun SettingsScreen(state: CalendarState, model: MainViewModel, activity: MainActivity, drawerOpen: Boolean = false) {
-    var view by remember { mutableStateOf("settings") }; var editItem by remember { mutableStateOf<Pair<String, NamedItem>?>(null) }; var mergeItem by remember { mutableStateOf<Pair<String, NamedItem>?>(null) }
+@Composable fun SettingsScreen(state: CalendarState, model: MainViewModel, activity: MainActivity, view: String, onView: (String) -> Unit) {
+    var editItem by remember { mutableStateOf<Pair<String, NamedItem>?>(null) }; var mergeItem by remember { mutableStateOf<Pair<String, NamedItem>?>(null) }
     var permanentlyDeleting by remember { mutableStateOf<TrashEntry?>(null) }
-    androidx.activity.compose.BackHandler(view != "settings" && !drawerOpen) { view = "settings" }
     val scope = rememberCoroutineScope(); val settings = state.settings
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { model.repository.rebuildReminders() }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(14.dp, 6.dp, 14.dp, 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -89,10 +88,10 @@ import java.util.Locale
             item { HorizontalDivider(); Text("標準の通知", Modifier.padding(top = 12.dp), style = MaterialTheme.typography.titleSmall); Text("終日予定は開始日の0:00を基準にします。", style = MaterialTheme.typography.bodySmall); ReminderOptions(settings.reminders) { model.settings(settings.copy(reminders = it)) } }
             item { if (!ReminderScheduler.permitted(activity)) Column { Text("通知を利用するには、通知と「アラームとリマインダー」の許可が必要です。", style = MaterialTheme.typography.bodySmall); Row { TextButton(onClick = { permissions.launch(Manifest.permission.POST_NOTIFICATIONS) }) { Text("通知を許可") }; TextButton(onClick = { activity.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${activity.packageName}"))) }) { Text("時刻の予約を許可") } } } else Text("通知の許可：有効", color = MaterialTheme.colorScheme.primary) }
             item { HorizontalDivider(); Text(if (state.account?.localOnly == true) "この端末で利用中" else "オフライン保存", Modifier.padding(top = 12.dp), style = MaterialTheme.typography.titleSmall); ChoiceField("上限 ${settings.cacheMiB}MiB", listOf(50, 100, 200, 500).map { it.toString() to "${it}MiB" }) { model.settings(settings.copy(cacheMiB = it.toInt())) }; Text(if (state.account?.localOnly == true) "予定はこの端末内に保存されます。端末間の同期とサーバーへのバックアップは行いません。" else "取得済みの予定を圏外でも利用できます。通知に必要な情報と未同期の変更は保護します。", style = MaterialTheme.typography.bodySmall); Text("保存上限は、端末内の予定とサーバーから取得済みのデータの合計です。", style = MaterialTheme.typography.bodySmall); if (state.account?.localOnly != true) { Text("未同期：${state.pending.size}件", style = MaterialTheme.typography.bodySmall); TextButton(onClick = { model.sync() }) { Text("今すぐ同期") } } }
-            item { HorizontalDivider(); TextButton(onClick = { view = "archives" }) { Text("アーカイブした追跡") }; TextButton(onClick = { view = "tags" }) { Text("タグを管理") }; TextButton(onClick = { view = "trash" }) { Text("ゴミ箱（30日）") } }
+            item { HorizontalDivider(); TextButton(onClick = { onView("archives") }) { Text("アーカイブした追跡") }; TextButton(onClick = { onView("tags") }) { Text("タグを管理") }; TextButton(onClick = { onView("trash") }) { Text("ゴミ箱（30日）") } }
             item { HorizontalDivider(); Text("バージョン ${BuildConfig.VERSION_NAME}／Android 14以上", style = MaterialTheme.typography.bodySmall); TextButton(onClick = { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www8.cao.go.jp/chosei/shukujitsu/gaiyou.html"))) }) { Text("祝日データ：内閣府（2027年まで）") } }
         } else {
-            item { TextButton(onClick = { view = "settings" }) { Text("← 設定へ戻る") }; Text(when (view) { "archives" -> "アーカイブした追跡"; "tags" -> "タグ管理"; else -> "ゴミ箱" }, style = MaterialTheme.typography.titleLarge) }
+            item { TextButton(onClick = { onView("settings") }) { Text("← 設定へ戻る") }; Text(when (view) { "archives" -> "アーカイブした追跡"; "tags" -> "タグ管理"; else -> "ゴミ箱" }, style = MaterialTheme.typography.titleLarge) }
             if (view == "trash") {
                 val deleted = trashEntries(state.events)
                 if (deleted.isEmpty()) item { Text("ゴミ箱は空です") }
@@ -116,8 +115,25 @@ import java.util.Locale
 }
 
 @Composable fun ReminderOptions(minutes: List<Int>, onChange: (List<Int>) -> Unit) {
-    var custom by remember { mutableStateOf("") }; var unit by remember { mutableStateOf("60") }
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf(0 to "開始時", 10 to "10分前", 30 to "30分前", 60 to "1時間前", 1440 to "1日前").forEach { (offset, label) -> FilterChip(offset in minutes, { onChange(if (offset in minutes) minutes - offset else (minutes + offset).distinct().sorted()) }, label = { Text(label) }) }; FilterChip(minutes.isEmpty(), { onChange(emptyList()) }, label = { Text("通知なし") }) }
-    minutes.filter { it !in listOf(0, 10, 30, 60, 1440) }.forEach { value -> InputChip(true, onClick = { onChange(minutes - value) }, label = { Text("${if (value % 1440 == 0) "${value / 1440}日前" else if (value % 60 == 0) "${value / 60}時間前" else "${value}分前"} ×") }) }
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) { OutlinedTextField(custom, { custom = it.filter(Char::isDigit).take(5) }, label = { Text("指定") }, modifier = Modifier.weight(1f), singleLine = true); ChoiceField(when (unit) { "1440" -> "日前"; "60" -> "時間前"; else -> "分前" }, listOf("1" to "分前", "60" to "時間前", "1440" to "日前")) { unit = it }; TextButton(enabled = custom.toIntOrNull()?.let { it.toLong() * unit.toInt() in 0..525600 } == true && minutes.size < 10, onClick = { val next = custom.toInt() * unit.toInt(); onChange((minutes + next).distinct().sorted()); custom = "" }) { Text("追加") } }
+    var custom by remember { mutableStateOf("10") }; var unit by remember { mutableStateOf("1") }
+    fun label(value: Int) = when { value == 0 -> "開始時"; value % 1440 == 0 -> "${value / 1440}日前"; value % 60 == 0 -> "${value / 60}時間前"; else -> "${value}分前" }
+    fun add(value: Int) { if (minutes.size < 10 && value !in minutes) onChange((minutes + value).distinct().sorted()) }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("1日前と1時間前など、複数のタイミングで通知できます（最大10件）。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (minutes.isEmpty()) Text("通知なし", style = MaterialTheme.typography.bodyMedium)
+        else {
+            Text("設定した通知：${minutes.size}件", style = MaterialTheme.typography.labelLarge)
+            minutes.distinct().sortedDescending().forEach { value -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Notifications, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary); Text(label(value), Modifier.weight(1f).padding(start = 10.dp)); IconButton(onClick = { onChange(minutes - value) }) { Icon(Icons.Default.Close, "${label(value)}の通知を削除") } } }
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(0, 10, 30, 60, 1440).forEach { offset -> AssistChip(onClick = { add(offset) }, enabled = offset !in minutes && minutes.size < 10, label = { Text(label(offset)) }, leadingIcon = { Icon(Icons.Default.Add, null, Modifier.size(16.dp)) }) }
+        }
+        val customMinutes = custom.toIntOrNull()?.toLong()?.times(unit.toLong())
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedTextField(custom, { custom = it.filter(Char::isDigit).take(5) }, label = { Text("指定") }, modifier = Modifier.weight(1f), singleLine = true)
+            ChoiceField(when (unit) { "1440" -> "日前"; "60" -> "時間前"; else -> "分前" }, listOf("1" to "分前", "60" to "時間前", "1440" to "日前")) { unit = it }
+            FilledTonalButton(enabled = customMinutes != null && customMinutes in 0..525600 && customMinutes.toInt() !in minutes && minutes.size < 10, onClick = { add(customMinutes!!.toInt()); custom = "" }) { Text("通知を追加") }
+        }
+        if (minutes.isNotEmpty()) TextButton(onClick = { onChange(emptyList()) }) { Text("通知なしにする") }
+    }
 }

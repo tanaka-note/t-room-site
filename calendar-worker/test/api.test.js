@@ -27,7 +27,7 @@ const settings=()=>({theme:'blue',startPage:'MONTH',durationMinutes:60,reminders
 test('existing preferences and all palette/appearance combinations persist through sync',async()=>{
   const f=fixture(),cookie=await f.login();let version=0;
   assert.equal((await f.mutate(cookie,'settings',settings(),version++)).status,200);
-  for(const theme of ['blue','mint','lavender','rose','peach','gray'])for(const appearance of ['system','light','dark']){
+  for(const theme of ['blue','mint','lavender','rose','peach','gray','sky','turquoise','navy','plum','amber','coral'])for(const appearance of ['system','light','dark']){
     const payload={...settings(),theme,appearance};
     assert.equal((await f.mutate(cookie,'settings',payload,version++)).status,200);
     const own=(await f.call('sync',{cookie})).body.entities.find(e=>e.kind==='settings');
@@ -42,6 +42,15 @@ test('appearance validation keeps the settings field boundary strict',async()=>{
   for(const patch of [{theme:'unknown'},{appearance:'unknown'},{appearance:null},{appearance:0},{appearance:'dark',customPalette:'#000000'}]){
     assert.equal((await f.mutate(cookie,'settings',{...settings(),...patch})).status,400);
   }
+});
+
+test('multiple standard reminders and individual overrides survive settings sync',async()=>{
+  const f=fixture(),cookie=await f.login(),appointment=event();
+  assert.equal((await f.mutate(cookie,'event',appointment)).status,200);
+  const payload={...settings(),reminders:[10,60,1440],eventReminders:{[appointment.id]:[30,120]}};
+  assert.equal((await f.mutate(cookie,'settings',payload)).status,200);
+  const saved=(await f.call('sync',{cookie})).body.entities.find(e=>e.kind==='settings');
+  assert.deepEqual(saved.payload.reminders,[10,60,1440]);assert.deepEqual(saved.payload.eventReminders[appointment.id],[30,120]);
 });
 
 test('explicit linked accounts isolate events while the same account shares events and keeps Identity settings private',async()=>{

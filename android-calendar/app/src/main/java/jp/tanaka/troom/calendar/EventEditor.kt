@@ -38,6 +38,8 @@ import java.util.Locale
     var allDay by remember { mutableStateOf(base.allDay) }; var startTime by remember { mutableStateOf(if (base.allDay) LocalTime.of(9, 0) else base.start.toLocalTime()) }
     var endTime by remember { mutableStateOf(if (base.allDay) LocalTime.of(9, 0).plusMinutes(state.settings.durationMinutes.toLong()) else base.end.toLocalTime()) }
     var endEdited by remember { mutableStateOf(existing != null) }
+    var quickEntryEnabled by remember { mutableStateOf(existing == null) }
+    val quickInput = remember(title, quickEntryEnabled) { if (quickEntryEnabled) parseEventTimeInput(title) else EventTimeInput(title.trim()) }
     var tracking by remember { mutableStateOf(base.trackIds.isNotEmpty() || prefillTrack != null) }
     var trackNames by remember { mutableStateOf(state.tracks.filter { it.id in base.trackIds || it.id == prefillTrack }.map { it.name }.toSet()) }
     var newTracks by remember { mutableStateOf("") }; var tagNames by remember { mutableStateOf(state.tags.filter { it.id in base.tagIds }.map { it.name }.toSet()) }
@@ -56,6 +58,8 @@ import java.util.Locale
     fun pickDate(current: LocalDate, callback: (LocalDate) -> Unit) { DatePickerDialog(context, { _, y, m, d -> callback(LocalDate.of(y, m + 1, d)) }, current.year, current.monthValue - 1, current.dayOfMonth).show() }
     fun pickTime(current: LocalTime, callback: (LocalTime) -> Unit) { TimePickerDialog(context, { _, h, m -> callback(LocalTime.of(h, m)) }, current.hour, current.minute, true).show() }
     fun updateEnd() { if (!endEdited && !allDay) { val end = startDate.atTime(startTime).plusMinutes(state.settings.durationMinutes.toLong()); endDate = end.toLocalDate(); endTime = end.toLocalTime() } }
+    fun applyQuickInput(value: EventTimeInput) { if (value.hasTime) { allDay = false; startTime = value.start!!; endTime = value.end!!; endDate = startDate.plusDays(if (value.endsNextDay) 1 else 0); endEdited = true } }
+    fun commitQuickInput() { val input = if (quickEntryEnabled) parseEventTimeInput(title) else EventTimeInput(title.trim()); if (input.hasTime) { applyQuickInput(input); title = input.title } }
     fun failInput(field: String, message: String) {
         errorField = field; error = message
         if (field == "repeat" || field == "url") extras = true
@@ -69,6 +73,9 @@ import java.util.Locale
                     Text(if (existing == null) "予定を追加" else "予定を編集", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                     Button(enabled = !saving, onClick = {
                         if (title.isBlank()) { failInput("title", "予定名を入力してください。"); return@Button }
+                        val input = if (quickEntryEnabled) parseEventTimeInput(title) else EventTimeInput(title.trim())
+                        input.error?.let { failInput("title", it); return@Button }
+                        applyQuickInput(input)
                         val from = if (allDay) startDate.atStartOfDay() else startDate.atTime(startTime)
                         val through = if (allDay) endDate.plusDays(1).atStartOfDay() else endDate.atTime(endTime)
                         if (through <= from) { failInput("dates", "終了日時を開始日時より後にしてください。"); return@Button }
@@ -78,7 +85,7 @@ import java.util.Locale
                         if (url.isNotBlank() && !url.startsWith("https://") && !url.startsWith("http://")) { failInput("url", "URLはhttps://またはhttp://で入力してください。"); return@Button }
                         val names = if (tracking) trackNames.toList() + newTracks.split('、', ',') else emptyList()
                         val tags = tagNames.toList() + newTags.split('、', ',')
-                        val value = base.copy(title = title.trim(), start = from, end = through, allDay = allDay, color = color, place = place.trim(), memo = memo, url = url.trim(), repeat = repeat, excludedDates = excludedDates)
+                        val value = base.copy(title = input.title, start = from, end = through, allDay = allDay, color = color, place = place.trim(), memo = memo, url = url.trim(), repeat = repeat, excludedDates = excludedDates)
                         eventValidation(value)?.let { failInput("repeat", it); return@Button }
                         saving = true; error = null; errorField = ""
                         scope.launch { try { if (!onSave(value, names, tags, if (noticesOverride) notices else null)) error = "保存できませんでした。入力は保持しています。" } catch (e: Exception) { error = e.message ?: "保存できませんでした。" } finally { saving = false } }
@@ -87,11 +94,13 @@ import java.util.Locale
                 if (saving) LinearProgressIndicator(Modifier.fillMaxWidth())
                 if (errorField.isEmpty()) error?.let { Text(it, Modifier.fillMaxWidth().padding(10.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                 Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedTextField(title, { title = it.take(200); if (errorField == "title") { error = null; errorField = "" } }, modifier = Modifier.fillMaxWidth().focusRequester(titleFocus).bringIntoViewRequester(titleView), label = { Text("予定名（必須）") }, placeholder = { Text("例：佐藤と公園") }, singleLine = true, isError = errorField == "title", supportingText = if (errorField == "title") ({ Text(error.orEmpty()) }) else null)
-                    EditorSwitch("終日", allDay, !saving) { allDay = it; if (!it) { endEdited = false; updateEnd() } }
+                    OutlinedTextField(title, { value -> title = value.take(200); quickEntryEnabled = true; applyQuickInput(parseEventTimeInput(title)); if (errorField == "title") { error = null; errorField = "" } }, modifier = Modifier.fillMaxWidth().focusRequester(titleFocus).bringIntoViewRequester(titleView), label = { Text("予定名・時刻（予定名は必須）") }, placeholder = { Text("例：$EVENT_TIME_INPUT_EXAMPLE") }, singleLine = true, isError = errorField == "title", supportingText = {
+                        Text(if (errorField == "title") error.orEmpty() else if (quickInput.hasTime) "${quickInput.start}〜${if (quickInput.endsNextDay) "翌日" else ""}${quickInput.end} ／ 予定名：${quickInput.title}" else "例：$EVENT_TIME_INPUT_EXAMPLE\n時刻なしで予定名だけを入力することもできます。")
+                    })
+                    EditorSwitch("終日", allDay, !saving) { commitQuickInput(); allDay = it; if (!it) { endEdited = false; updateEnd() } }
                     Column(Modifier.fillMaxWidth().bringIntoViewRequester(dateView).background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = .45f), RoundedCornerShape(14.dp)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        EditorDateTime("開始", startDate, startTime, allDay, !saving, onDate = { pickDate(startDate) { day -> val old = startDate; startDate = day; if (endDate == old) endDate = day; updateEnd() } }, onTime = { pickTime(startTime) { startTime = it; updateEnd() } })
-                        EditorDateTime("終了", endDate, endTime, allDay, !saving, onDate = { pickDate(endDate) { endDate = it; endEdited = true } }, onTime = { pickTime(endTime) { endTime = it; endEdited = true } })
+                        EditorDateTime("開始", startDate, startTime, allDay, !saving, onDate = { commitQuickInput(); pickDate(startDate) { day -> val old = startDate; startDate = day; if (endDate == old) endDate = day; updateEnd() } }, onTime = { commitQuickInput(); pickTime(startTime) { startTime = it; updateEnd() } })
+                        EditorDateTime("終了", endDate, endTime, allDay, !saving, onDate = { commitQuickInput(); pickDate(endDate) { endDate = it; endEdited = true } }, onTime = { commitQuickInput(); pickTime(endTime) { endTime = it; endEdited = true } })
                         if (errorField == "dates") Text(error.orEmpty(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     }
                     EventColorPicker(color) { color = it }
