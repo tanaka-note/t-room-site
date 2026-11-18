@@ -57,6 +57,7 @@ var tests = new List<(string Name, Func<Task> Run)>
 if (args.Contains("--native"))
 {
     tests.Add(("real Windows placeholders hydrate on demand with random seeks", NativeHydration));
+    tests.Add(("Windows consumers cannot read content that fails persisted validation", NativeHydrationIntegrity));
     tests.Add(("real Windows deletion requests can be rejected without losing the file", NativeDeleteVeto));
     tests.Add(("application file replacement retains its saved body after Cloud Files conversion", NativeReplacementConversion));
     tests.Add(("persisted Windows RSA keys decrypt but cannot export private material or sign", NativePrivateKey));
@@ -286,9 +287,22 @@ static async Task NativeHydrationOnce()
             + string.Join(",", fixture.Errors.Select(error => $"0x{error.HResult:X8}"))
             + "; fetch trace: " + string.Join(" | ", fixture.FetchDiagnostics));
         Check(fixture.FetchCount > 0, "native fetch callback actually ran");
+        Check(fixture.ValidationCount > 0, "persisted native content was validated before consumer reads");
         Check(fixture.Errors.IsEmpty, "provider callback errors");
     }
     finally { CryptographicOperations.ZeroMemory(plain); }
+}
+
+static Task NativeHydrationIntegrity()
+{
+    using var fixture = CloudFilesFixture.Create(corruptValidation: true);
+    fixture.Add("fixture.bin", new byte[8192]);
+    var path = Path.Combine(fixture.Root, "fixture.bin");
+    var result = FixtureClient.Run($"$null=[System.IO.File]::ReadAllBytes({FixtureClient.PathArgument(path)})");
+    Check(!result.Succeeded && result.Error == "0x8007017F", "invalid cached content fails with Cloud Files validation failed");
+    Check(fixture.ValidationCount == 0, "invalid content was never acknowledged");
+    Check(fixture.Errors.Any(error => error is InvalidDataException), "the failed integrity check was recorded");
+    return Task.CompletedTask;
 }
 
 static async Task NativeDeleteVeto()

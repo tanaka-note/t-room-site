@@ -8,6 +8,7 @@ internal static class CloudFilesNative
 {
     internal const int StatusUnsuccessful = unchecked((int)0xC000CF12);
     internal const int StatusAccessDenied = unchecked((int)0xC000CF18);
+    internal const int StatusValidationFailed = unchecked((int)0xC000CF0E);
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     internal struct Registration
     {
@@ -112,6 +113,25 @@ internal static class CloudFilesNative
         [FieldOffset(24)] public long Offset;
         [FieldOffset(32)] public long Length;
     }
+    [StructLayout(LayoutKind.Explicit, Size = 48)]
+    internal struct RetrieveParameters
+    {
+        [FieldOffset(0)] public uint ParamSize;
+        [FieldOffset(8)] public uint Flags;
+        [FieldOffset(16)] public nint Buffer;
+        [FieldOffset(24)] public long Offset;
+        [FieldOffset(32)] public long Length;
+        [FieldOffset(40)] public long ReturnedLength;
+    }
+    [StructLayout(LayoutKind.Explicit, Size = 32)]
+    internal struct AcknowledgeDataParameters
+    {
+        [FieldOffset(0)] public uint ParamSize;
+        [FieldOffset(8)] public uint Flags;
+        [FieldOffset(12)] public int CompletionStatus;
+        [FieldOffset(16)] public long Offset;
+        [FieldOffset(24)] public long Length;
+    }
 
     [DllImport("cldapi.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
     internal static extern int CfRegisterSyncRoot(string path, in Registration registration, in Policies policies, uint flags);
@@ -126,6 +146,10 @@ internal static class CloudFilesNative
     internal static extern int CfCreatePlaceholders(string path, [In, Out] Placeholder[] placeholders, uint count, uint flags, out uint processed);
     [DllImport("cldapi.dll", PreserveSig = true)]
     internal static extern int CfExecute(in OperationInfo info, in TransferParameters parameters);
+    [DllImport("cldapi.dll", PreserveSig = true)]
+    internal static extern int CfExecute(in OperationInfo info, ref RetrieveParameters parameters);
+    [DllImport("cldapi.dll", PreserveSig = true)]
+    internal static extern int CfExecute(in OperationInfo info, in AcknowledgeDataParameters parameters);
     [DllImport("cldapi.dll", PreserveSig = true)]
     internal static extern int CfConvertToPlaceholder(SafeFileHandle handle, byte[] identity, uint identityLength,
         uint flags, out long convertUsn, nint overlapped);
