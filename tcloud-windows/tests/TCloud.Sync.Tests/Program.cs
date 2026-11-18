@@ -41,6 +41,7 @@ if (args.Contains("--compatibility-probe"))
 var tests = new List<(string Name, Func<Task> Run)>
 {
     ("browser encryption interoperates in both directions", BrowserCrypto),
+    ("file keys, metadata and folder names interoperate with the current Web vault", BrowserFilePackage),
     ("ciphertext integrity and chunk identity are authenticated", Integrity),
     ("random reads cross encrypted chunks and stop at EOF", Ranges),
     ("Cloud Files transfer ranges satisfy native alignment and EOF requirements", NativeTransferRanges),
@@ -56,7 +57,8 @@ var tests = new List<(string Name, Func<Task> Run)>
 };
 if (args.Contains("--native"))
 {
-    tests.Add(("real Windows placeholders hydrate on demand with random seeks", NativeHydration));
+    tests.Add(("real Windows placeholders hydrate on demand with random seeks", () => NativeHydration(false)));
+    tests.Add(("Windows full hydration supports cached asynchronous reads and random seeks", () => NativeHydration(true)));
     tests.Add(("real Windows deletion requests can be rejected without losing the file", NativeDeleteVeto));
     tests.Add(("application file replacement retains its saved body after Cloud Files conversion", NativeReplacementConversion));
     tests.Add(("persisted Windows RSA keys decrypt but cannot export private material or sign", NativePrivateKey));
@@ -98,6 +100,58 @@ static async Task BrowserCrypto()
         Check(plain.AsSpan().SequenceEqual(EncryptedChunks.Decrypt(key, browserEnvelope, 37)), "browser to C#");
     }
     finally { CryptographicOperations.ZeroMemory(key); CryptographicOperations.ZeroMemory(plain); }
+}
+
+static async Task BrowserFilePackage()
+{
+    var folderKey = RandomNumberGenerator.GetBytes(32);
+    var fileKey = RandomNumberGenerator.GetBytes(32);
+    try
+    {
+        var metadata = new CloudFileMetadata("試験の動画.mp4", "video/mp4", "video", 1730000000000);
+        var encrypted = CloudFileCrypto.EncryptMetadata(fileKey, metadata);
+        var wrapped = CloudFileCrypto.WrapFile(folderKey, fileKey);
+        var start = new ProcessStartInfo("node") { UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
+        start.ArgumentList.Add(Path.Combine(RepositoryRoot(), "tcloud-windows", "tests", "webcrypto-interop.mjs"));
+        using var child = Process.Start(start) ?? throw new IOException("Could not start browser file fixture.");
+        var output = child.StandardOutput.ReadToEndAsync();
+        var errors = child.StandardError.ReadToEndAsync();
+        await child.StandardInput.WriteAsync(JsonSerializer.Serialize(new { mode = "file-package",
+            folderKey = Convert.ToBase64String(folderKey), fileKey = Convert.ToBase64String(fileKey),
+            metadata = new { name = metadata.Name, mimeType = metadata.MimeType, mediaKind = metadata.MediaKind, lastModified = metadata.LastModified },
+            file = new { encryptedMetadata = encrypted.Ciphertext, metadataIv = encrypted.Iv,
+                wrappedFileKey = wrapped.Ciphertext, fileKeyIv = wrapped.Iv } }));
+        child.StandardInput.Close();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        try { await child.WaitForExitAsync(deadline.Token); }
+        catch { child.Kill(entireProcessTree: true); await child.WaitForExitAsync(); throw; }
+        _ = await errors;
+        Check(child.ExitCode == 0, "browser file fixture completed");
+        using var document = JsonDocument.Parse(await output);
+        var root = document.RootElement;
+        Check(root.GetProperty("metadata").GetProperty("name").GetString() == metadata.Name, "browser decrypted Windows metadata with the wrapped file key");
+        CloudCipherEnvelope Envelope(string property, string value, string iv)
+            => new(root.GetProperty(property).GetProperty(value).GetString()!, root.GetProperty(property).GetProperty(iv).GetString()!);
+        Check(CloudFileCrypto.DecryptMetadata(fileKey, Envelope("metadataEnvelope", "encryptedMetadata", "metadataIv")) == metadata,
+            "Windows decrypted browser metadata");
+        var unlocked = CloudFileCrypto.UnlockFile(folderKey, Envelope("fileEnvelope", "wrappedFileKey", "fileKeyIv"));
+        try { Check(unlocked.AsSpan().SequenceEqual(fileKey), "Windows unwrapped browser file key"); }
+        finally { CryptographicOperations.ZeroMemory(unlocked); }
+        var childKey = CloudFileCrypto.UnlockChildFolder(folderKey, Envelope("child", "parentWrappedKey", "parentWrapIv"));
+        try { Check(childKey.AsSpan().SequenceEqual(fileKey), "Windows unwrapped browser child folder"); }
+        finally { CryptographicOperations.ZeroMemory(childKey); }
+        Check(CloudFileCrypto.DecryptFolderName(folderKey, Envelope("name", "encryptedName", "nameIv")) == "同期用写真", "browser folder name decrypted");
+        Throws<CryptographicException>(() => CloudFileCrypto.UnlockChildFolder(folderKey, wrapped));
+        Throws<CryptographicException>(() => CloudFileCrypto.DecryptMetadata(fileKey, encrypted with { Iv = encrypted.Iv + "=" }));
+        Throws<CryptographicException>(() => CloudFileCrypto.EncryptMetadata(fileKey, metadata with { Name = "" }));
+        using var rsa = RSA.Create(2048);
+        var rsaEnvelope = Convert.ToBase64String(rsa.Encrypt(folderKey, RSAEncryptionPadding.OaepSHA256)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var administratorFolderKey = CloudFileCrypto.UnlockFolder(rsa, rsaEnvelope);
+        try { Check(administratorFolderKey.AsSpan().SequenceEqual(folderKey), "existing RSA folder key format decrypted"); }
+        finally { CryptographicOperations.ZeroMemory(administratorFolderKey); }
+    }
+    finally { CryptographicOperations.ZeroMemory(folderKey); CryptographicOperations.ZeroMemory(fileKey); }
 }
 
 static Task Integrity()
@@ -268,20 +322,20 @@ static Task Destination()
     return Task.CompletedTask;
 }
 
-static async Task NativeHydration()
+static async Task NativeHydration(bool full)
 {
     // Hydration overlaps the filter's background fetches; repeat on fresh placeholders
     // to expose failures that depend on which request finishes first.
     for (var iteration = 0; iteration < 3; iteration++)
     {
-        await NativeHydrationOnce(3 * 1024 * 1024 + 107);
-        await NativeHydrationOnce(24 * 1024 * 1024 + 107);
+        await NativeHydrationOnce(3 * 1024 * 1024 + 107, full);
+        await NativeHydrationOnce(24 * 1024 * 1024 + 107, full);
     }
 }
 
-static async Task NativeHydrationOnce(int size)
+static async Task NativeHydrationOnce(int size, bool full)
 {
-    using var fixture = CloudFilesFixture.Create();
+    using var fixture = CloudFilesFixture.Create(requireFullHydration: full);
     var plain = RandomNumberGenerator.GetBytes(size);
     try
     {

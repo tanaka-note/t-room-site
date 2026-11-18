@@ -9,7 +9,21 @@ const context = { crypto: webcrypto, TextEncoder, TextDecoder, Uint8Array, Array
 context.window = context;
 vm.runInNewContext(await readFile(new URL('../../cloud-worker/public/vendor/argon2.umd.min.js', import.meta.url), 'utf8'), context);
 vm.runInNewContext(await readFile(new URL('../../cloud-worker/public/crypto-vault.js', import.meta.url), 'utf8'), context);
-if (request.mode === 'passkey-envelope') {
+if (request.mode === 'file-package') {
+  const folderBytes = Buffer.from(request.folderKey, 'base64');
+  const keyBytes = Buffer.from(request.fileKey, 'base64');
+  try {
+    const folder = await webcrypto.subtle.importKey('raw', folderBytes, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+    const fileKey = await webcrypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+    const unlocked = await context.TRoomCrypto.unlockFileKey(request.file, folder);
+    const metadata = await context.TRoomCrypto.decryptFileMetadata(request.file, unlocked);
+    const fileEnvelope = await context.TRoomCrypto.rewrapFileForFolder(fileKey, folder);
+    const metadataEnvelope = await context.TRoomCrypto.encryptFileMetadata(request.metadata, fileKey);
+    const child = await context.TRoomCrypto.rewrapFolderForParent(fileKey, folder);
+    const name = await context.TRoomCrypto.encryptFolderName('同期用写真', folder);
+    process.stdout.write(JSON.stringify({ metadata, fileEnvelope, metadataEnvelope, child, name }));
+  } finally { folderBytes.fill(0); keyBytes.fill(0); }
+} else if (request.mode === 'passkey-envelope') {
   const prf = Buffer.from(request.prf, 'base64');
   try {
     const member = await context.TRoomCrypto.createPasskeyClientVault(prf);

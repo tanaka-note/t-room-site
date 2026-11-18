@@ -33,7 +33,7 @@ public sealed class CloudFilesFixture : IDisposable
     public ConcurrentQueue<Exception> Errors { get; } = new();
     public ConcurrentQueue<string> FetchDiagnostics { get; } = new();
 
-    private CloudFilesFixture(string root, bool denyDeletes)
+    private CloudFilesFixture(string root, bool denyDeletes, bool requireFullHydration)
     {
         if (!OperatingSystem.IsWindows() || !Environment.Is64BitProcess)
             throw new PlatformNotSupportedException("Windows 64ビット環境が必要です。");
@@ -54,7 +54,7 @@ public sealed class CloudFilesFixture : IDisposable
             var policies = new CloudFilesNative.Policies
             {
                 StructSize = (uint)Marshal.SizeOf<CloudFilesNative.Policies>(),
-                Hydration = new() { Primary = 1 }, // PROGRESSIVE
+                Hydration = new() { Primary = (ushort)(requireFullHydration ? 2 : 1) }, // FULL / PROGRESSIVE
                 Population = new() { Primary = 3 } // ALWAYS_FULL namespace
             };
             CloudFilesNative.Check(CloudFilesNative.CfRegisterSyncRoot(root, registration, policies, 0));
@@ -73,12 +73,12 @@ public sealed class CloudFilesFixture : IDisposable
         catch { Dispose(); throw; }
     }
 
-    public static CloudFilesFixture Create(bool denyDeletes = false)
+    public static CloudFilesFixture Create(bool denyDeletes = false, bool requireFullHydration = false)
     {
         // No path argument is exposed: a fixture can never adopt a real sync root.
         var root = Path.Combine(Path.GetTempPath(), "tcloud-cfapi-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        try { return new(root, denyDeletes); }
+        try { return new(root, denyDeletes, requireFullHydration); }
         catch { if (Directory.Exists(root)) Directory.Delete(root); throw; }
     }
 
