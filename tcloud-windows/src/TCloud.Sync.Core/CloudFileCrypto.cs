@@ -56,6 +56,11 @@ public static class CloudFileCrypto
         {
             var metadata = JsonSerializer.Deserialize<CloudFileMetadata>(bytes, JsonOptions)
                 ?? throw new CryptographicException("ファイル情報の形式が不正です。");
+            metadata = metadata with
+            {
+                MimeType = string.IsNullOrWhiteSpace(metadata.MimeType) ? "application/octet-stream" : metadata.MimeType,
+                MediaKind = string.IsNullOrWhiteSpace(metadata.MediaKind) ? "other" : metadata.MediaKind
+            };
             ValidateMetadata(metadata);
             return metadata;
         }

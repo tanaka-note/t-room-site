@@ -73,7 +73,7 @@ public sealed class CloudFilesFixture : IDisposable
         catch { Dispose(); throw; }
     }
 
-    public static CloudFilesFixture Create(bool denyDeletes = false, bool requireFullHydration = false)
+    public static CloudFilesFixture Create(bool denyDeletes = false, bool requireFullHydration = true)
     {
         // No path argument is exposed: a fixture can never adopt a real sync root.
         var root = Path.Combine(Path.GetTempPath(), "tcloud-cfapi-" + Guid.NewGuid().ToString("N"));
@@ -256,12 +256,22 @@ public sealed class CloudFilesFixture : IDisposable
         catch (Exception error) { Errors.Enqueue(error); }
     }
 
+    public void StopProvider()
+    {
+        if (connection != 0) { CloudFilesNative.Check(CloudFilesNative.CfDisconnectSyncRoot(connection)); connection = 0; }
+        if (!transfersDone.Wait(TimeSpan.FromSeconds(15))) throw new TimeoutException("検証用の取得処理の終了を確認できません。");
+    }
+
+    public void UnregisterProvider()
+    {
+        StopProvider();
+        if (registered) { CloudFilesNative.Check(CloudFilesNative.CfUnregisterSyncRoot(root)); registered = false; }
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0) return;
-        if (connection != 0) { CloudFilesNative.Check(CloudFilesNative.CfDisconnectSyncRoot(connection)); connection = 0; }
-        if (!transfersDone.Wait(TimeSpan.FromSeconds(15))) throw new TimeoutException("検証用の取得処理の終了を確認できません。");
-        if (registered) { CloudFilesNative.Check(CloudFilesNative.CfUnregisterSyncRoot(root)); registered = false; }
+        UnregisterProvider();
         foreach (var bytes in data.Values) CryptographicOperations.ZeroMemory(bytes);
         data.Clear();
         // This is an owned random temp directory, never a selected HDD folder.

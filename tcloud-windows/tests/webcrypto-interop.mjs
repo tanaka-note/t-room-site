@@ -19,9 +19,10 @@ if (request.mode === 'file-package') {
     const metadata = await context.TRoomCrypto.decryptFileMetadata(request.file, unlocked);
     const fileEnvelope = await context.TRoomCrypto.rewrapFileForFolder(fileKey, folder);
     const metadataEnvelope = await context.TRoomCrypto.encryptFileMetadata(request.metadata, fileKey);
+    const legacyMetadata = await context.TRoomCrypto.encryptFileMetadata({ name: 'legacy.txt' }, fileKey);
     const child = await context.TRoomCrypto.rewrapFolderForParent(fileKey, folder);
     const name = await context.TRoomCrypto.encryptFolderName('同期用写真', folder);
-    process.stdout.write(JSON.stringify({ metadata, fileEnvelope, metadataEnvelope, child, name }));
+    process.stdout.write(JSON.stringify({ metadata, fileEnvelope, metadataEnvelope, legacyMetadata, child, name }));
   } finally { folderBytes.fill(0); keyBytes.fill(0); }
 } else if (request.mode === 'passkey-envelope') {
   const prf = Buffer.from(request.prf, 'base64');

@@ -10,6 +10,13 @@ if (args.Length == 2 && args[0] == "--hydrate-fixture")
     return 0;
 }
 
+if (args.Contains("--progressive-probe"))
+{
+    await NativeHydration(false);
+    Console.WriteLine("PASS diagnostic progressive hydration");
+    return 0;
+}
+
 if (args.Contains("--key-probe"))
 {
     await NativePrivateKey();
@@ -42,6 +49,10 @@ var tests = new List<(string Name, Func<Task> Run)>
 {
     ("browser encryption interoperates in both directions", BrowserCrypto),
     ("file keys, metadata and folder names interoperate with the current Web vault", BrowserFilePackage),
+    ("encrypted originals support pinned random reads and reuse verified chunks", EncryptedReadTests.PinnedReads),
+    ("changed versions and damaged chunks never expose mixed plaintext", EncryptedReadTests.ChangedOrDamaged),
+    ("Cloud ciphertext requests enforce origin, session, range, version and body length", EncryptedReadTests.HttpRanges),
+    ("ending a reader cancels pending transfers and prevents further decryption", EncryptedReadTests.Cancellation),
     ("ciphertext integrity and chunk identity are authenticated", Integrity),
     ("random reads cross encrypted chunks and stop at EOF", Ranges),
     ("Cloud Files transfer ranges satisfy native alignment and EOF requirements", NativeTransferRanges),
@@ -57,8 +68,8 @@ var tests = new List<(string Name, Func<Task> Run)>
 };
 if (args.Contains("--native"))
 {
-    tests.Add(("real Windows placeholders hydrate on demand with random seeks", () => NativeHydration(false)));
     tests.Add(("Windows full hydration supports cached asynchronous reads and random seeks", () => NativeHydration(true)));
+    tests.Add(("saved plaintext originals remain readable after provider stop and unregistration", NativeOfflineOriginal));
     tests.Add(("real Windows deletion requests can be rejected without losing the file", NativeDeleteVeto));
     tests.Add(("application file replacement retains its saved body after Cloud Files conversion", NativeReplacementConversion));
     tests.Add(("persisted Windows RSA keys decrypt but cannot export private material or sign", NativePrivateKey));
@@ -135,6 +146,8 @@ static async Task BrowserFilePackage()
             => new(root.GetProperty(property).GetProperty(value).GetString()!, root.GetProperty(property).GetProperty(iv).GetString()!);
         Check(CloudFileCrypto.DecryptMetadata(fileKey, Envelope("metadataEnvelope", "encryptedMetadata", "metadataIv")) == metadata,
             "Windows decrypted browser metadata");
+        Check(CloudFileCrypto.DecryptMetadata(fileKey, Envelope("legacyMetadata", "encryptedMetadata", "metadataIv"))
+            == new CloudFileMetadata("legacy.txt", "application/octet-stream", "other", 0), "older metadata uses safe defaults");
         var unlocked = CloudFileCrypto.UnlockFile(folderKey, Envelope("fileEnvelope", "wrappedFileKey", "fileKeyIv"));
         try { Check(unlocked.AsSpan().SequenceEqual(fileKey), "Windows unwrapped browser file key"); }
         finally { CryptographicOperations.ZeroMemory(unlocked); }
@@ -349,6 +362,25 @@ static async Task NativeHydrationOnce(int size, bool full)
         Check(fixture.FetchCount > 0, "native fetch callback actually ran");
         Check(NativeReadProbe.ReadHead(path).AsSpan().SequenceEqual(plain.AsSpan(0, 1000)), "event-based overlapped read matches");
         Check(fixture.Errors.IsEmpty, "provider callback errors");
+    }
+    finally { CryptographicOperations.ZeroMemory(plain); }
+}
+
+static async Task NativeOfflineOriginal()
+{
+    using var fixture = CloudFilesFixture.Create();
+    var plain = RandomNumberGenerator.GetBytes(3 * 1024 * 1024 + 107);
+    try
+    {
+        fixture.Add("fixture.bin", plain);
+        var path = Path.Combine(fixture.Root, "fixture.bin");
+        Check((await HydrationProbe.ReadAsync(path, plain)).Succeeded, "initial original saved in plaintext");
+        var fetches = fixture.FetchCount;
+        fixture.StopProvider();
+        Check((await HydrationProbe.ReadAsync(path, plain)).Succeeded, "stopped app requires no provider, key or login to read saved original");
+        fixture.UnregisterProvider();
+        Check((await HydrationProbe.ReadAsync(path, plain)).Succeeded, "unregistered backup is still an ordinary readable body");
+        Check(fixture.FetchCount == fetches, "offline reads never recall the cloud or require authentication");
     }
     finally { CryptographicOperations.ZeroMemory(plain); }
 }
