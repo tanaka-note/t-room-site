@@ -10,8 +10,10 @@ const requestError = (message,status) => Object.assign(new Error(message),{ stat
 const auditAccount = null;
 
 function newId() {
-  const words = crypto.getRandomValues(new Uint32Array(2));
-  return 2 ** 52 + (words[0] & 0xfffff) * 2 ** 32 + words[1];
+  const uuid = crypto.randomUUID().replaceAll("-","");
+  // Keep 52 random bits and skip the fixed UUID version nibble. The leading
+  // hex digit reserves a safe-integer range above the old SQLite row IDs.
+  return Number.parseInt(`1${uuid.slice(0,12)}${uuid[13]}`,16);
 }
 
 function ownRecordId(value) {
