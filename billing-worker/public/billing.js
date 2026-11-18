@@ -110,13 +110,15 @@
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
     el["passkey-login-label"].textContent = "確認中…";
+    let authentication;
     try {
-      const authentication = await TRoomPasskeys.authenticate("billing", choosePasskeyLink);
+      authentication = await TRoomPasskeys.authenticate("billing", choosePasskeyLink);
       const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
       await enterApp(session);
     } catch (error) {
       el["login-error"].textContent = error.message;
     } finally {
+      authentication?.prfOutput?.fill(0);
       button.disabled = false;
       button.removeAttribute("aria-busy");
       el["passkey-login-label"].textContent = "パスキーでログイン";

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fixture, payload } from './performance-fixture.mjs';
+import { summarizeLedger } from '../src/finance.js';
 
 const summaryPath = 'summary?accountId=chiharu&month=2026-10';
 
@@ -157,6 +158,9 @@ test('all admin targets, history, financial signs and CRUD recalculate against a
     async function compare(account, month) {
       const r = await f.request(`summary?accountId=${account}&month=${month}`, cookie);
       assert.equal(r.status, 200);
+      assert.deepEqual(summarizeLedger(accounts.find(candidate => candidate.id === account), month,
+        f.db.prepare('SELECT * FROM billing_entries').all(),
+        f.db.prepare('SELECT * FROM billing_settlements').all()), r.body);
       const expected = reference(f, account, month);
       assert.equal(r.body.openingBalanceYen, expected.opening); assert.equal(r.body.closingBalanceYen, expected.closing);
       assert.deepEqual(r.body.entries.map(e => e.id).sort((a,b)=>a-b), expected.entries);

@@ -191,6 +191,29 @@ export default class SecurityWorker extends WorkerEntrypoint {
     return householdAutomaticContext(this.env,input,validatePasskeySession);
   }
 
+  async getBillingRecoveryContext(input) {
+    const env = this.env;
+    if (input?.service !== "billing" || input.serviceAccountId !== "owner" || input.identityId !== PRIMARY_ADMIN_ID
+      || !(await validatePasskeySession(env, input)).valid) return null;
+    const credential = await activeCredential(env, input.credentialId);
+    if (!credential?.is_security_admin || !credential.prf_enabled || credential.identity_id !== PRIMARY_ADMIN_ID) return null;
+    const billingAccount = await env.BILLING_AUTH.describeAccount({ accountId: input.serviceAccountId });
+    if (!billingAccount?.valid || billingAccount.role !== "owner") return null;
+    const link = (await activeLinks(env, PRIMARY_ADMIN_ID, "cloud", input.credentialId))
+      .find(candidate => candidate.service_account_id === "admin");
+    if (!link) return null;
+    const [config, bundle] = await Promise.all([
+      env.CLOUD_AUTH.getPrimaryAdminCryptoConfig(),
+      tcloudEnvelopeBundle(env, PRIMARY_ADMIN_ID, input.credentialId, link.id, "admin")
+    ]);
+    const envelope = bundle.admin_private_prf;
+    if (!config?.initialized || !config.publicKeyJwk || !envelope?.encryptedPayload || !envelope.payloadIv) return null;
+    return {
+      publicKey: config.publicKeyJwk,
+      envelope: { encryptedPayload: envelope.encryptedPayload, payloadIv: envelope.payloadIv }
+    };
+  }
+
   async getAiBudgetPolicy(identityId) {
     return aiBudgetPolicy(this.env, normalizeIdentityId(identityId));
   }
@@ -509,7 +532,7 @@ async function authenticationOptions(request, env) {
     ORDER BY c.registered_at ASC`);
   const rows = await (["security", "cloud"].includes(service) ? statement.all() : statement.bind(service).all());
   if (!(rows.results || []).length) throw new HttpError(404, "パスキーが登録されていません。管理者からの招待を確認してください。");
-  const extensions = (["security", "cloud", "household"].includes(service)||(service==="diary"&&diaryKeysEnabled(env)))
+  const extensions = (["security", "cloud", "household", "billing"].includes(service)||(service==="diary"&&diaryKeysEnabled(env)))
     ? prfAuthenticationExtensions(rows.results)
     : undefined;
   const options = await generateAuthenticationOptions({

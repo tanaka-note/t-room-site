@@ -3,7 +3,7 @@ import { isValidSessionSecret, requireSessionSecret } from "../../assets/session
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { validatePasswordSession } from "../../assets/password-auth-policy.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
-import { monthBounds, signedDocumentAmount, summarizeSettlements } from "./finance.js";
+import { monthBounds, serializeEntry, serializeSettlement, signedDocumentAmount, summarizeSettlements } from "./finance.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit, withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
 import { validateServicePasskeySession } from "../../assets/passkey-session-validation.mjs";
@@ -172,6 +172,23 @@ async function handleApi(request, env, url, path, context, getSession) {
   if (!session) throw new HttpError(401, "ログインが必要です。");
   if (request.method !== "GET" && !validMutationRequest(request, url)) {
     throw new HttpError(403, "不正なリクエストです。");
+  }
+
+  if (path === "/api/encryption/recovery-context" && request.method === "GET") {
+    requireOwner(session);
+    if (session.authMethod !== "passkey" || session.identityId !== "primary-admin" || session.accountId !== "owner") {
+      throw new HttpError(403, "第一管理者のパスキーが必要です。");
+    }
+    const elapsed = Date.now() - Date.parse(session.startedAt);
+    if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed > 300000) {
+      throw new HttpError(409, "復旧用の鍵を解除するには、パスキーで本人確認してください。");
+    }
+    const recovery = await env.SECURITY.getBillingRecoveryContext({
+      service: "billing", identityId: session.identityId, credentialId: session.credentialId,
+      serviceAccountId: session.accountId, serviceLinkId: session.serviceLinkId, sessionEpoch: session.passkeySessionEpoch
+    });
+    if (!recovery) throw new HttpError(409, "このパスキーの復旧用鍵を確認できません。");
+    return json(recovery);
   }
 
   if (path === "/api/accounts" && request.method === "GET") {
@@ -519,6 +536,9 @@ async function serveAsset(request, env, url, path) {
     ["/tlain-login.css", "/tlain-login.css"],
     ["/tlain-login.js", "/tlain-login.js"],
     ["/billing.js", "/billing.js"],
+    ["/billing-crypto.mjs", "/billing-crypto.mjs"],
+    ["/billing-finance.mjs", "/billing-finance.mjs"],
+    ["/billing-migration.mjs", "/billing-migration.mjs"],
     ["/pwa-install.js", "/pwa-install.js"],
     ["/password-login-audit.js", "/password-login-audit.js"],
     ["/troom-date-picker.css", "/troom-date-picker.css"],
@@ -654,33 +674,6 @@ async function writeAudit(env, input) {
     input.attemptedLoginId || null,
     JSON.stringify(input.details || {})
   ).run();
-}
-
-function serializeEntry(row) {
-  return {
-    id: Number(row.id),
-    documentType: row.document_type,
-    entryDate: row.entry_date,
-    category: row.category,
-    amountYen: Number(row.amount_yen),
-    description: row.description,
-    note: row.note || "",
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
-}
-
-function serializeSettlement(row) {
-  return {
-    id: Number(row.id),
-    settlementDate: row.settlement_date,
-    direction: row.direction,
-    method: row.method,
-    amountYen: Number(row.amount_yen),
-    note: row.note || "",
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  };
 }
 
 function secureResponse(response) {
