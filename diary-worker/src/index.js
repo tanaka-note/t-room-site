@@ -676,6 +676,7 @@ async function serveAsset(request, env, url, path) {
     ["/dialog-navigation.js", "/dialog-navigation.js"],
     ["/diary-photo-processing.js", "/diary-photo-processing.js"],
     ["/diary-photo-upload.js", "/diary-photo-upload.js"],
+    ["/diary-photo-images.js", "/diary-photo-images.js"],
     ["/diary-photo-viewer.js", "/diary-photo-viewer.js"],
     ["/diary-photo-save.js", "/diary-photo-save.js"],
     ["/diary-rich-text.js", "/diary-rich-text.js"],

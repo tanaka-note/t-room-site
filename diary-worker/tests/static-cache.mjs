@@ -15,6 +15,7 @@ const env = { ASSETS: { fetch: async () => new Response("public fixture", { head
 for (const [path, expected] of [
   [`diary.js?v=${build}`, "public, max-age=31536000, immutable"],
   [`diary-bootstrap.js?v=${build}`, "public, max-age=31536000, immutable"],
+  [`diary-photo-images.js?v=${build}`, "public, max-age=31536000, immutable"],
   [`diary-photo-viewer.js?v=${build}`, "public, max-age=31536000, immutable"],
   [`diary-photo-save.js?v=${build}`, "public, max-age=31536000, immutable"],
   [`diary.css?v=${build}`, "public, max-age=31536000, immutable"],
@@ -29,16 +30,21 @@ for (const [path, expected] of [
 for (const path of ["investment.js", "investment.css"]) {
   assert.equal((await worker.fetch(new Request(`${origin}/diary/${path}?v=${build}`), env, {})).status, 404, "protected assets still require authorization");
 }
-const saveModule = await worker.fetch(new Request(`${origin}/diary/diary-photo-save.js?v=${build}`), {
-  ASSETS: { fetch: async request => {
-    assert.equal(new URL(request.url).pathname, "/diary-photo-save.js", "save module must route to its own asset");
-    return new Response(await readFile(new URL("../public/diary-photo-save.js", import.meta.url), "utf8"), {
-      headers: { "Content-Type": "text/javascript" }
-    });
-  } }
-}, {});
-assert.equal(saveModule.status, 200);
-assert.match(await saveModule.text(), /export function createPhotoSaveManager/);
+for (const [file, exported] of [
+  ["diary-photo-save.js", /export function createPhotoSaveManager/],
+  ["diary-photo-images.js", /export function createPhotoImages/]
+]) {
+  const module = await worker.fetch(new Request(`${origin}/diary/${file}?v=${build}`), {
+    ASSETS: { fetch: async request => {
+      assert.equal(new URL(request.url).pathname, `/${file}`, `${file} must route to its own asset`);
+      return new Response(await readFile(new URL(`../public/${file}`, import.meta.url), "utf8"), {
+        headers: { "Content-Type": "text/javascript" }
+      });
+    } }
+  }, {});
+  assert.equal(module.status, 200, file);
+  assert.match(await module.text(), exported);
+}
 const missing = await worker.fetch(new Request(`${origin}/diary/diary.js?v=${build}`), {
   ASSETS: { fetch: async () => new Response("missing", { status: 404 }) }
 }, {});
@@ -79,7 +85,7 @@ stores.set("troom-diary-shell-old", {});
 await lifecycle("install"); await lifecycle("activate");
 assert.equal(stores.has("troom-diary-shell-old"), false);
 assert.ok(fetched.some(url => url.includes("diary-bootstrap.js")));
-assert.equal(fetched.some(url => /\/(?:diary|diary-search|diary-photo-processing|diary-photo-upload|diary-photo-viewer|diary-rich-text|diary-weather|dialog-navigation|troom-date-picker)\.js\?/.test(url)), false, "install must not undo deferred loading");
+assert.equal(fetched.some(url => /\/(?:diary|diary-search|diary-photo-processing|diary-photo-upload|diary-photo-images|diary-photo-viewer|diary-rich-text|diary-weather|dialog-navigation|troom-date-picker)\.js\?/.test(url)), false, "install must not undo deferred loading");
 const path = `/diary/diary.js?v=${build}`;
 let count = fetched.length;
 assert.equal((await fetchAsset(path)).status, 200);
@@ -90,14 +96,16 @@ offline = true;
 assert.equal((await fetchAsset(path)).status, 200);
 assert.equal((await fetchAsset(`/diary/diary-photo-upload.js?v=${build}`)).status, 503);
 offline = false;
-const viewerPath = `/diary/diary-photo-viewer.js?v=${build}`;
-count = fetched.length;
-assert.equal((await fetchAsset(viewerPath)).status, 200);
-assert.equal((await fetchAsset(viewerPath)).status, 200);
-assert.equal(fetched.length, count + 1, 'the photo viewer module uses an exact build cache after its first request');
-offline = true;
-assert.equal((await fetchAsset(viewerPath)).status, 200, 'a previously used viewer remains available offline');
-offline = false;
+for (const file of ["diary-photo-viewer.js", "diary-photo-images.js"]) {
+  const modulePath = `/diary/${file}?v=${build}`;
+  count = fetched.length;
+  assert.equal((await fetchAsset(modulePath)).status, 200, file);
+  assert.equal((await fetchAsset(modulePath)).status, 200, file);
+  assert.equal(fetched.length, count + 1, `${file} uses the exact build cache after its first request`);
+  offline = true;
+  assert.equal((await fetchAsset(modulePath)).status, 200, `${file} remains available offline`);
+  offline = false;
+}
 for (const path of ["/diary/", "/diary/api/bootstrap", "/diary/api/session", "/diary/api/photos/id/display",
   `/diary/investment.js?v=${build}`, `/diary/manifest.webmanifest?v=${build}`, "/diary/service-worker.js",
   "/diary/diary.js?v=diary-000000000000", `/diary/diary.js?v=${build}&other=1`]) {
