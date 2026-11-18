@@ -16,9 +16,7 @@ const cases = [
   ['cloud', 'cloud-worker/public/index.html', '#floating-search-input', '[data-search-clear="floating-search-input"]'],
   ['cloud', 'cloud-worker/public/share.html', '#share-search', '#share-search-clear'],
   ['inventory', 'inventory-worker/public/index.html', '#search', '#search-clear'],
-  ['site', 'diary.html', '#diary-search-input', '[data-diary-search-clear]'],
-  ['site', 'learning/index.html', '#learning-global-search', '[data-learning-search-clear]'],
-  ['site', 'learning/sharoushi/logs/index.html', '#learning-log-search', '[data-learning-search-clear]']
+  ['site', 'diary.html', '#diary-search-input', '[data-diary-search-clear]']
 ];
 const selected = cases.filter(([target]) => !process.env.VERIFY_TARGET || process.env.VERIFY_TARGET === target);
 assert.ok(selected.length, 'Select a service with search clear buttons');

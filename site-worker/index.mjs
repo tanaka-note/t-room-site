@@ -1,5 +1,7 @@
 import { lineBrowserResponse } from "../assets/line-browser-worker.mjs";
 
+import { isRetiredSitePath, retiredServiceResponse } from "./retired-services.mjs";
+
 export const LEGACY_REPORT = '/asset-report-k7m4q9x2';
 // Keep this URL available for installed legacy PWAs, including old ?v= values.
 // Never clear another app's caches or registrations on this origin.
@@ -37,6 +39,9 @@ export function legacyReportResponse(request) {
 }
 export default {
   fetch(request, env) {
+    let path = new URL(request.url).pathname;
+    try { path = decodeURIComponent(path); } catch { /* Let the asset handler reject malformed paths. */ }
+    if (isRetiredSitePath(path)) return retiredServiceResponse(request);
     return lineBrowserResponse(request) || legacyReportResponse(request) || env.ASSETS.fetch(request);
   }
 };

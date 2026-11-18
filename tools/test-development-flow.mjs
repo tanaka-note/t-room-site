@@ -10,35 +10,18 @@ import { localConfig } from './local-dev.mjs';
 import { assertPreviewSafe, prepareReleaseDependencies, releaseProfile } from './release.mjs';
 import { safeEvent } from './worker-logs.mjs';
 import { normalizeTextForHash } from './web-app-registry.mjs';
-import { assertHealthProductionReady } from './health-production-preflight.mjs';
-import { runProductionDelivery } from './release.mjs';
 
 test('Diary sealed trust and backup protocol changes also verify their Backup Worker consumer',()=>{
   for(const path of ['diary-worker/e2ee/trust.mjs','diary-worker/e2ee/backup.mjs'])assert.ok(affected([path]).includes('backup'),path);
 });
 
-test('Health production guard stops incomplete configuration before deploy without querying secret values', () => {
-  assert.deepEqual(affected(['tools/health-production-preflight.mjs']),['tooling']);
-  const valid = { d1_databases: [{binding:'DB',database_id:'11111111-2222-3333-4444-555555555555'}], vars:{PASSKEY_ENABLED:'true'},
-    assets:{binding:'ASSETS',directory:'public'}, services:[{binding:'SECURITY',service:'t-room-security'}],
-    queues:{producers:[{binding:'SECURITY_AUDIT',queue:'t-room-security-audit'}]} };
-  const invalid = [
-    {...valid,d1_databases:[]}, {...valid,d1_databases:[{binding:'DB',database_id:'00000000-0000-0000-0000-000000000000'}]},
-    {...valid,vars:{PASSKEY_ENABLED:'false'}}, {...valid,vars:{}}, {...valid,services:[]}, {...valid,assets:{}}, {...valid,queues:{}},
-    {...valid,vars:{PASSKEY_ENABLED:'true',SESSION_SECRET:'forbidden-fixture'}}
-  ];
-  for (const config of invalid) {
-    const calls=[];
-    assert.throws(() => runProductionDelivery({deployTarget:'t-room-health'}, {rootDirectory:'root',deployDirectory:'health',
-      runCommand:(_cwd,args)=>calls.push(args),healthPreflight:()=>assertHealthProductionReady(config,()=>{throw new Error('Must not query secrets for invalid config');})}), /Health/);
-    assert.equal(calls.length,1);assert.match(calls[0][0],/check-web-app-builds/);
+test('the retired Health Worker has a route and no data or shared-service bindings', () => {
+  const config = JSON.parse(readFileSync(resolve(root, 'health-worker/wrangler.jsonc'), 'utf8'));
+  assert.equal(config.name, 't-room-health');
+  assert.deepEqual(config.routes.map(route => route.pattern), ['tanaka-note.com/health*']);
+  for (const key of ['assets', 'vars', 'd1_databases', 'services', 'queues']) {
+    assert.equal(Object.hasOwn(config, key), false, key);
   }
-  assert.throws(()=>assertHealthProductionReady(valid,()=>[]),/SESSION_SECRET/);
-  assert.throws(()=>assertHealthProductionReady(valid,()=>{throw new Error('metadata unavailable');}),/metadata unavailable/);
-  const calls=[];
-  runProductionDelivery({deployTarget:'t-room-health'},{rootDirectory:'root',deployDirectory:'health',runCommand:(_cwd,args)=>calls.push(args),
-    healthPreflight:()=>assertHealthProductionReady(valid,()=>['SESSION_SECRET'])});
-  assert.equal(calls.length,3);assert.equal(calls[1].at(-1),'deploy');assert.match(calls[2][0],/verify-web-app-builds/);
 });
 
 test('asset report data, rendering, update tools and tests always select the standard site regression', () => {

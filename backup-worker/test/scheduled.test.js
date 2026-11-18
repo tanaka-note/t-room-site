@@ -6,9 +6,9 @@ import {SERVICES} from '../src/registry.js';
 import {backupService,capture,compress,digest} from '../src/backup.js';
 import {getBackupSnapshot} from '../src/browser.js';
 import {database,d1,Bucket} from './fixtures.mjs';
-import {dispatchServices} from '../src/dispatch.js';
+import {dispatchServices,scheduledBackupServices} from '../src/dispatch.js';
 
-const ids=Object.keys(SERVICES);
+const ids=Object.keys(SERVICES).filter(id=>id!=='health');
 const scheduledTime=Date.now();
 // Execute the actual entrypoint; only the Workers-only RPC base class and its
 // imports are supplied by the fixture. The scheduled handler is never replaced.
@@ -19,7 +19,7 @@ const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8')
  .replace('export default {','globalThis.worker = {');
 function harness(backup) {
  const info=[],errors=[],calls=[];
- const context={WorkerEntrypoint:class{},SERVICES,crypto,getBackupSnapshot,dispatchServices,
+ const context={WorkerEntrypoint:class{},crypto,getBackupSnapshot,dispatchServices,scheduledBackupServices,
   console:{log:value=>info.push(value),error:value=>errors.push(value)},
   backupService:async(env,id,now)=>{calls.push(id);return backup(env,id,now);}};
  vm.runInNewContext(source,context);

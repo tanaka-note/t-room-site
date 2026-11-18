@@ -24,7 +24,7 @@ Security Centerは「誰か」を表すIdentity、パスキー、招待、承認
 
 通常のruntime観測は現在行の読み取りだけとし、行がない場合だけ初期化する。SecretのOFF観測時は従来どおりepoch更新とgate停止を行う。一般サービスのrolling read／touchはIdentity・credential・link・runtime・台帳を同じJOINで現在照合し、別リクエストや後続touchへ検証結果を持ち越さない。Cloud・日記・請求書は同一リクエストの初回検証だけを再利用できるが、対象操作の応答・更新Cookie発行前のlive touch、元Cookie期限とサービスversion、必要なaccount role／version・Cloud rootの確認は維持する。旧形式sessionの既存最終確認と、同期監査／Queue fallbackの配送境界は変更しない。
 
-体調管理の通常保護APIは内部`validatePasskeySession` RPCへ`requireHealthKeyReady`を指定し、Identity・credential・link・epochとmember／vault／grant／configの準備状態を確認する。対応済みSecurityは鍵envelopeを返さず準備状態だけを返す。旧Securityがこの項目を返さない公開途中の組合せでは、従来のliveな鍵bundle確認を維持し、RPC失敗や明示的な拒否ではfallbackしない。ログイン時の鍵bundle取得と、体調管理のセッション期限・ログアウト方式は変更しない。
+体調管理の旧パスキー連携と再構築時の参照先は[サービス終了の記録](../history/2026-11-18-service-retirement.md)を参照する。
 
 T-Cloudの起動はsession確認とcrypto-config取得後、現在のsessionに厳密に一致するdevice vaultを検証する。正常ならWebAuthn・handoff・新しいsession発行なしで復元する。ページ再読込、タブ再作成、ブラウザ／PWA／PC再起動も、persistent CookieとIndexedDBが保持されている期限内なら同じ経路を使う。タブが別sessionへの切替でblockedになった場合は自動復元せず、従来どおり選び直しを求める。保存領域非対応・破損・鍵検証失敗・binding不一致なら既存のWebAuthn／PRF経路へfallbackする。期限切れ・署名不正・権限失効ではcacheを使用せずログイン画面へ戻す。
 

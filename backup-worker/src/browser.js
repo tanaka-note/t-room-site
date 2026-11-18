@@ -1,4 +1,5 @@
 import { SERVICES } from './registry.js';
+import { scheduledBackupServices } from './dispatch.js';
 import { listObjects } from './backup.js';
 import { runState } from './monitor.js';
 
@@ -24,16 +25,18 @@ async function dataBytes(bucket, prefix) {
   return total;
 }
 export async function storageSnapshot(env, refresh = false, cache = globalThis.caches?.default) {
+  const serviceIds = scheduledBackupServices();
   const cached = await cache?.match(CACHE_KEY).catch(() => null);
   if (cached) {
     const value = await cached.json();
     // A cached snapshot from before a registry addition must not hide the service.
-    const expected=[...Object.keys(SERVICES),'security-audit'].sort().join(',');
+    const expected=[...serviceIds,'security-audit'].sort().join(',');
     if (Array.isArray(value.services) && value.services.map(s=>s.id).sort().join(',')===expected
       && (!refresh || Date.now() - Date.parse(value.observedAt) < 60000)) return value;
   }
   const services = [];
-  for (const [id, spec] of Object.entries(SERVICES)) {
+  for (const id of serviceIds) {
+    const spec = SERVICES[id];
     try {
       const [v3Daily, v3Monthly, v2Daily, v2Monthly, legacyDaily, legacyMonthly, storedDataBytes,v4Daily,v4Monthly,v4Bytes] = await Promise.all([
         listObjects(env.BACKUP, `d1/${id}/v3/daily/`), listObjects(env.BACKUP, `d1/${id}/v3/monthly/`),

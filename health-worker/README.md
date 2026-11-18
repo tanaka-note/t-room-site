@@ -1,5 +1,7 @@
 # 体調管理
 
+現在の公開Workerは終了応答を返す。以下は運用時の仕様資料。公開停止と再構築の参照先は[サービス終了の記録](../docs/history/2026-11-18-service-retirement.md)。
+
 本人名義の1アカウントを、本人と第一管理者がそれぞれのパスキーで共同管理するWebアプリ。新しいID・パスワードは発行しない。本番URLは `https://tanaka-note.com/health/`。初回利用はSecurity Centerで連携・鍵準備・承認を行う。連携追加とオーナーによる鍵の承認はユーザー詳細のサービス連携内で行い、本人の利用準備は `/security/#health-setup` を使う。旧 `/security/health.html` は同じ利用準備へ転送する。
 
 ## 記録と予測

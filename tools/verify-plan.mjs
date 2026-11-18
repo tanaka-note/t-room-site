@@ -87,8 +87,9 @@ export function affected(paths) {
   for (const raw of paths) {
     const path = raw.replaceAll('\\', '/');
     if (/^(docs\/|README\.md$|AGENTS\.md$)/.test(path) || /\.md$/.test(path)) continue;
+    if (path === 'site-worker/retired-services.mjs') { add('site', 'health'); continue; }
     if (['tools/web-app-registry.mjs', 'tools/test-web-app-build-freshness.mjs'].includes(path)) { add('tooling', 'site'); continue; }
-    if (/^(tools\/(verify|install-verify|check-cloud-infrastructure|test-cloud-infrastructure|test-development|test-release|test-browser|browser-|local-dev|release|health-production-|worker-logs)|\.github\/|\.node-version$)/.test(path)) { add('tooling'); continue; }
+    if (/^(tools\/(verify|install-verify|check-cloud-infrastructure|test-cloud-infrastructure|test-development|test-release|test-browser|browser-|local-dev|release|worker-logs)|\.github\/|\.node-version$)/.test(path)) { add('tooling'); continue; }
     if (path === '.gitignore' || path === 'tools/test-secret-ignore.mjs') { add('tooling'); continue; }
     if (['tools/test-session-secret.mjs', 'tools/test-password-auth.mjs', 'tools/test-passkey-rolling.mjs', 'tools/fixtures/passkey-rolling-binding.mjs'].includes(path)) { add('auth'); continue; }
     if (path === 'assets/session-secret.mjs') add(...services, 'auth');

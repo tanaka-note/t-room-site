@@ -36,7 +36,7 @@
       "rect": {
         "x": 0,
         "width": 1440,
-        "height": 5088
+        "height": 4363
       },
       "style": {
         "display": "block",
@@ -132,7 +132,7 @@
       "rect": {
         "x": 130,
         "width": 1180,
-        "height": 1247
+        "height": 743
       },
       "style": {
         "display": "grid",
@@ -156,7 +156,7 @@
       "rect": {
         "x": 130,
         "width": 383,
-        "height": 236
+        "height": 239
       },
       "style": {
         "display": "grid",
@@ -180,7 +180,7 @@
       "rect": {
         "x": 130,
         "width": 1180,
-        "height": 599
+        "height": 377
       },
       "style": {
         "display": "block",
@@ -230,7 +230,7 @@
       "verticalGap": 24,
       "leftOffset": 0
     },
-    "latest-heading-to-list": {
+    "latest-heading-to-empty": {
       "verticalGap": 24,
       "leftOffset": 0
     }

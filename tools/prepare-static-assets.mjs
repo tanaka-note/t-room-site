@@ -1,5 +1,8 @@
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, extname, join, relative, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { isRetiredSitePath } from "../site-worker/retired-services.mjs";
 import { fileURLToPath } from "node:url";
 import { ensureHtmlContract, expectedSiteBuild, loadWebAppRegistry } from "./web-app-registry.mjs";
 import { ensureLineBrowserGuard } from "./line-browser-html.mjs";
@@ -10,12 +13,8 @@ const publicDirectories = [
   ".well-known",
   "apps",
   "assets",
-  "columns",
   "diary",
-  "images",
-  "learning",
-  "pagefind",
-  "transfer"
+  "images"
 ];
 const publicRootExtensions = new Set([".css", ".html", ".ico", ".js", ".png", ".webmanifest"]);
 const publicRootFiles = new Set(["robots.txt"]);
@@ -31,6 +30,7 @@ function assertInsideWorkspace(path) {
 
 function isSafePublicPath(source) {
   const parts = relative(workspace, source).split(/[\\/]/);
+  if (isRetiredSitePath(`/${parts.join("/")}`)) return false;
   if (parts.some((part) => forbiddenNames.has(part))) return false;
   return !forbiddenExtensions.has(extname(source).toLowerCase());
 }
@@ -51,7 +51,18 @@ for (const directory of publicDirectories) {
 const rootEntries = await readdir(workspace, { withFileTypes: true });
 for (const entry of rootEntries) {
   if (!entry.isFile() || (!publicRootExtensions.has(extname(entry.name).toLowerCase()) && !publicRootFiles.has(entry.name))) continue;
+  if (!isSafePublicPath(join(workspace, entry.name))) continue;
   await cp(join(workspace, entry.name), join(output, entry.name));
+}
+
+// Build from the fresh output directory so retired fragments cannot be republished.
+const diaryEntries = join(output, "diary", "entries");
+if (existsSync(diaryEntries) && (await readdir(diaryEntries)).some(name => /^[0-9].*\.html$/.test(name))) {
+  const packageDirectory = join(workspace, "node_modules", "pagefind");
+  const { bin } = JSON.parse(await readFile(join(packageDirectory, "package.json"), "utf8"));
+  execFileSync(process.execPath, [join(packageDirectory, bin), "--site", output, "--glob", "diary/entries/[0-9]*.html", "--force-language", "ja"], {
+    cwd: workspace, stdio: "inherit"
+  });
 }
 
 const webAppRegistry = await loadWebAppRegistry();

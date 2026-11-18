@@ -8,7 +8,7 @@ import {backupService,capture,decode} from '../src/backup.js';
 import {getBackupSnapshot} from '../src/browser.js';
 import {restoreIsolated} from '../tools/restore-isolated.mjs';
 import {portfolioApi} from '../../portfolio-worker/src/api.js';
-import {dispatchServices} from '../src/dispatch.js';
+import {dispatchServices,scheduledBackupServices} from '../src/dispatch.js';
 import {executeExportWorkflow} from '../src/workflow-run.js';
 import {DATABASES,readExportParts} from '../src/export-backup.js';
 import {exportEnv,exportFetcher} from './export-fixtures.mjs';
@@ -36,7 +36,7 @@ function scheduledWorker() {
  const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'')
   .replace(/^export \{ D1BackupWorkflow \}.*;\r?\n/gm,'')
   .replace('export class BackupBrowserIntegration','class BackupBrowserIntegration').replace('export default {','globalThis.worker = {');
- const calls=[],context={WorkerEntrypoint:class{},SERVICES,crypto,getBackupSnapshot,dispatchServices,console:{log(){},error(){}},
+ const calls=[],context={WorkerEntrypoint:class{},crypto,getBackupSnapshot,dispatchServices,scheduledBackupServices,console:{log(){},error(){}},
   backupService:async(env,id,now)=>{calls.push({id,now});return id==='portfolio'?backupService(env,id,now,async()=>{}):{state:'ok'};}};
  vm.runInNewContext(source,context);return {worker:context.worker,calls};
 }
@@ -60,7 +60,7 @@ for(const workflow of [false,true])test(`Portfolio ${workflow?'Workflow v3':'leg
   const h=scheduledWorker();await h.worker.scheduled({scheduledTime},env);
   if(workflow){
    assert.equal(h.calls.length,0,'Workflow binding must bypass legacy capture');
-   assert.deepEqual(jobs.map(j=>j.params.service).sort(),Object.keys(SERVICES).sort());
+   assert.deepEqual(jobs.map(j=>j.params.service).sort(),Object.keys(SERVICES).filter(id=>id!=='health').sort());
    assert.ok(jobs.every(j=>j.params.scheduledTime===scheduledTime&&Object.hasOwn(DATABASES,j.params.service)));
    const job=jobs.find(j=>j.params.service==='portfolio');assert.equal(job.id,`portfolio-${scheduledTime}`);
    const step={async sleep(){},async do(name,options,fn){return (fn||options)();}};

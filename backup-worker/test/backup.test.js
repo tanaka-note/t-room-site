@@ -135,13 +135,15 @@ test('storage listings are cached while failures and recoveries remain fresh', a
   const cache = { async match() { return stored?.clone(); }, async put(_key, value) { stored = value; } };
   try {
     const first = await getBackupSnapshot(env, {}, cache);
-    assert.equal(first.services.length, Object.keys(SERVICES).length + 1); const count = lists;
+    assert.equal(first.services.length, Object.keys(SERVICES).length);
+    assert.equal(first.services.some(service => service.id === 'health'), false);
+    const count = lists;
     db.prepare("INSERT INTO security_audit_events(event_id,occurred_at,service,event_type,outcome,target_type,target_id,details_json) VALUES (?,?,?,?,?,?,?,?)")
-      .run('failed-run', new Date().toISOString(), 'health', 'backup_failed', 'failure', 'backup', 'health', '{"reason":"operation_failed"}');
+      .run('failed-run', new Date().toISOString(), 'inventory', 'backup_failed', 'failure', 'backup', 'inventory', '{"reason":"operation_failed"}');
     const second = await getBackupSnapshot(env, {}, cache);
     assert.equal(lists, count);
-    assert.equal(second.services.find(s => s.id === 'health').state, 'failed');
-    const plan = db.prepare("EXPLAIN QUERY PLAN SELECT event_id FROM security_audit_events WHERE target_type='backup' AND target_id='health' ORDER BY occurred_at DESC,event_id DESC LIMIT 40").all();
+    assert.equal(second.services.find(s => s.id === 'inventory').state, 'failed');
+    const plan = db.prepare("EXPLAIN QUERY PLAN SELECT event_id FROM security_audit_events WHERE target_type='backup' AND target_id='inventory' ORDER BY occurred_at DESC,event_id DESC LIMIT 40").all();
     assert.match(JSON.stringify(plan), /idx_security_backup_status/);
     const broken = { ...env, SECURITY_DB: { prepare() { throw new Error('Unavailable'); } } };
     assert.ok((await getBackupSnapshot(broken, {}, cache)).services.every(s => s.state === 'unavailable'));
