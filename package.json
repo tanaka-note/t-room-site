@@ -1,7 +1,6 @@
 {
   "scripts": {
-    "build": "pnpm run search:index && pnpm run site:prepare",
-    "search:index": "pagefind --site . --glob \"{learning/sharoushi/logs,diary/entries}/[0-9]*.html\" --force-language ja",
+    "build": "pnpm run site:prepare",
     "date-picker:sync": "node tools/sync-troom-date-picker.mjs",
     "date-picker:test": "node tools/test-troom-date-picker.mjs",
     "asset-report:test": "node --test tools/test-asset-report-history.mjs tools/test-asset-report-data.mjs",

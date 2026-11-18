@@ -1,7 +1,11 @@
 import { SERVICES } from './registry.js';
 
+export function scheduledBackupServices() {
+  return Object.keys(SERVICES).filter(service => service !== 'health');
+}
+
 export async function dispatchBackup(env, service, scheduledTime) {
-  if (!(service === 'diary' || Object.hasOwn(SERVICES, service)) || !Number.isSafeInteger(scheduledTime) || scheduledTime <= 0 || !env.D1_BACKUPS) throw new Error('BackupDispatchFailed');
+  if (!(service === 'diary' || scheduledBackupServices().includes(service)) || !Number.isSafeInteger(scheduledTime) || scheduledTime <= 0 || !env.D1_BACKUPS) throw new Error('BackupDispatchFailed');
   const id = `${service}-${scheduledTime}`;
   try { await env.D1_BACKUPS.create({ id, params: { service, scheduledTime } }); }
   catch {
@@ -18,10 +22,11 @@ export async function dispatchBackup(env, service, scheduledTime) {
 
 export async function dispatchServices(env, scheduledTime) {
   let failed = 0;
-  for (const service of Object.keys(SERVICES)) {
+  const services = scheduledBackupServices();
+  for (const service of services) {
     try { await dispatchBackup(env, service, scheduledTime); }
     catch { failed++; console.error(JSON.stringify({ event: 'backup_dispatch_failed', service, scheduledTime })); }
   }
   if (failed) throw new Error('BackupDispatchFailed');
-  console.log(JSON.stringify({ event: 'backup_dispatched', scheduledTime, total: Object.keys(SERVICES).length }));
+  console.log(JSON.stringify({ event: 'backup_dispatched', scheduledTime, total: services.length }));
 }

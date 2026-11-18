@@ -36,7 +36,7 @@
       "rect": {
         "x": 0,
         "width": 390,
-        "height": 8789
+        "height": 6889
       },
       "style": {
         "display": "block",
@@ -132,7 +132,7 @@
       "rect": {
         "x": 18,
         "width": 354,
-        "height": 3512
+        "height": 2252
       },
       "style": {
         "display": "grid",
@@ -180,7 +180,7 @@
       "rect": {
         "x": 18,
         "width": 354,
-        "height": 884
+        "height": 269
       },
       "style": {
         "display": "block",
@@ -230,7 +230,7 @@
       "verticalGap": 24,
       "leftOffset": 0
     },
-    "latest-heading-to-list": {
+    "latest-heading-to-empty": {
       "verticalGap": 24,
       "leftOffset": 0
     }

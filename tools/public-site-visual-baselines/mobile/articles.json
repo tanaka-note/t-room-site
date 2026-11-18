@@ -36,7 +36,7 @@
       "rect": {
         "x": 0,
         "width": 390,
-        "height": 4255
+        "height": 681
       },
       "style": {
         "display": "block",
@@ -108,7 +108,7 @@
       "rect": {
         "x": 18,
         "width": 354,
-        "height": 3825
+        "height": 251
       },
       "style": {
         "display": "block",
@@ -128,27 +128,27 @@
         "boxShadow": "none"
       }
     },
-    ".recent-list": {
+    "#article-archive-empty": {
       "rect": {
         "x": 18,
         "width": 354,
-        "height": 3639
+        "height": 65
       },
       "style": {
-        "display": "grid",
+        "display": "block",
         "position": "static",
-        "gridTemplateColumns": "354px",
-        "gap": "14px",
-        "padding": "0px",
+        "gridTemplateColumns": "none",
+        "gap": "normal",
+        "padding": "18px 20px",
         "margin": "0px",
         "fontFamily": "\"Noto Sans JP\", system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif",
         "fontSize": "16px",
         "lineHeight": "27.2px",
-        "fontWeight": "400",
-        "color": "rgb(31, 41, 51)",
-        "backgroundColor": "rgba(0, 0, 0, 0)",
-        "border": "0px none rgb(31, 41, 51)",
-        "borderRadius": "0px",
+        "fontWeight": "700",
+        "color": "rgb(102, 112, 133)",
+        "backgroundColor": "rgba(255, 255, 255, 0.72)",
+        "border": "1px solid rgb(216, 222, 230)",
+        "borderRadius": "8px",
         "boxShadow": "none"
       }
     },

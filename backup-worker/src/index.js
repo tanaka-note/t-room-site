@@ -1,8 +1,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { SERVICES } from './registry.js';
 import { backupService } from './backup.js';
 import { getBackupSnapshot } from './browser.js';
-import { dispatchServices } from './dispatch.js';
+import { dispatchServices, scheduledBackupServices } from './dispatch.js';
 export { D1BackupWorkflow } from './workflow.js';
 
 export class BackupBrowserIntegration extends WorkerEntrypoint {
@@ -18,7 +17,7 @@ export default {
     const results = [];
     // Complete every service before rejecting the invocation. Returned business
     // failures must reach the Cron outcome just like unexpected exceptions.
-    for (const id of Object.keys(SERVICES)) {
+    for (const id of scheduledBackupServices()) {
       let state;
       try {
         const value = (await backupService(env, id, now))?.state;

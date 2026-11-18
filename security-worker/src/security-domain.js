@@ -1,6 +1,6 @@
 export const IDENTITY_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
-export const LINKED_SERVICES = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "health", "payments", "household", "calendar", "portfolio"]);
-export const AUDIT_SERVICES = Object.freeze(["security", ...LINKED_SERVICES]);
+export const LINKED_SERVICES = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "payments", "household", "calendar", "portfolio"]);
+export const AUDIT_SERVICES = Object.freeze(["security", ...LINKED_SERVICES, "health"]);
 export const INVITE_EXPIRY_PRESETS = Object.freeze([3600, 21600, 86400, 259200, 604800]);
 export const LOGIN_SUCCESS_EVENTS = Object.freeze(["password_login_success", "passkey_login_success"]);
 export const LOGIN_FAILURE_EVENTS = Object.freeze(["password_login_failure", "passkey_authentication_failure", "bootstrap_auth_failure"]);
