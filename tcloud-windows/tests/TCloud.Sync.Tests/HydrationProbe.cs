@@ -71,6 +71,7 @@ internal static class HydrationProbe
         {
             // Synthetic fixture diagnostics only; never echo file contents or the input hashes.
             var recovery = "not-attempted";
+            var native = "not-attempted";
             if (validatedPlan is not null)
             {
                 try
@@ -82,8 +83,16 @@ internal static class HydrationProbe
                         ? "async-native-head-verified" : "async-native-head-differs";
                 }
                 catch (Exception retryError) { recovery = $"async-native-head-0x{retryError.HResult:X8}"; }
+                try
+                {
+                    var head = NativeReadProbe.ReadHead(path);
+                    native = Convert.ToHexString(SHA256.HashData(head)) == validatedPlan.Ranges[^1].Hash
+                        ? "event-head-verified" : "event-head-differs";
+                }
+                catch (System.ComponentModel.Win32Exception nativeError) { native = $"event-head-error-{nativeError.NativeErrorCode}"; }
+                catch (Exception nativeError) { native = $"event-head-0x{nativeError.HResult:X8}"; }
             }
-            Console.WriteLine(JsonSerializer.Serialize(new HydrationResult(false, stage + "; " + recovery, error.HResult)));
+            Console.WriteLine(JsonSerializer.Serialize(new HydrationResult(false, stage + "; " + recovery + "; " + native, error.HResult)));
         }
     }
 

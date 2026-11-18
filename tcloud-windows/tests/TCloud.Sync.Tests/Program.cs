@@ -286,6 +286,7 @@ static async Task NativeHydrationOnce()
             + string.Join(",", fixture.Errors.Select(error => $"0x{error.HResult:X8}"))
             + "; fetch trace: " + string.Join(" | ", fixture.FetchDiagnostics));
         Check(fixture.FetchCount > 0, "native fetch callback actually ran");
+        Check(NativeReadProbe.ReadHead(path).AsSpan().SequenceEqual(plain.AsSpan(0, 1000)), "event-based overlapped read matches");
         Check(fixture.Errors.IsEmpty, "provider callback errors");
     }
     finally { CryptographicOperations.ZeroMemory(plain); }

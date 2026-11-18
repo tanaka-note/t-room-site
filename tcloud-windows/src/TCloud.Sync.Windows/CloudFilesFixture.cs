@@ -16,6 +16,7 @@ public sealed class CloudFilesFixture : IDisposable
     private readonly VolumeBinding volume;
     private readonly CloudFilesNative.Callback fetch;
     private readonly CloudFilesNative.Callback cancelFetch;
+    private readonly CloudFilesNative.Callback openCompleted;
     private readonly CloudFilesNative.Callback rejectDelete;
     private readonly ConcurrentDictionary<string, byte[]> data = new(StringComparer.Ordinal);
     private long connection;
@@ -37,6 +38,7 @@ public sealed class CloudFilesFixture : IDisposable
         volume = VolumeInspector.ValidateDestination(root, []);
         fetch = Fetch;
         cancelFetch = CancelFetch;
+        openCompleted = OpenCompleted;
         rejectDelete = RejectDelete;
         try
         {
@@ -57,7 +59,8 @@ public sealed class CloudFilesFixture : IDisposable
             var callbacks = new List<CloudFilesNative.CallbackRegistration>
             {
                 new() { Type = 0, Function = Marshal.GetFunctionPointerForDelegate(fetch) },
-                new() { Type = 2, Function = Marshal.GetFunctionPointerForDelegate(cancelFetch) }
+                new() { Type = 2, Function = Marshal.GetFunctionPointerForDelegate(cancelFetch) },
+                new() { Type = 5, Function = Marshal.GetFunctionPointerForDelegate(openCompleted) }
             };
             if (denyDeletes)
                 callbacks.Add(new() { Type = 9, Function = Marshal.GetFunctionPointerForDelegate(rejectDelete) });
@@ -183,6 +186,9 @@ public sealed class CloudFilesFixture : IDisposable
         FetchDiagnostics.Enqueue($"cancel {parameters.RequiredOffset}+{parameters.RequiredLength}; flags {parameters.Flags}");
     }
 
+    private void OpenCompleted(in CloudFilesNative.CallbackInfo info, in CloudFilesNative.CallbackParameters parameters)
+        => FetchDiagnostics.Enqueue($"open flags {parameters.Flags}");
+
     private void RejectDelete(in CloudFilesNative.CallbackInfo info, in CloudFilesNative.CallbackParameters parameters)
     {
         var operation = new CloudFilesNative.OperationInfo
@@ -219,6 +225,7 @@ public sealed class CloudFilesFixture : IDisposable
         if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         GC.KeepAlive(fetch);
         GC.KeepAlive(cancelFetch);
+        GC.KeepAlive(openCompleted);
         GC.KeepAlive(rejectDelete);
     }
 }
