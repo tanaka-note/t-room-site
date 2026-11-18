@@ -11,7 +11,7 @@ test("認証確認中はログイン画面を見せず、初期データ後に�
   assert.match(html, /id="boot-view"[^>]*aria-busy="true"/);
   assert.match(html, /id="login-view"[^>]*hidden/);
   assert.match(html, /id="app-view"[^>]*hidden/);
-  assert.match(script, /if \(session\.authenticated\) await enterApp\(session\);\s*else showLogin\(\)/);
+  assert.match(script, /if \(session\.authenticated && !session\.encrypted\) await enterApp\(session\);\s*else showLogin\(\)/);
   const enterApp = script.match(/async function enterApp\(session\) \{[\s\S]*?\n  \}/)?.[0] || "";
   assert.ok(enterApp.indexOf("await loadSummary()") < enterApp.indexOf('el["app-view"].hidden = false'), "月次データ取得前に空の本体を表示しません");
   assert.match(script, /function showLogin\(\) \{\s*el\["boot-view"\]\.hidden = true;/);

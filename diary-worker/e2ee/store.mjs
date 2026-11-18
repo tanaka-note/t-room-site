@@ -276,18 +276,19 @@ export function createStore(db, registry) {
         .first();
       if (retired) fail("PhotoRetired");
       const photo = registry.photos[id];
+      if(registry.enforceRollout&&photo?.household===next.household&&photo.accountId===actor.accountId&&!current?.photoIds.includes(id)&&!draftSource?.photoIds.includes(id)&&!photo.encrypted)fail('PhotoEncryptionRequired');
       if (
         !photo ||
         photo.household !== next.household ||
         (!current?.photoIds.includes(id) &&
           !draftSource?.photoIds.includes(id) &&
-          (photo.accountId !== actor.accountId || registry.enforceRollout && (photo.status!=="ready"||photo.expiresAt<=Date.now())) &&
+          (photo.accountId !== actor.accountId || registry.enforceRollout && (photo.status!=="ready"||photo.expiresAt<=Date.now()||!photo.encrypted)) &&
           operation !== "import")
       )
         fail("PhotoAccessDenied", 403);
     }
     const addedPhotos=proposal.photoIds.filter(id=>!current?.photoIds.includes(id)&&!draftSource?.photoIds.includes(id));
-    const stagedGuard=registry.enforceRollout&&addedPhotos.length?` AND (SELECT COUNT(*) FROM diary_e2ee_media WHERE id IN (SELECT value FROM json_each(?)) AND status='ready' AND expires_at>?)=?`:'';
+    const stagedGuard=registry.enforceRollout&&addedPhotos.length?` AND (SELECT COUNT(*) FROM diary_e2ee_media WHERE id IN (SELECT value FROM json_each(?)) AND status='ready' AND expires_at>? AND original_key LIKE 'diary/encrypted-photos/v1/%' AND display_key LIKE 'diary/encrypted-photos/v1/%' AND thumbnail_key LIKE 'diary/encrypted-photos/v1/%')=?`:'';
     const stagedBindings=stagedGuard?[JSON.stringify(addedPhotos),Date.now(),addedPhotos.length]:[];
     const values = [
       next.household,

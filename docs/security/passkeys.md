@@ -24,7 +24,7 @@ Security Centerは「誰か」を表すIdentity、パスキー、招待、承認
 
 通常のruntime観測は現在行の読み取りだけとし、行がない場合だけ初期化する。SecretのOFF観測時は従来どおりepoch更新とgate停止を行う。一般サービスのrolling read／touchはIdentity・credential・link・runtime・台帳を同じJOINで現在照合し、別リクエストや後続touchへ検証結果を持ち越さない。Cloud・日記・請求書は同一リクエストの初回検証だけを再利用できるが、対象操作の応答・更新Cookie発行前のlive touch、元Cookie期限とサービスversion、必要なaccount role／version・Cloud rootの確認は維持する。旧形式sessionの既存最終確認と、同期監査／Queue fallbackの配送境界は変更しない。
 
-体調管理の通常保護APIは内部`validatePasskeySession` RPCへ`requireHealthKeyReady`を指定し、Identity・credential・link・epochとmember／vault／grant／configの準備状態を確認する。対応済みSecurityは鍵envelopeを返さず準備状態だけを返す。旧Securityがこの項目を返さない公開途中の組合せでは、従来のliveな鍵bundle確認を維持し、RPC失敗や明示的な拒否ではfallbackしない。ログイン時の鍵bundle取得と、体調管理のセッション期限・ログアウト方式は変更しない。
+体調管理の旧パスキー連携と再構築時の参照先は[サービス終了の記録](../history/2026-11-18-service-retirement.md)を参照する。
 
 T-Cloudの起動はsession確認とcrypto-config取得後、現在のsessionに厳密に一致するdevice vaultを検証する。正常ならWebAuthn・handoff・新しいsession発行なしで復元する。ページ再読込、タブ再作成、ブラウザ／PWA／PC再起動も、persistent CookieとIndexedDBが保持されている期限内なら同じ経路を使う。タブが別sessionへの切替でblockedになった場合は自動復元せず、従来どおり選び直しを求める。保存領域非対応・破損・鍵検証失敗・binding不一致なら既存のWebAuthn／PRF経路へfallbackする。期限切れ・署名不正・権限失効ではcacheを使用せずログイン画面へ戻す。
 
@@ -190,7 +190,7 @@ Cloud専用rolling RPCを使う版はSecurity Workerの対応が必要で、将�
 
 画面では準備中・移行中・委譲待ち・利用可能・失敗を区別し、大量処理には段階と件数を表示する。エラーは秘密情報を含まない段階・再開方法で示す。公開・CI成功、鍵準備、暗号文保存、復元検証、本番切替、実利用者のログイン・投稿確認はそれぞれ記録し、未確認の段階を完了扱いにしない。旧バックアップ・履歴・写真本体を含む保護範囲も明示する。
 
-受入確認では、通常ログイン一回での利用、新しい端末、本人用の鍵の初回準備、準備後の自動委譲、応答喪失・通信失敗・中断再開、失効・権限縮小の拒否、既存データの保存、実復元・切替、暗号化後の投稿を対象とする。合成試験、実端末確認、本番移行結果を区別する。家計簿・日記の個別方式と移行手順は以下および各サービスの正本文書を参照する。
+受入確認では、通常ログイン一回での利用、新しい端末、本人用の鍵の初回準備、準備後の自動委譲、応答喪失・通信失敗・中断再開、失効・権限縮小の拒否、既存データの保存、実復元・切替、暗号化後の投稿を対象とする。合成試験、実端末確認、本番移行結果を区別する。個別の方式と移行手順は[請求書管理の移行設計](billing-encryption.md)および以下の各サービスの正本文書を参照する。
 
 ## 家計簿の端末側暗号化
 

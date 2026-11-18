@@ -1,9 +1,19 @@
 import { b64,encode,validateEnvelope } from './crypto.mjs';
 import { canRead } from './policy.mjs';
 import { readRollout,writeLease } from './rollout.mjs';
+import {PHOTO_PREFIX,PHOTO_OVERHEAD,photoHeader} from './photo-crypto.mjs';
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[45][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 const HOUR=3_600_000;
+async function photoDigest(file) {
+  // Workers' DigestStream avoids a second full-size original in server memory.
+  if(typeof crypto.DigestStream==='function') {
+    const stream=new crypto.DigestStream('SHA-256');
+    const [,digest]=await Promise.all([file.stream().pipeTo(stream),stream.digest]);
+    return b64(digest);
+  }
+  return b64(await crypto.subtle.digest('SHA-256',await file.arrayBuffer()));
+}
 async function upload(env,actor,id) {
   if(!uuid(id))fail(400,'InvalidUploadId');
   const row=await env.DB.prepare('SELECT * FROM diary_e2ee_uploads WHERE id=? AND household=? AND account_id=?').bind(id,actor.activeHouseholdId,actor.accountId).first();
@@ -56,7 +66,7 @@ export async function handleEncryptedMedia(request,env,url,path,actor,{json,read
     const row=await env.DB.prepare('SELECT * FROM diary_e2ee_media WHERE id=? AND household=?').bind(asset[1],actor.activeHouseholdId).first();
     if(!row||row.status==='retiring'||!await referenced(env,row.id,actor))fail(404,'PhotoNotFound');
     const object=await env.MEDIA.get(row[`${asset[2]}_key`]);if(!object)fail(404,'PhotoNotFound');
-    return new Response(object.body,{headers:{'Content-Type':asset[2]==='original'?'application/octet-stream':'image/webp','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
+    return new Response(object.body,{headers:{'Content-Type':row.original_key.startsWith(PHOTO_PREFIX)||asset[2]==='original'?'application/octet-stream':'image/webp','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
   }
   const retiring=path.match(/^\/api\/encryption\/media\/([0-9a-f-]{36})$/);
   if(retiring&&method==='DELETE')return json(await retireMedia(env,actor,retiring[1]));
@@ -72,8 +82,10 @@ export async function handleEncryptedMedia(request,env,url,path,actor,{json,read
   if(!match)fail(404,'UnknownUploadRoute');
   const current=await upload(env,actor,match[1]);
   if(method==='GET'&&match[3]) {
-    const row=await env.DB.prepare('SELECT id,status,metadata,epoch FROM diary_e2ee_media WHERE id=? AND session_id=? AND household=? AND account_id=?').bind(match[3],current.id,actor.activeHouseholdId,actor.accountId).first();
-    if(!row||!['ready','attached'].includes(row.status))fail(404,'PhotoNotReady');return json({photo:{id:row.id},metadata:JSON.parse(row.metadata),epoch:row.epoch});
+    const row=await env.DB.prepare('SELECT id,status,metadata,epoch,original_key FROM diary_e2ee_media WHERE id=? AND session_id=? AND household=? AND account_id=?').bind(match[3],current.id,actor.activeHouseholdId,actor.accountId).first();
+    if(!row||!['ready','attached'].includes(row.status))fail(404,'PhotoNotReady');
+    if(row.status!=='attached'&&!row.original_key.startsWith(PHOTO_PREFIX))fail(409,'PhotoEncryptionRequired');
+    return json({photo:{id:row.id},metadata:JSON.parse(row.metadata),epoch:row.epoch});
   }
   const lease=await writeLease(env.DB);
   if(method==='POST'&&match[4]) {
@@ -98,8 +110,13 @@ export async function handleEncryptedMedia(request,env,url,path,actor,{json,read
   let metadata;try{metadata=JSON.parse(encoded);}catch{fail(400,'InvalidMetadata');}
   const id=form.get('id'),epoch=Number(form.get('epoch'));
   if(!uuid(id)||!Number.isSafeInteger(epoch)||epoch<1)fail(400,'InvalidPhoto');validateEnvelope(metadata);
-  const sizes={};for(const kind of ['original','display','thumbnail']){const file=form.get(kind);if(!(file instanceof Blob)||file.type!=='application/octet-stream'||file.name!==`${kind}.bin`||file.size<1||file.size>(kind==='original'?64:kind==='display'?8:2)*1024*1024)fail(400,'InvalidPhotoPart');sizes[kind]=file.size;}
-  const hash=b64(await crypto.subtle.digest('SHA-256',encode({id,epoch,metadata,sizes}))),prefix=`diary/encrypted-staging/${actor.activeHouseholdId}/${current.id}/${id}`;
+  const digests={};for(const kind of ['original','display','thumbnail']){
+    const file=form.get(kind);
+    if(!(file instanceof Blob)||file.type!=='application/octet-stream'||file.name!==`${kind}.bin`||file.size<=PHOTO_OVERHEAD||file.size>(kind==='original'?64:kind==='display'?8:2)*1024*1024+PHOTO_OVERHEAD)fail(400,'InvalidPhotoPart');
+    if(!photoHeader(new Uint8Array(await file.slice(0,PHOTO_OVERHEAD).arrayBuffer())))fail(409,'PhotoEncryptionRequired');
+    digests[kind]=await photoDigest(file);
+  }
+  const hash=b64(await crypto.subtle.digest('SHA-256',encode({id,epoch,metadata,digests}))),prefix=`${PHOTO_PREFIX}${actor.activeHouseholdId}/${current.id}/${id}`;
   await env.DB.prepare(`INSERT INTO diary_e2ee_media(id,household,account_id,session_id,status,original_key,display_key,thumbnail_key,metadata,epoch,request_hash,expires_at) SELECT ?,?,?,?,'uploading',?,?,?,?,?,?,? WHERE (SELECT generation FROM diary_e2ee_control WHERE id=1)=? ON CONFLICT DO NOTHING`).bind(id,actor.activeHouseholdId,actor.accountId,current.id,`${prefix}/original`,`${prefix}/display`,`${prefix}/thumbnail`,JSON.stringify(metadata),epoch,hash,current.expires_at,lease.generation).run();
   const row=await env.DB.prepare('SELECT * FROM diary_e2ee_media WHERE id=?').bind(id).first();
   if(!row||row.session_id!==current.id||row.account_id!==actor.accountId||row.request_hash!==hash||row.status==='retiring')fail(409,'PhotoUploadConflict');

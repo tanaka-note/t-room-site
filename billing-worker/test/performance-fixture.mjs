@@ -80,18 +80,18 @@ export function fixture() {
   const handoffs = new Map();
   const f = { env, security, metrics, db: local.db, securityDb: remote.db, beforeTouch: null, afterRead: null,
     reset() { for (const m of [metrics.billing, metrics.security]) { m.sql.length = 0; m.batches = 0; } metrics.rpc.length = 0; metrics.audits.length = 0; for(const values of Object.values(metrics.timings))values.length=0; },
-    async request(path, cookie, { method = 'GET', body, active = true } = {}) {
+    async request(path, cookie, { method = 'GET', body, active = true, headers, raw = false } = {}) {
       const start = performance.now();
       const response = await worker.fetch(new Request(`${origin}/billing/api/${path}`, { method,
-        headers: { Origin: origin, 'Content-Type': 'application/json', ...(active ? { 'X-Troom-Activity': 'foreground' } : {}), ...(cookie ? { Cookie: cookie } : {}) },
+        headers: { Origin: origin, 'Content-Type': 'application/json', ...(active ? { 'X-Troom-Activity': 'foreground' } : {}), ...(cookie ? { Cookie: cookie } : {}), ...headers },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), env, { waitUntil: p => pending.push(p) });
       const ms = performance.now() - start;
       await Promise.all(pending.splice(0));
-      return { status: response.status, body: await response.json(), headers: response.headers, cookie: response.headers.get('set-cookie')?.split(';', 1)[0], ms };
+      return { status: response.status, body: raw && response.ok ? response : await response.json(), headers: response.headers, cookie: response.headers.get('set-cookie')?.split(';', 1)[0], ms };
     },
-    async login(account = 'owner') {
+    async login(account = 'owner', identityId = 'fixture-identity', serviceLinkId = `link-${account}`, credentialId = 'Y3JlZGVudGlhbA') {
       const token = crypto.randomUUID();
-      handoffs.set(token, { identityId: 'fixture-identity', credentialId: 'Y3JlZGVudGlhbA', serviceLinkId: `link-${account}`, serviceAccountId: account, sessionEpoch: 1 });
+      handoffs.set(token, { identityId, credentialId, serviceLinkId, serviceAccountId: account, sessionEpoch: 1 });
       return f.request('passkey/handoff', null, { method: 'POST', body: { handoffToken: token } });
     },
     sign(payload) { const data = Buffer.from(JSON.stringify(payload)).toString('base64url'); return `troom_billing_session=${data}.${createHmac('sha256', env.SESSION_SECRET).update(data).digest('base64url')}`; },
@@ -110,6 +110,10 @@ export function fixture() {
       } finally { entry.ms = performance.now() - start; }
     },
     validatePasskeySession: input => security.validatePasskeySession(input),
+    getBillingRecoveryContext: input => security.getBillingRecoveryContext(input),
+    getBillingVaultContext: input => security.getBillingVaultContext(input),
+    enrollBillingVault: (input, vault) => security.enrollBillingVault(input, vault),
+    getBillingKeyRecipients: input => security.getBillingKeyRecipients(input),
     // Preserve the synchronous service audit boundary; avoid unrelated audit D1
     // writes when counting authentication queries. No event contents are logged.
     recordAuditEvent: async event => { metrics.audits.push(event.eventType); },

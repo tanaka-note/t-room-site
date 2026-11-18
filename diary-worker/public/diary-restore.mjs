@@ -2698,10 +2698,10 @@ var SECURITY_DIARY_TABLES = [
   table("security_diary_key_vaults", "recipient_id,credential_id,identity_id,service_link_id,account_id,vault_json"),
   table("security_diary_key_grants", "recipient_id,service_link_id,generation,grants_json,record_grants_json")
 ];
-async function verifyEncryptedDiaryRow(table2, row, directory) {
-  if (table2 === "diary_e2ee_records") await verifyRecord(parseRecord(row), directory);
-  if (table2 === "diary_e2ee_control" && !(row.ever_encrypted && ["encrypted", "paused"].includes(row.phase) || !row.ever_encrypted && row.phase === "migrating")) throw new Error("DiaryBackupRequiresEncryptedSnapshot");
-  if (table2 === "diary_e2ee_media") {
+async function verifyEncryptedDiaryRow(table3, row, directory) {
+  if (table3 === "diary_e2ee_records") await verifyRecord(parseRecord(row), directory);
+  if (table3 === "diary_e2ee_control" && !(row.ever_encrypted && ["encrypted", "paused"].includes(row.phase) || !row.ever_encrypted && row.phase === "migrating")) throw new Error("DiaryBackupRequiresEncryptedSnapshot");
+  if (table3 === "diary_e2ee_media") {
     validateEnvelope(JSON.parse(row.metadata));
     if (row.epoch !== directory.epochs[`${row.household}:preferences:${row.account_id}`]) throw new Error("DiaryKeyGenerationConflict");
   }
@@ -3763,6 +3763,30 @@ var ROW_BYTES = 1024 * 1024;
 // diary-worker/src/photo-backup.js
 var PHOTO_REVERIFY_MS = 30 * 864e5;
 
+// backup-worker/src/billing-encrypted.js
+var BILLING_ENCRYPTED_MIGRATION = "billing-encryption-v1";
+var SECURITY_BILLING_MIGRATION = "security-diary-billing-keys-v1";
+function table2(name, sourceColumns, columns = sourceColumns.split(",")) {
+  return { name, sourceColumns, columns };
+}
+var BILLING_ENCRYPTED_TABLES = [
+  table2("billing_encryption_migration", "id,generation,started_at,audit_through_id,writer_public_key,activated_at,verified_checkpoint"),
+  table2("billing_encryption_candidate_ledgers", "generation,ledger_id,account_id,recovery_wrapped_key,revision,digest,signature,record_count,staged_count,staged_bytes"),
+  table2("billing_encryption_candidate_records", "generation,ledger_id,id,revision,iv,ciphertext"),
+  table2("billing_encryption_grants", "generation,ledger_id,identity_id,credential_id,service_link_id,key_source,wrapped_key"),
+  table2("billing_encryption_live_ledgers", "generation,ledger_id,revision,digest,signature,writer_public_key,records_json"),
+  table2("billing_encryption_operations", "generation,id,actor_id,fingerprint,expected_revisions")
+];
+var SECURITY_BILLING_VAULTS = table2(
+  "security_billing_vaults",
+  "credential_id,identity_id,recipient_public_key,recipient_iv,recipient_ciphertext,writer_public_key,writer_iv,writer_ciphertext"
+);
+function billingEncryptedSpec(spec) {
+  const protectedTables = /* @__PURE__ */ new Set(["billing_entries", "billing_opening_balances", "billing_settlements"]);
+  const metadata = spec.tables.filter((item) => !protectedTables.has(item.name)).map((item) => item.name === "billing_audit_logs" ? { ...item, columns: item.columns.filter((column) => column !== "details_json" && column !== "entry_id") } : item);
+  return { ...spec, migration: BILLING_ENCRYPTED_MIGRATION, tables: [...metadata, ...BILLING_ENCRYPTED_TABLES] };
+}
+
 // backup-worker/src/schema-guard.js
 var EXPECTED = {
   "portfolio": "0f996aabee4cfcdec8a1ee2f5d5429b170727d19eba88351ec82577bdedc939a",
@@ -3788,6 +3812,14 @@ function reviewedSchemaMatches(service, baseline, actual) {
   return typeof baseline === "string" && (actual === baseline || REVIEWED[service]?.[0] === baseline && REVIEWED[service][1] === actual);
 }
 async function assertSchema(service, rows2) {
+  const extension = service === "billing" ? (name) => /^billing_(encryption|candidate|freeze)_/.test(name) : service === "security" ? (name) => name === "security_billing_vaults" : () => false;
+  const extra = rows2.filter((row) => extension(row.name));
+  if (extra.length) {
+    const expected = service === "billing" ? "78f4defbcb4a6662c28ca926de959be22d33da90f9a416f4bb832e5d23e7a7a2" : "b0d6dd06625913b84b28ee5dd371c170ddddee5a84121cc98276a2bfc8cbade4";
+    const shape = extra.map((r) => [r.type, r.name, r.tbl_name, r.sql.replace(/\r\n?/g, "\n")]);
+    if (await digest(new TextEncoder().encode(JSON.stringify(shape))) !== expected) throw new Error("SchemaReviewRequired");
+    rows2 = rows2.filter((row) => !extension(row.name));
+  }
   const schema = rows2.filter((r) => r.tbl_name !== "d1_migrations").map((r) => [r.type, r.name, r.tbl_name, r.sql.replace(/\r\n?/g, "\n")]);
   if (!reviewedSchemaMatches(service, EXPECTED[service], await digest(new TextEncoder().encode(JSON.stringify(schema))))) throw new Error("SchemaReviewRequired");
 }
@@ -3799,6 +3831,14 @@ async function assertEncryptedSchema(service, rows2) {
   await assertSchema(service, rows2.filter((row) => !encrypted(row)));
 }
 async function assertArchiveSchema(service, migration, rows2) {
+  if (service === "billing" && migration === BILLING_ENCRYPTED_MIGRATION) {
+    if (!rows2.some((row) => row.name === "billing_encryption_live_ledgers")) throw new Error("SchemaReviewRequired");
+    return assertSchema(service, rows2);
+  }
+  if (service === "security" && migration === SECURITY_BILLING_MIGRATION) {
+    if (!rows2.some((row) => row.name === "security_billing_vaults")) throw new Error("SchemaReviewRequired");
+    return rows2.some((row) => row.name === "security_diary_key_config") ? assertEncryptedSchema(service, rows2) : assertSchema(service, rows2);
+  }
   if (service === "diary" && (migration === "diary-e2ee-v1" || migration === "0022_photo_backup_identity.sql" && rows2.some((row) => row.name === "diary_e2ee_control")) || service === "security" && migration === "security-diary-keys-v1") return assertEncryptedSchema(service, rows2);
   if (service === "household" && migration === "0006_independent_households.sql") {
     const schema = rows2.filter((r) => r.tbl_name !== "d1_migrations").map((r) => [r.type, r.name, r.tbl_name, r.sql.replace(/\r\n?/g, "\n")]);
@@ -3939,6 +3979,12 @@ var FORMAT = "troom-d1-export-v3";
 var PART_BYTES = 1024 * 1024;
 var MAX_PARTS = 2e4;
 function exportSpec(service, migration) {
+  if (service === "billing" && migration === BILLING_ENCRYPTED_MIGRATION) return billingEncryptedSpec(SERVICES.billing);
+  if (service === "security" && migration === SECURITY_BILLING_MIGRATION) return {
+    ...SERVICES.security,
+    migration,
+    tables: [...SERVICES.security.tables, ...SECURITY_DIARY_TABLES, SECURITY_BILLING_VAULTS]
+  };
   if (service === "diary" && migration === DIARY_ENCRYPTED_MIGRATION) return { database: "diary-db", binding: "DIARY_DB", migration, tables: [...BACKUP_TABLES.filter((t) => t.name === "diary_accounts").map((t) => ({ ...t, sourceColumns: t.columns.join(",") })), ...ENCRYPTED_DIARY_TABLES] };
   if (service === "security" && migration === SECURITY_DIARY_MIGRATION) return { ...SERVICES.security, migration, tables: [...SERVICES.security.tables, ...SECURITY_DIARY_TABLES] };
   if (service === "diary") return {
@@ -3950,7 +3996,7 @@ function exportSpec(service, migration) {
   if (!Object.hasOwn(SERVICES, service)) throw new Error("SourceUnavailable");
   return SERVICES[service];
 }
-var exportPrefix = (service, migration) => service === "diary" ? migration === DIARY_ENCRYPTED_MIGRATION ? "v10/" : "v9/" : service === "security" && migration === SECURITY_DIARY_MIGRATION ? "d1/security/v4/" : `d1/${service}/v3/`;
+var exportPrefix = (service, migration) => service === "diary" ? migration === DIARY_ENCRYPTED_MIGRATION ? "v10/" : "v9/" : migration === SECURITY_BILLING_MIGRATION ? "d1/security/v5/" : migration === BILLING_ENCRYPTED_MIGRATION ? "d1/billing/v4/" : service === "security" && migration === SECURITY_DIARY_MIGRATION ? "d1/security/v4/" : `d1/${service}/v3/`;
 function validateExportManifest(manifest, service) {
   const spec = service === "household" ? archiveSpec(service, manifest?.expectedMigration) : exportSpec(service, manifest?.expectedMigration), prefix = exportPrefix(service, manifest?.expectedMigration);
   if (manifest?.format !== FORMAT || manifest.service !== service || manifest.database !== spec.database || manifest.expectedMigration !== spec.migration || manifest.consistency !== "single-database-export" || !Number.isFinite(Date.parse(manifest.scheduledFor)) || !Number.isFinite(Date.parse(manifest.createdAt)) || !Number.isFinite(Date.parse(manifest.completedAt)) || typeof manifest.bookmark !== "string" || !manifest.bookmark || manifest.bookmark.length > 256 || !Array.isArray(manifest.schema) || !Array.isArray(manifest.parts) || manifest.parts.length > MAX_PARTS || Object.keys(manifest.tables || {}).sort().join(",") !== spec.tables.map((t) => t.name).sort().join(",")) throw new Error("SnapshotInvalid");
@@ -4008,23 +4054,23 @@ async function restoreDiaryCheckpoint({ bucket, key, trust, onProgress = () => {
     const tables = exportSpec("diary", "diary-e2ee-v1").tables;
     db.exec("BEGIN; PRAGMA defer_foreign_keys=ON;");
     for (const trigger of triggers) db.exec(`DROP TRIGGER "${trigger.name}"`);
-    for (const table2 of [...tables].reverse()) db.exec(`DELETE FROM ${table2.name}`);
+    for (const table3 of [...tables].reverse()) db.exec(`DELETE FROM ${table3.name}`);
     const counts = /* @__PURE__ */ new Map();
     let total = 0, bytes = 0;
     for await (const part of readExportParts(bucket, manifest, "diary")) {
-      const table2 = tables.find((table3) => table3.name === part.table), columns = [...table2.columns, ...table2.name === "diary_accounts" ? ["login_id"] : []];
-      const insert = db.prepare(`INSERT INTO ${table2.name} (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")}) RETURNING ${table2.columns.join(",")}`);
+      const table3 = tables.find((table4) => table4.name === part.table), columns = [...table3.columns, ...table3.name === "diary_accounts" ? ["login_id"] : []];
+      const insert = db.prepare(`INSERT INTO ${table3.name} (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")}) RETURNING ${table3.columns.join(",")}`);
       try {
         for (const row of part.rows) {
           await verifyEncryptedDiaryRow(part.table, row, directory);
           bytes += encode(row).length;
           if (bytes > 1e8) throw new Error("RestoreBudgetExceeded");
-          insert.bind([...table2.columns.map((column) => row[column]), ...table2.name === "diary_accounts" ? [`restored-${row.id}@invalid.local`] : []]);
+          insert.bind([...table3.columns.map((column) => row[column]), ...table3.name === "diary_accounts" ? [`restored-${row.id}@invalid.local`] : []]);
           if (!insert.step()) throw new Error("RestoreMismatch");
           const actual = insert.getAsObject();
-          if (table2.columns.some((column) => actual[column] !== row[column])) throw new Error("RestoreMismatch");
+          if (table3.columns.some((column) => actual[column] !== row[column])) throw new Error("RestoreMismatch");
           insert.reset();
-          counts.set(table2.name, (counts.get(table2.name) || 0) + 1);
+          counts.set(table3.name, (counts.get(table3.name) || 0) + 1);
           total++;
         }
       } finally {
@@ -4032,7 +4078,7 @@ async function restoreDiaryCheckpoint({ bucket, key, trust, onProgress = () => {
       }
       onProgress({ phase: "restoring", completed: total, total: manifest.rowCount });
     }
-    for (const table2 of tables) if ((counts.get(table2.name) || 0) !== manifest.tables[table2.name].rowCount || rows(db, `SELECT count(*) n FROM ${table2.name}`)[0].n !== manifest.tables[table2.name].rowCount) throw new Error("RestoreRowCountMismatch");
+    for (const table3 of tables) if ((counts.get(table3.name) || 0) !== manifest.tables[table3.name].rowCount || rows(db, `SELECT count(*) n FROM ${table3.name}`)[0].n !== manifest.tables[table3.name].rowCount) throw new Error("RestoreRowCountMismatch");
     db.exec("UPDATE diary_accounts SET active=0,session_version=session_version+1,must_change_password=1; UPDATE diary_e2ee_control SET phase='paused',ever_encrypted=1;");
     for (const trigger of triggers) db.exec(trigger.sql);
     if (rows(db, "PRAGMA integrity_check")[0].integrity_check !== "ok" || rows(db, "PRAGMA foreign_key_check").length) throw new Error("RestoreIntegrityFailed");

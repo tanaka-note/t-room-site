@@ -4,7 +4,6 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { root, affected } from './verify-plan.mjs';
 import { loadWebAppRegistry } from './web-app-registry.mjs';
-import { healthProductionPreflight } from './health-production-preflight.mjs';
 import {serviceProductionPreflight} from './service-production-preflight.mjs';
 
 // Containers retain their signed, leased rollout workflow. No D1/R2 CRUD is needed here.
@@ -140,7 +139,6 @@ export async function releaseActions(target) {
     if (result.error || result.status !== 0) throw new Error('Production command failed.');
   };
   if (app) run(root, ['tools/check-web-app-builds.mjs', '--target', app.deployTarget]);
-  if (target === 'health') healthProductionPreflight(directory);
   const settings=await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${name}/settings`);
   if(target==='diary' && config.workflows?.some(w=>w.binding==='D1_BACKUPS'))assertD1ExportReadiness(await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/t-room-backup/settings`));
   if(['household','calendar'].includes(target))await serviceProductionPreflight(target,directory,config,settings);
@@ -161,6 +159,12 @@ export async function releaseActions(target) {
   await waitForProductionVerification(async () => {
     const deployments = await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${name}/deployments`);
     assertDeployedVersion(deployments, version);
+  });
+  if (target === 'health') await waitForProductionVerification(async () => {
+    const response = await fetch('https://tanaka-note.com/health/', {
+      cache: 'no-store', signal: AbortSignal.timeout(15000)
+    });
+    if (response.status !== 410) throw new Error('Health retirement endpoint did not return 410.');
   });
   if (app) await waitForProductionVerification(
     () => run(root, ['tools/verify-web-app-builds.mjs', '--target', app.deployTarget]), { attempts: 6 });

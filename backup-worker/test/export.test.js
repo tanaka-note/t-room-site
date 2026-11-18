@@ -19,10 +19,9 @@ import { scanBackupMetadata } from '../../diary-worker/src/backup-browser.js';
 const now = Date.parse('2026-11-01T18:25:00Z'), noSleep = async () => {};
 
 test('existing Backup-data summaries show export generations and count monthly-shared parts only once',async()=>{
-  for(const service of ['health','diary']) {
+  for(const service of ['inventory','diary']) {
     const source=database(service),bucket=new Bucket();
     try {
-      if(service==='health')source.exec("INSERT INTO health_records VALUES('fixture','nobumi','iv','ciphertext',1,'now')");
       const mock=exportFetcher(source,service),env=exportEnv(service,d1(source),bucket);
       await saveExport(env,service,now,{fetcher:mock.fetcher,sleep:noSleep});
       const physical=[...bucket.objects.values()].reduce((n,o)=>n+o.bytes.length,0);
@@ -33,6 +32,7 @@ test('existing Backup-data summaries show export generations and count monthly-s
         assert.equal(snapshot.daily.objects[0].backupScope,'d1-only');
       }else{
         const snapshot=await storageSnapshot(env,false,null),item=snapshot.services.find(s=>s.id===service);
+        assert.equal(snapshot.services.some(s=>s.id==='health'),false);
         assert.equal(item.bytes,physical);assert.equal(item.daily.length,1);assert.equal(item.monthly.length,1);
       }
     }finally{source.close();}
@@ -158,7 +158,7 @@ test('global R2 lease excludes overlapping jobs and a stale owner cannot release
 test('Cron dispatches every DB despite one queue failure; repeated dispatch never reports a failed instance as queued',async t=>{
   t.mock.method(console,'error',()=>{});const calls=[];
   await assert.rejects(dispatchServices({D1_BACKUPS:{async create({params}){calls.push(params.service);if(params.service==='cloud')throw new Error('hidden');},get(){return{async status(){return{status:'errored'};}};}}},now),/BackupDispatchFailed/);
-  assert.deepEqual(calls.sort(),Object.keys(SERVICES).sort());
+  assert.deepEqual(calls.sort(),Object.keys(SERVICES).filter(id=>id!=='health').sort());
   const env={D1_BACKUPS:{async create(){throw new Error('duplicate');},get(){return{async status(){return{status:'complete'};}};}}};
   assert.equal((await dispatchBackup(env,'diary',now)).scheduled,true);
   const audit=recorder();assert.deepEqual(await runScheduledDiaryBackup({...env,...audit},now),{complete:true,scheduled:true});assert.equal(audit.events.length,0,'dispatch is never recorded as backup success');

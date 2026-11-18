@@ -73,7 +73,7 @@ export function savedFileNames(photos) {
   });
 }
 
-export function createPhotoSaveManager({ api, dialogs, getOwner, getDefaultRange, formatBytes, onSessionExpired, onNotice, bindDateInput }) {
+export function createPhotoSaveManager({ api, fetchPhoto = globalThis.fetch.bind(globalThis), dialogs, getOwner, getDefaultRange, formatBytes, onSessionExpired, onNotice, bindDateInput }) {
   const node = id => document.getElementById(`photo-save-${id}`);
   const nodes = Object.fromEntries(["dialog", "from", "to", "fallback", "status", "help", "start", "pause", "retry", "reset"].map(id => [id, node(id)]));
   let owner = "", epoch = 0, controller, job = null, photos = [], finished = new Set(), batch = [], files = [];
@@ -216,7 +216,7 @@ export function createPhotoSaveManager({ api, dialogs, getOwner, getDefaultRange
     return [photo];
   }
   async function original(photo, version) {
-    const response = await fetch(`/diary/api/photos/${photo.id}/original?download=1`, {
+    const response = await fetchPhoto(`/diary/api/photos/${photo.id}/original?download=1`, {
       credentials: "same-origin", cache: "no-store", signal: controller.signal
     });
     assertCurrent(version);

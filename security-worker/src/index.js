@@ -1,9 +1,9 @@
 import { diaryAutomaticVault,diaryAutomaticManagement,diaryLoginTrust,diaryKeyBundle,handleDiaryKeys,diaryKeysEnabled,diaryAuthenticationOrigins } from "./diary-keys.js";
 import { runState } from '../../backup-worker/src/monitor.js';
 import { archiveAuditEvents, archiveIfPending } from './audit-archive.js';
-import { healthKeyBundle, handleHealthKeys, healthMembershipStatement, assertHealthMemberAvailable } from './health-keys.js';
 import {handleHouseholdKeys} from './household-keys.js';
 import {householdAutomaticContext} from './household-automatic.js';
+import { billingKeyRecipients, billingVaultContext, enrollBillingVault } from "./billing-vaults.js";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName, identityDisplayName, auditDisplayNames, OWNER_DISPLAY_NAME } from "../../assets/account-display.mjs";
@@ -61,7 +61,6 @@ const SERVICE_REGISTRY = Object.freeze({
   inventory: Object.freeze({ displayName: "在庫照会", binding: "INVENTORY_AUTH" }),
   payments: Object.freeze({ displayName: "支払明細", binding: "PAYMENTS_AUTH" }),
   household: Object.freeze({ displayName: "家計簿", binding: "HOUSEHOLD_AUTH" }),
-  health: Object.freeze({ displayName: "体調管理", binding: "HEALTH_AUTH" }),
   calendar: Object.freeze({ displayName: "カレンダー", binding: "CALENDAR_AUTH" }),
   portfolio: Object.freeze({ displayName: "資産運用報告", binding: "PORTFOLIO_AUTH" })
 });
@@ -82,16 +81,23 @@ const REGISTERED_IDENTITY_AUDIT_EVENTS = Object.freeze([
   "session_resume"
 ]);
 const ACTIVE_SESSION_START_EVENTS = new Set(["password_login_success", "passkey_login_success"]);
-const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "health", "payments", "household", "calendar", "portfolio"]);
+const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "payments", "household", "calendar", "portfolio"]);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 export default class SecurityWorker extends WorkerEntrypoint {
   async fetch(request) {
+    const url = new URL(request.url);
+    let pathname = url.pathname;
+    try { pathname = decodeURIComponent(pathname); } catch { /* Let the asset handler reject malformed paths. */ }
+    if (/^\/security\/(?:health(?:\.html)?\/?$|health-(?:crypto\.mjs|redirect\.js|setup\.mjs)$|api\/health(?:\/|$))/.test(pathname)) {
+      return secure(new Response(request.method === "HEAD" ? null : "Gone", {
+        status: 410, headers: { "Cache-Control": "no-store" },
+      }));
+    }
     const browserResponse = lineBrowserResponse(request);
     if (browserResponse) return browserResponse;
     try {
-      const url = new URL(request.url);
       if (url.pathname === BASE_PATH) return secure(Response.redirect(`${url.origin}${BASE_PATH}/`, 308));
       if (!url.pathname.startsWith(BASE_PATH)) return secure(new Response("ページが見つかりません。", { status: 404 }));
       const path = url.pathname.slice(BASE_PATH.length) || "/";
@@ -180,12 +186,45 @@ export default class SecurityWorker extends WorkerEntrypoint {
     return diaryAutomaticManagement(this.env,input,validatePasskeySession,(eventType,identityId)=>storeAuditEvent(this.env,{service:'diary',eventType,outcome:'success',identityId,credentialId:input.credentialId,serviceLinkId:input.serviceLinkId,serviceAccountId:input.serviceAccountId,authMethod:'passkey',sessionId:input.sessionId}));
   }
 
-  async getHealthKeyBundle(input) {
-    return healthKeyBundle(this.env, input);
-  }
+  async getHealthKeyBundle() { return null; }
 
   async getHouseholdAutomaticContext(input) {
     return householdAutomaticContext(this.env,input,validatePasskeySession);
+  }
+
+  async getBillingRecoveryContext(input) {
+    const env = this.env;
+    if (input?.service !== "billing" || input.serviceAccountId !== "owner" || input.identityId !== PRIMARY_ADMIN_ID
+      || !(await validatePasskeySession(env, input)).valid) return null;
+    const credential = await activeCredential(env, input.credentialId);
+    if (!credential?.is_security_admin || !credential.prf_enabled || credential.identity_id !== PRIMARY_ADMIN_ID) return null;
+    const billingAccount = await env.BILLING_AUTH.describeAccount({ accountId: input.serviceAccountId });
+    if (!billingAccount?.valid || billingAccount.role !== "owner") return null;
+    const link = (await activeLinks(env, PRIMARY_ADMIN_ID, "cloud", input.credentialId))
+      .find(candidate => candidate.service_account_id === "admin");
+    if (!link) return null;
+    const [config, bundle] = await Promise.all([
+      env.CLOUD_AUTH.getPrimaryAdminCryptoConfig(),
+      tcloudEnvelopeBundle(env, PRIMARY_ADMIN_ID, input.credentialId, link.id, "admin")
+    ]);
+    const envelope = bundle.admin_private_prf;
+    if (!config?.initialized || !config.publicKeyJwk || !envelope?.encryptedPayload || !envelope.payloadIv) return null;
+    return {
+      publicKey: config.publicKeyJwk,
+      envelope: { encryptedPayload: envelope.encryptedPayload, payloadIv: envelope.payloadIv }
+    };
+  }
+
+  async getBillingVaultContext(input) {
+    return billingVaultContext(this.env, input, validatePasskeySession);
+  }
+
+  async enrollBillingVault(input, vault) {
+    return enrollBillingVault(this.env, input, vault, validatePasskeySession);
+  }
+
+  async getBillingKeyRecipients(input) {
+    return billingKeyRecipients(this.env, input, validatePasskeySession);
   }
 
   async getAiBudgetPolicy(identityId) {
@@ -303,17 +342,6 @@ async function handleApi(request, env, url, path, context = null) {
     return handleHouseholdKeys(path,request,env,actor,{HttpError,readJson,json,
       audit:(eventType,identityId)=>writeLocalAudit(env,{eventType,identityId,service:'household',outcome:'success',authMethod:'passkey'},request)});
   }
-  if (path.startsWith("/api/health/")) {
-    if (request.method !== "GET") requireMutation(request, url);
-    const actor = await requireActiveIdentitySession(request, env);
-    if (!["/api/health/own", "/api/health/vault"].includes(path)) {
-      const admin = await requireSecurityAdmin(request, env);
-      if (admin.identityId !== actor.identityId || admin.credentialId !== actor.credentialId) throw new HttpError(403, "管理者の本人確認が一致しません。");
-      requireFreshSecurityAdmin(admin);
-    }
-    return handleHealthKeys(path, request, env, actor, { HttpError, readJson, json,
-      audit: (eventType, identityId) => writeLocalAudit(env, { eventType, identityId, service: "health", outcome: "success", authMethod: "passkey" }, request) });
-  }
   const admin = await requireSecurityAdmin(request, env);
   if (path === "/api/services" && request.method === "GET") return listServiceRegistry(env);
   if (path === "/api/dashboard" && request.method === "GET") return dashboard(env);
@@ -414,7 +442,7 @@ async function bootstrapVerify(request, env, url) {
         JSON.stringify(credential.transports || []), verification.registrationInfo.credentialDeviceType,
         verification.registrationInfo.credentialBackedUp ? 1 : 0, body.prfEnabled ? 1 : 0, prfSalt),
     env.DB.prepare("UPDATE security_identities SET status = 'active', is_security_admin = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(PRIMARY_ADMIN_ID),
-    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND service != 'cloud'").bind(PRIMARY_ADMIN_ID),
+    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND service NOT IN ('cloud', 'health')").bind(PRIMARY_ADMIN_ID),
     insertSetupSessionStatement(env, setup),
     await localAuditStatement(env, { eventType: "passkey_registration", outcome: "success", identityId: PRIMARY_ADMIN_ID, authMethod: "passkey", serviceAccountId: "admin" }, request)
   ]);
@@ -517,7 +545,7 @@ async function authenticationOptions(request, env) {
     ORDER BY c.registered_at ASC`);
   const rows = await (["security", "cloud"].includes(service) ? statement.all() : statement.bind(service).all());
   if (!(rows.results || []).length) throw new HttpError(404, "パスキーが登録されていません。管理者からの招待を確認してください。");
-  const extensions = (["security", "cloud", "health", "household"].includes(service)||(service==="diary"&&diaryKeysEnabled(env)))
+  const extensions = (["security", "cloud", "household", "billing"].includes(service)||(service==="diary"&&diaryKeysEnabled(env)))
     ? prfAuthenticationExtensions(rows.results)
     : undefined;
   const options = await generateAuthenticationOptions({
@@ -600,7 +628,6 @@ async function createHandoff(request, env) {
     envelopes.folder_keys_rsa = folderKeys;
     delete envelopes.folder_key_rsa;
   }
-  if (service === "health" && !await healthKeyBundle(env, { identityId: identitySession.identityId, credentialId: identitySession.credentialId, serviceLinkId: selected.id })) throw new HttpError(409, "Security Centerで体調管理の鍵の準備・承認を完了してください。");
   const rawToken = randomToken(32);
   await env.DB.prepare(`INSERT INTO security_handoffs
     (id, token_hash, identity_id, service_link_id, credential_id, session_epoch, expires_at, cloud_folder_scopes)
@@ -1075,7 +1102,7 @@ async function identityDetail(id, env) {
   const identity = await env.DB.prepare("SELECT * FROM security_identities WHERE id = ?").bind(id).first();
   if (!identity) throw new HttpError(404, "Identityが見つかりません。");
   const [links, credentials, invitations, audits] = await Promise.all([
-    env.DB.prepare("SELECT * FROM security_service_links WHERE identity_id = ? ORDER BY service, created_at").bind(id).all(),
+    env.DB.prepare("SELECT * FROM security_service_links WHERE identity_id = ? AND service != 'health' ORDER BY service, created_at").bind(id).all(),
     env.DB.prepare("SELECT credential_id, transports_json, device_type, backed_up, prf_enabled, status, label, registered_at, approved_at, last_used_at, revoked_at FROM security_credentials WHERE identity_id = ? ORDER BY registered_at DESC").bind(id).all(),
     env.DB.prepare("SELECT id, expires_at, status, created_at, used_at, revoked_at FROM security_invitations WHERE identity_id = ? ORDER BY created_at DESC LIMIT 20").bind(id).all(),
     env.DB.prepare("SELECT * FROM security_audit_events WHERE identity_id = ? AND occurred_at >= ? ORDER BY occurred_at DESC LIMIT 50").bind(id, auditRetentionCutoff(180)).all()
@@ -1230,7 +1257,7 @@ async function approveIdentity(identityId, request, env, admin) {
     }
   }
   const cloudLinks = await env.DB.prepare("SELECT * FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND service_account_id = 'folder-member' AND status IN ('pending', 'active')").bind(identityId).all();
-  const pendingLinks = await env.DB.prepare("SELECT 1 AS ok FROM security_service_links WHERE identity_id = ? AND status = 'pending' LIMIT 1").bind(identityId).first();
+  const pendingLinks = await env.DB.prepare("SELECT 1 AS ok FROM security_service_links WHERE identity_id = ? AND status = 'pending' AND service != 'health' LIMIT 1").bind(identityId).first();
   const existingFolderEnvelopes = await env.DB.prepare(`SELECT service_link_id FROM security_tcloud_key_envelopes
     WHERE identity_id = ? AND credential_id = ? AND envelope_type = 'folder_key_rsa'`)
     .bind(identityId, credentialId).all();
@@ -1261,7 +1288,7 @@ async function approveIdentity(identityId, request, env, admin) {
         wrapped_key = excluded.wrapped_key, updated_at = CURRENT_TIMESTAMP`)
       .bind(crypto.randomUUID(), identityId, credential.credential_id, envelope.linkId, envelope.wrappedKey)),
     env.DB.prepare("UPDATE security_credentials SET status = 'active', approved_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND credential_id = ? AND status = 'pending'").bind(identityId, credentialId),
-    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service != 'cloud'").bind(identityId),
+    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service NOT IN ('cloud', 'health')").bind(identityId),
     env.DB.prepare("UPDATE security_identities SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identityId)
   ];
   if (cloudPasskeyReady) updates.push(env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service = 'cloud' AND service_account_id = 'folder-member'").bind(identityId));
@@ -1508,15 +1535,7 @@ async function validatePasskeySession(env, input) {
   if (!runtime.enabled || !service || !identityId || !credentialId || !serviceLinkId || !serviceAccountId || !Number.isInteger(sessionEpoch)) return { valid: false };
   if (service === "cloud" && serviceAccountId === "subadmin") return { valid: false };
   const row = await env.DB.prepare(`SELECT c.credential_id, c.identity_id, l.id AS link_id, l.service,
-      l.service_account_id, l.cloud_root_folder_id, ? AS session_epoch,
-      ${service === "health" && input.requireHealthKeyReady ? `EXISTS (
-        SELECT 1 FROM security_health_vaults v
-        JOIN security_health_grants g ON g.credential_id = v.credential_id AND g.identity_id = v.identity_id
-        JOIN security_health_members m ON m.identity_id = v.identity_id
-        JOIN security_health_config cfg ON cfg.account_id = 'nobumi'
-        WHERE v.credential_id = c.credential_id AND v.identity_id = i.id AND g.service_link_id = l.id
-          AND l.service_account_id = 'nobumi' AND json_valid(v.public_key_json)
-      )` : "0"} AS health_key_ready
+      l.service_account_id, l.cloud_root_folder_id, ? AS session_epoch
     FROM security_credentials c
     JOIN security_identities i ON i.id = c.identity_id
     JOIN security_service_links l ON l.identity_id = i.id
@@ -1534,8 +1553,7 @@ async function validatePasskeySession(env, input) {
     valid = valid && service === "cloud" && serviceAccountId === "folder-member" && Boolean(folderScopes)
       && await validCloudFolderScopes(env, identityId, credentialId, folderScopes, serviceLinkId, input.cloudRootFolderId);
   }
-  return { valid, ...(valid && folderScopes ? { folderScopes } : {}),
-    ...(service === "health" && input.requireHealthKeyReady ? { keyReady: valid && Number(row?.health_key_ready) === 1 } : {}) };
+  return { valid, ...(valid && folderScopes ? { folderScopes } : {}) };
 }
 
 function normalizeCloudFolderScopes(value) {
@@ -1864,11 +1882,6 @@ async function validateServiceLinks(env, input, { identityId = null, admin = nul
       if (admin?.identityId !== PRIMARY_ADMIN_ID) throw new HttpError(403, "Downloaderの連携はオーナーだけが追加できます。");
       requireFreshSecurityAdmin(admin);
     }
-    if (service === "health") {
-      if (admin?.identityId !== PRIMARY_ADMIN_ID) throw new HttpError(403, "体調管理の連携はオーナーだけが追加できます。");
-      requireFreshSecurityAdmin(admin);
-      await assertHealthMemberAvailable(env.DB, identityId, HttpError);
-    }
     const integration = serviceProvider(env, service);
     const description = await integration.describeAccount({ accountId, rootFolderId, selectableOnly: true });
     if (!description?.valid) throw new HttpError(400, `${service}の連携先を確認できません。`);
@@ -1888,7 +1901,6 @@ async function validateServiceLinks(env, input, { identityId = null, admin = nul
 async function explicitServiceLinkStatements(env, identityId, link, status, admin, request, source) {
   const id = crypto.randomUUID();
   return [
-    ...(link.service === "health" ? [healthMembershipStatement(env.DB, identityId)] : []),
     insertServiceLinkStatement(env, identityId, link, status, id),
     await localAuditStatement(env, {
       eventType: "service_link_added", outcome: "success", identityId, service: link.service,
@@ -2393,7 +2405,6 @@ async function sourceHash(request, env) {
 }
 
 async function serveAsset(request, env, url, path) {
-  if (path === "/health-crypto.mjs") return env.HEALTH_AUTH.fetch(new Request(new URL("/health/health-crypto.mjs", url.origin), request));
   const assetPath = path === "/" || path === "/invite" ? "/" : path;
   const response = await env.ASSETS.fetch(new Request(new URL(assetPath, url.origin), request));
   const headers = new Headers(response.headers);
@@ -2449,7 +2460,7 @@ async function observePasskeyRuntime(env, requestedEnabled) {
 function rpId(env) { return env.RP_ID || "tanaka-note.com"; }
 function expectedOrigins(env) { return String(env.EXPECTED_ORIGIN || "https://tanaka-note.com").split(",").map((value) => value.trim()).filter(Boolean).concat(env.ALLOW_LOCAL_HTTP === "true" ? ["http://127.0.0.1:8790", "http://localhost:8790"] : []); }
 function normalizeService(value) { return normalizeLinkedService(value); }
-function normalizeAuthService(value) { return normalizeAuditService(value); }
+function normalizeAuthService(value) { return value === "security" ? value : normalizeService(value); }
 function normalizeId(value) { const text = String(value || "").trim(); return /^[A-Za-z0-9_-]{1,128}$/.test(text) ? text : ""; }
 function normalizeText(value, max) { return typeof value === "string" ? value.trim().replace(/[\u0000-\u001f\u007f]/g, "").slice(0, max) : ""; }
 function normalizeSecretText(value, max) { const text = typeof value === "string" ? value.trim() : ""; return text.length <= max ? text : ""; }

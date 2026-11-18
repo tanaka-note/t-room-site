@@ -22,53 +22,17 @@ const pages = [
   {
     name: "home", path: "/index.html", selectors: [".hero", ".hero-statement", ".topic-grid", ".topic-card", ".recent-section"],
     regions: [["rooms", "#topics"], ["latest", "#posts"]],
-    relations: [["rooms-heading-to-grid", "#topics .section-heading", ".topic-grid"], ["latest-heading-to-list", "#posts .section-heading", ".recent-list"]]
+    relations: [["rooms-heading-to-grid", "#topics .section-heading", ".topic-grid"], ["latest-heading-to-empty", "#posts .section-heading", "#recent-empty"]]
   },
-  { name: "articles", path: "/articles.html", selectors: [".sub-hero", ".section", ".recent-list"] },
+  { name: "articles", path: "/articles.html", selectors: [".sub-hero", ".section", "#article-archive-empty"] },
   { name: "public-diary", path: "/diary.html", selectors: [".diary-hero", ".diary-layout", ".diary-panel", ".diary-search-card", ".diary-search-box input"] },
-  {
-    name: "investment", path: "/investment.html", selectors: [".investment-hero", ".investment-layout", ".investment-panel", ".market-card-grid", ".market-card"],
-    regions: [["market", ".market-panel"], ["articles", ".investment-articles-panel"]],
-    relations: [["market-note-to-grid", ".market-note", ".market-card-grid"], ["articles-title-to-list", ".investment-articles-panel h2", ".investment-article-list"]]
-  },
-  {
-    name: "learning", path: "/learning/index.html", selectors: [".learning-hero", ".learning-layout", ".learning-panel", ".learning-law-grid", ".learning-law-card"],
-    regions: [["law-group", ".learning-law-group:first-of-type"]],
-    relations: [["search-to-map", ".learning-search-card", ".learning-map-groups"]]
-  },
-  {
-    name: "learning-subjects", path: "/learning/sharoushi/subjects/", includeY: true,
-    selectors: [".learning-subject-grid", ".learning-subject-card", ".learning-mini-stats", ".learning-mini-stats dt", ".learning-mini-stats dd"],
-    dynamicSelectors: [".learning-subject-card", ".learning-mini-stats", ".learning-mini-stats dt", ".learning-mini-stats dd"],
-    zeroMarginLeftSelector: ".learning-mini-stats dd",
-    regions: [["subjects", ".learning-subject-grid"]],
-    relations: [["subject-title-to-stats", ".learning-subject-card h3", ".learning-mini-stats"], ["stats-term-to-value", ".learning-mini-stats dt", ".learning-mini-stats dd"]]
-  },
-  { name: "learning-article", path: "/learning/sharoushi/logs/011.html", selectors: [".learning-article", ".learning-article-header", ".learning-article-body", ".learning-table"] },
   { name: "games", path: "/game.html", selectors: [".game-hero", ".game-library-grid", ".game-library-card"] },
   {
     name: "game-screen", path: "/blocks-game.html", selectors: [".game-hero", ".game-layout", ".game-panel", ".game-frame", ".game-message"],
     regions: [["game", ".game-panel"]],
     relations: [["hud-to-frame", ".game-hud", ".game-frame"]]
-  },
-  { name: "columns", path: "/thought.html", selectors: [".thought-hero", ".thought-shell", ".thought-section", ".thought-article-card", ".thought-series-card"] },
-  {
-    name: "column-article", path: "/columns/music/001.html", selectors: [".thought-reading-shell", ".thought-reading", ".thought-body", ".thought-article-nav"],
-    regions: [["body-opening", ".thought-body > p:first-of-type"]],
-    relations: [["title-to-body", ".thought-reading > h1", ".thought-body"]]
   }
 ];
-
-const marketFixture = {
-  updatedAt: "2026-09-21T03:00:00.000Z",
-  items: [
-    { id: "nikkei225_ref", price: 45123, currency: "JPY", percentChange: 0.72, ok: true, fetchedAt: "2026-09-21T03:00:00.000Z" },
-    { id: "sp500_ref", price: 6789.12, currency: "USD", percentChange: 0.31, ok: true, fetchedAt: "2026-09-21T03:00:00.000Z" },
-    { id: "nasdaq100_ref", price: 25123.45, currency: "USD", percentChange: -0.18, ok: true, fetchedAt: "2026-09-21T03:00:00.000Z" },
-    { id: "bitcoin", price: 112345.67, currency: "USD", percentChange: 1.24, ok: true, fetchedAt: "2026-09-21T03:00:00.000Z" },
-    { id: "nifty50_ref", price: 26345.8, currency: "USD", percentChange: 0.09, ok: true, fetchedAt: "2026-09-21T03:00:00.000Z" }
-  ]
-};
 
 let server;
 let origin;
@@ -206,9 +170,6 @@ for (const entry of pages) {
     });
     await page.route("**/*", route => {
       const requestUrl = new URL(route.request().url());
-      if (requestUrl.origin === "https://troom-market-worker.atsushi-vip.workers.dev") {
-        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(marketFixture) });
-      }
       const host = requestUrl.hostname;
       if (host === "127.0.0.1" || host === "fonts.googleapis.com" || host === "fonts.gstatic.com") return route.continue();
       return route.abort("blockedbyclient");

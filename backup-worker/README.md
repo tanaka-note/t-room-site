@@ -4,7 +4,7 @@
 
 ## 対象と保持
 
-- 専用Worker `t-room-backup` の `D1BackupWorkflow` が本番12 D1を扱う。Portfolio / Cloud / Security / Billing / Payments / Health / Inventory / AI / Calendar / HouseholdとDownloader利用集計は03:40 JSTのCron、日記D1は既存の03:25 JSTから、DBごとに独立したWorkflowを起動する。開始は30秒ずつずらす。Calendarのローカル利用は対象外。
+- 専用Worker `t-room-backup` の `D1BackupWorkflow` が本番11 D1を定期保存する。Portfolio / Cloud / Security / Billing / Payments / Inventory / AI / Calendar / HouseholdとDownloader利用集計は03:40 JSTのCron、日記D1は既存の03:25 JSTから、DBごとに独立したWorkflowを起動する。開始は30秒ずつずらす。Calendarのローカル利用は対象外。
 - Portfolio（資産運用報告）は他サービスD1と同じ `40 18 * * *`（毎日03:40 JST）のscheduled呼び出しで起動する。独立したCronは追加しない。`portfolio-db` のアカウント状態、報告設定とrevision、日付別評価額・更新時刻・銘柄内訳、訂正前後の履歴・保存IDを全て対象にする。保存先は既存の非公開R2の `d1/portfolio/v3/daily/` と `monthly/`、保持は日次30・月次12世代。手動JSON出力・旧静的ページとは独立し、動的ページの更新が対象になる。Backup-dataには「資産運用報告」として保存世代・成否を表示する。新規のSecretやパスキーは収集せず、新旧両形式の隔離復元では両アカウントを無効化しsession versionを進める。
 - Householdの端末側暗号化対応後は、家計の暗号文と `household_crypto_config/vaults/grants` の暗号化済み鍵情報を同じD1 snapshotへ保存する。復号鍵・PRFは取得しない。鍵IDと復旧用envelopeを保持し、Securityの別時点の保存に家計鍵の正本を依存させない。0006の旧平文v2/v3バックアップは旧schemaで隔離復元し、内容照合後に0007を適用する。暗号文の保存成功と、管理者の端末で復旧鍵を解除して実際に復号できることは別に検証する。移行中・過去世代の平文残存と公開手順は[家計簿README](../household-worker/README.md#移行公開手順)に従う。
 - Householdは専用D1のアカウント状態・現行世代/revision・家計record（保持中の旧世代を含む）・再送履歴を保存し、Backup-dataへ「家計簿」として表示する。手動JSON出力とは別の定期保存。Secret・Cookie・パスキーは収集せず、隔離復元ではアカウントを無効化してsession versionを進める。通常保存は公式exportをストリーム処理するため、旧方式の合計10,000行・行JSON 8MiB制約には依存しない。
@@ -12,7 +12,7 @@
 - 対象のテーブル・列・既知schemaは`src/registry.js`を正本とする。未知のテーブル、対象テーブルの列変更、取得失敗は保存を停止して要確認にする。schema変更と同じPRで許可リスト・復元fixture・src/schema-guard.jsのmigration由来fingerprintを更新する。列だけでなくindex・trigger・制約を含むDDL差分も停止対象とし、D1内部table/migration管理tableは除外する。本番の既存DDLがmigrationと異なる場合も停止するので、初回公開前に読取専用で差分を確認し、内容を精査してから基準を更新する。
 - JSON gzipに実際のschema SQL、想定migration、サービス・DB名、取得時刻、列・行・件数を含める。各DBの全対象行は一回の公式D1 exportの固定snapshotから取得する。export前後のschemaを検査し、途中のschema変更では公開しない。取得開始・完了・予定時刻を記録する。DB間、D1とR2写真の同時点の保証はない。
 - T-CloudはD1の管理情報・暗号化済み鍵情報が対象。R2のファイル本体、動画、サムネイルを複製しない。共有リンクと一時解除状態も自動復元対象にしない。
-- Healthの記録は暗号文のまま保存し、Security側の暗号化済み鍵情報と対応させて復旧する。PRF、平文秘密鍵、復号鍵、Worker Secretsを収集しない。パスキーの秘密鍵は端末側にあり、このバックアップから作成できない。
+- 体調管理の定期保存とBackup-dataへの表示は終了する。旧世代と復元仕様の参照先は[サービス終了の記録](../docs/history/2026-11-18-service-retirement.md)に記載する。
 - Password hashやサービスの一時セッション、challenge、handoff、Downloaderの処理中ジョブ・一時ファイルは対象外。AIの利用実績と料金予約・再送状態は照合に必要なため保持するが、復旧時に処理を再実行しない。
 - 日記D1は専用R2・03:25 JSTを維持し、写真処理と完全に独立する。写真の未処理・破損・R2障害はD1保存・検証・保持の成否に参加しない。写真本体は日記用R2に保存し、別バケットへの画像バックアップは廃止する。D1の成功だけで日記全体を復元可能と表示しない。
 
@@ -61,6 +61,23 @@ DB単位のR2 CASリースを20分保持し、15分Workflow stepより長くす�
 
 隔離復元は0005形式の旧Household v2も扱う。元の列・行を照合してから信頼済み0006/0007 migrationを適用し、後から追加されるアカウントも含めて無効化する。本番のcapture schemaや復元APIは変更しない。
 
+## 日記の旧D1バックアップの暗号化
+
+`tools/diary-archive.mjs` は、第一管理者の信頼済み端末から使う Node.js 24 用の移行・復元ツール。旧`daily/`・`monthly/`、`v8/`、`v9/`のD1世代を扱う。v3・v6の元の列で隔離SQLiteに復元できる。v9は日次と月次の目録から分割ファイルを照合し、同じ参照集合を一つのアーカイブに保存する。参照されない分割ファイルは棚卸し結果に記録する。
+
+原本のgzip、キー、ETag、元のメタデータと検証用SHA-256を暗号化内容に保持する。記録済みのSHA-256があるファイルは照合する。古いファイルに記録がない場合は、一覧で固定したETagに条件付けて独立した2回の取得を行い、今回観測したSHA-256を照合する。結果は `recorded-sha256` と `repeated-source-read` で記録し、後者は作成時の状態を証明するものとは区別する。一つのアーカイブは原本合計8 MiB・1,000オブジェクトまで。
+
+アーカイブごとのAES-256-GCM鍵を、既存の第一管理者の復旧用公開鍵で包む。公開鍵の指紋には信頼済みの日記ディレクトリに記録された `recoveryFingerprint` を使う。第一管理者が既存の復旧経路で端末内に解除した `CryptoKey` で実際に開封してから、復元済みと扱う。平文、秘密鍵、PRFは端末内だけで扱う。詳細は[日記の中央復旧](../docs/security/diary-encryption.md#復旧失効)を参照。
+
+呼び出し元が、既存の認可を使ったR2互換の接続を渡す。`source.get(key, { onlyIf: { etagMatches } })` は独立したR2取得を行い、`body`、`size`、`etag`、`customMetadata` を返す。宛先は既存の非公開バックアップR2で、`put` の `etagDoesNotMatch: '*'` を条件付きで適用する。ツール側で接続や認証情報を生成しない。
+
+1. 日記の旧D1ファイルを一覧し、`{ key, etag, size }` を `planDiaryArchives(source, inventory)` に渡す。`batches` を処理し、`unreferencedParts` は別途参照を調べる。
+2. `sealDiaryArchive(source, batch, { recoveryPublicKey, expectedRecoveryFingerprint })` で暗号化する。原本の隔離復元が通ったバッチだけが暗号文を返す。返された `sourceReport` は管理者端末の信頼済み記録に保持する。
+3. `publishDiaryArchive(destination, archive)` で `sealed/diary-legacy/v1/` に新規保存する。R2から暗号文を読み戻してSHA-256を確認する。通信中断時は同じ `archive` を再送し、一致する既存オブジェクトから再開する。返された `receipt` と `sourceReport` の対応を管理者端末の信頼済み記録に保管する。
+4. `verifyStoredDiaryArchive(destination, receipt, { recoveryPrivateKey, expectedRecoveryFingerprint, sourceReport })` を実行する。実際に保存した暗号文を復号し、原本レポートとの一致、全世代の復元、行数・値、SQLiteの整合性と復元済みアカウントの無効化を確認する。保管後に個別世代を取り出す場合は `restoreDiaryArchiveGeneration(archive, originalKey, { recoveryPrivateKey, expectedRecoveryFingerprint })` でメモリー上のSQLiteを開き、使用後に閉じる。
+
+原本整理は全世代の合格を確認し、削除候補のキー・ETagと共有参照を再照合したうえで別途承認する。写真本体やD1 Time Travelの旧履歴は別の保管対象として扱う。
+
 ## 日記写真のバックアップ廃止
 
 日記写真は既存の `t-room-diary-media` を正本とし、別R2への差分コピー・再検証・初回追いつき処理を廃止する。日記WorkerのCronは `25 18 * * *`（03:25 JST）のみで、D1と従来の通常cleanupを維持する。アップロード・表示・写真管理と `diary/staging/` の正式写真は変更しない。`backup_identity` 列と旧形式のDB復元互換性は維持し、列削除・migrationは行わない。旧写真形式の読取・隔離復元helperは互換試験用に残すが、本番からコピー処理は呼び出さない。
@@ -86,7 +103,7 @@ T-Cloudの `Backup-data` は日記DBの成否・世代・容量と他サービ�
 
 通常のCronはDBごとにWorkflowを作成し、1 DBのdispatch失敗でも後続DBを試す。`backup_dispatched`は起動依頼の完了だけを表し、保存成功を意味しない。起動に失敗したDBは固定項目の`backup_dispatch_failed`ログに残し、Cronも失敗する。日記D1のCronもdispatchだけを担当し、日記の通常処理とは独立する。
 
-各Workflowは開始記録、公式export・列選別・分割保存・読戻し、成功監査、世代整理を行う。保存失敗・監査不能・整理失敗はWorkflowの失敗終了とし、既存監査へ`backup_failed`または`backup_prune_failed`を残す。安全な固定理由コード以外の例外本文はWorkflowの永続step状態にも渡さない。成功監査を残せない場合は世代整理しない。全体の完了は12 DBそれぞれのWorkflow終端・成功監査・保存世代で確認する。
+各Workflowは開始記録、公式export・列選別・分割保存・読戻し、成功監査、世代整理を行う。保存失敗・監査不能・整理失敗はWorkflowの失敗終了とし、既存監査へ`backup_failed`または`backup_prune_failed`を残す。安全な固定理由コード以外の例外本文はWorkflowの永続step状態にも渡さない。成功監査を残せない場合は世代整理しない。全体の完了は対象の11 DBそれぞれのWorkflow終端・成功監査・保存世代で確認する。
 
 Cronのdispatch結果とBackup-dataの監査表示は別の確認元。監査RPCとQueueが両方使えない場合、画面に前回の正常状態や実行中が残り得るため、Workflowの状態とCronの失敗も監視する。stepは最大3試行で、同日の正常日次があれば再取得せず検証・月次から再開する。旧bindingなしの互換Cronは従来の同期処理を維持するが、新構成の完了判定には使用しない。
 

@@ -13,21 +13,9 @@
       "name": "T-lain本体・公開ページ",
       "publicUrls": ["https://tanaka-note.com/"],
       "entrypoints": [
-        "index.html", "apps.html", "articles.html", "work.html", "game.html", "investment.html",
-        "life.html", "thought.html", "diary.html", "diary/archive.html", "diary/tags.html",
-        "investment-performance.html", "investment-bitcoin-decline.html", "investment-boj-rate-hike.html",
-        "investment-btc-four-year-cycle.html", "blocks-game.html", "hop-game.html", "oni-type.html",
-        "oni-type-en.html", "stone-stack.html", "learning.html", "learning/index.html",
-        "learning/sharoushi/index.html", "learning/sharoushi/logs/index.html",
-        "learning/sharoushi/logs/001.html", "learning/sharoushi/logs/002.html",
-        "learning/sharoushi/logs/003.html", "learning/sharoushi/logs/004.html",
-        "learning/sharoushi/logs/005.html", "learning/sharoushi/logs/006.html",
-        "learning/sharoushi/logs/007.html", "learning/sharoushi/logs/008.html",
-        "learning/sharoushi/logs/009.html", "learning/sharoushi/logs/010.html",
-        "learning/sharoushi/logs/011.html", "learning/sharoushi/subjects/index.html",
-        "learning/sharoushi/topics/index.html", "columns/music/index.html", "columns/music/001.html",
-        "columns/music/002.html", "columns/current-affairs/index.html", "columns/current-affairs/001.html",
-        "transfer/index.html"
+        "index.html", "apps.html", "articles.html", "work.html", "game.html",
+        "life.html", "diary.html", "diary/archive.html", "diary/tags.html",
+        "blocks-game.html", "hop-game.html", "oni-type.html", "oni-type-en.html", "stone-stack.html"
       ],
       "buildMode": "prepared-commit",
       "serviceWorker": null,
@@ -311,6 +299,10 @@
           "copy": "diary-worker/public/crypto/e2ee/media-client.mjs"
         },
         {
+          "source": "diary-worker/e2ee/photo-crypto.mjs",
+          "copy": "diary-worker/public/crypto/e2ee/photo-crypto.mjs"
+        },
+        {
           "source": "diary-worker/src/entry-domain.js",
           "copy": "diary-worker/public/crypto/src/entry-domain.js"
         },
@@ -334,7 +326,13 @@
       "publicUrls": ["https://tanaka-note.com/billing/"],
       "entrypoints": ["billing-worker/public/index.html"],
       "buildRoots": ["billing-worker/public"],
-      "buildFiles": ["diary-worker/public/dialog-navigation.js", "assets/session-secret.mjs", "assets/session-policy.mjs", "billing-worker/src/index.js", "assets/password-auth-policy.mjs", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js", "assets/passkey-rolling.mjs",
+      "buildFiles": ["diary-worker/public/dialog-navigation.js", "assets/session-secret.mjs", "assets/session-policy.mjs", "billing-worker/src/index.js", "billing-worker/src/finance.js", "assets/password-auth-policy.mjs", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js", "assets/passkey-rolling.mjs",
+        "cloud-worker/public/crypto-vault.js",
+        "billing-worker/src/encryption-api.js",
+        "billing-worker/src/legacy-api.js",
+        "billing-worker/src/legacy-cleanup.js",
+        "billing-worker/src/migration-candidate.js",
+        "billing-worker/src/migration-source.js",
         "tools/shared/tlain-login.css",
         "tools/shared/tlain-login.js"
       ],
@@ -346,6 +344,10 @@
       "deployCwd": "billing-worker",
       "deployCommand": "pnpm run deploy",
       "assetCopies": [
+        {
+          "source": "billing-worker/src/finance.js",
+          "copy": "billing-worker/public/billing-finance.mjs"
+        },
         {
           "source": "tools/shared/tlain-login.css",
           "copy": "billing-worker/public/tlain-login.css"
@@ -367,8 +369,7 @@
         "https://tanaka-note.com/security/"
       ],
       "entrypoints": [
-        "security-worker/public/index.html",
-        "security-worker/public/health.html"
+        "security-worker/public/index.html"
       ],
       "buildRoots": [
         "security-worker/public"
@@ -376,6 +377,7 @@
       "buildFiles": [
         "assets/session-secret.mjs",
         "security-worker/src/index.js",
+        "security-worker/src/billing-vaults.js",
         "security-worker/src/security-domain.js",
         "security-worker/src/security-headers.js",
         "security-worker/src/definition-status.js",
@@ -392,10 +394,8 @@
         "assets/session-policy.mjs",
         "security-worker/src/rolling-sessions.js",
         "security-worker/wrangler.jsonc",
-        "security-worker/src/health-keys.js",
         "security-worker/src/household-keys.js",
         "security-worker/src/household-automatic.js",
-        "health-worker/public/health-crypto.mjs",
         "tools/shared/tlain-login.css",
         "tools/shared/tlain-login.js",
         "security-worker/diary-restore.mjs",
@@ -666,50 +666,6 @@
       "deployCommand": "pnpm run deploy"
     },
     {
-      "id": "health",
-      "name": "体調管理",
-      "publicUrls": [
-        "https://tanaka-note.com/health/"
-      ],
-      "entrypoints": [
-        "health-worker/public/index.html"
-      ],
-      "buildRoots": [
-        "health-worker/public"
-      ],
-      "buildFiles": [
-        "health-worker/src/index.js",
-        "health-worker/src/worker.js",
-        "assets/security-audit-worker.js",
-        "assets/line-browser-worker.mjs",
-        "assets/line-browser-policy.mjs",
-        "assets/line-browser-csp.mjs",
-        "assets/session-secret.mjs",
-        "assets/session-policy.mjs",
-        "security-worker/public/passkey-client.js",
-        "diary-worker/public/dialog-navigation.js",
-        "tools/shared/tlain-login.css",
-        "tools/shared/tlain-login.js"
-      ],
-      "buildMode": "content-hash",
-      "serviceWorker": null,
-      "manifest": null,
-      "twa": null,
-      "deployTarget": "t-room-health",
-      "deployCwd": "health-worker",
-      "deployCommand": "pnpm run deploy",
-      "assetCopies": [
-        {
-          "source": "tools/shared/tlain-login.css",
-          "copy": "health-worker/public/tlain-login.css"
-        },
-        {
-          "source": "tools/shared/tlain-login.js",
-          "copy": "health-worker/public/tlain-login.js"
-        }
-      ]
-    },
-    {
       "id": "payments",
       "assetCopies": [{ "source": "diary-worker/public/dialog-navigation.js", "copy": "payments-worker/public/dialog-navigation.js" },
         {
@@ -895,6 +851,37 @@
   ],
   "excludedHtml": [
     { "path": "asset-report-k7m4q9x2/index.html", "reason": "公開停止済みの移行検証用ソース。公開assetsに含めず終了用Workerだけを配信" },
+    { "path": "columns/current-affairs/001.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "columns/current-affairs/index.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "columns/music/001.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "columns/music/002.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "columns/music/index.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "health-worker/public/index.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "investment-bitcoin-decline.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "investment-boj-rate-hike.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "investment-btc-four-year-cycle.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "investment-performance.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "investment.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning/index.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning/sharoushi/index.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning/sharoushi/logs/001.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning/sharoushi/logs/002.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning/sharoushi/logs/003.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning/sharoushi/logs/004.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning/sharoushi/logs/005.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning/sharoushi/logs/006.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning/sharoushi/logs/007.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning/sharoushi/logs/008.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning/sharoushi/logs/009.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning/sharoushi/logs/010.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning/sharoushi/logs/011.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning/sharoushi/logs/index.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning/sharoushi/subjects/index.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "learning/sharoushi/topics/index.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "security-worker/public/health.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "thought.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "transfer/index.html", "reason": "終了済みサービスの再構築用ソース" },
     { "path": "learning/sharoushi/logs/template.html", "reason": "記事生成用テンプレート" },
     { "path": "cloud-worker/public/offline.html", "reason": "Service Workerオフラインfallback" }
   ]

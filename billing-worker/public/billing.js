@@ -20,6 +20,7 @@
     invoice: ["purchase", "discount", "income", "offset", "other"],
     payment_notice: ["purchase", "offset", "income", "other"]
   };
+  const legacyMode = new URLSearchParams(location.search).get("maintenance") === "legacy";
   const dialogs = TroomDialogNavigation.create({ key: "troomBillingDialogs" });
   const settlementDirectionLabels = { incoming: "入金", outgoing: "着金" };
   const settlementMethodLabels = {
@@ -34,7 +35,7 @@
     el["print-date"].textContent = formatDateJp(japanToday());
     try {
       const session = await api("/session");
-      if (session.authenticated) await enterApp(session);
+      if (session.authenticated && !session.encrypted) await enterApp(session);
       else showLogin();
     } catch {
       showLogin();
@@ -64,10 +65,13 @@
     });
     dialogs.register("date-wheel-dialog", { backdrop: applyDateWheel, onClose: () => { state.dateWheelTarget = null; state.dateWheelMode = "date"; } });
     document.addEventListener("troom:before-auto-update", (event) => {
-      if (document.querySelector("dialog[open]")) event.preventDefault();
+      if (state.legacyBusy || document.querySelector("dialog[open]")) event.preventDefault();
     });
     el["passkey-login"].addEventListener("click", loginWithPasskey);
     el["logout-button"].addEventListener("click", logout);
+    el["legacy-logout"].addEventListener("click", logout);
+    el["legacy-verify"].addEventListener("click", verifyLegacyBackups);
+    el["legacy-cleanup-form"].addEventListener("submit", cleanLegacyPlaintext);
     bindMonthInput(el["month-input"]);
     el["month-input"].addEventListener("change", loadSummary);
     el["account-select"].addEventListener("change", changeAccount);
@@ -110,13 +114,18 @@
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
     el["passkey-login-label"].textContent = "確認中…";
+    let authentication;
     try {
-      const authentication = await TRoomPasskeys.authenticate("billing", choosePasskeyLink);
+      authentication = await TRoomPasskeys.authenticate("billing", choosePasskeyLink);
       const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
+      const staged = session.prepareEncryptionKey && await prepareEncryptedSession(session,authentication);
+      if (staged === "legacy-maintenance") return;
       await enterApp(session);
+      if (staged) setSummaryStatus("暗号化した台帳を保存しました。バックアップの復元確認後に切り替わります。");
     } catch (error) {
       el["login-error"].textContent = error.message;
     } finally {
+      authentication?.prfOutput?.fill(0);
       button.disabled = false;
       button.removeAttribute("aria-busy");
       el["passkey-login-label"].textContent = "パスキーでログイン";
@@ -125,6 +134,98 @@
 
   async function choosePasskeyLink(links) {
     return TRoomPasskeys.chooseLinkDialog(links, "billing");
+  }
+
+  async function prepareEncryptedSession(session, authentication) {
+    const assetVersion = document.querySelector('meta[name="troom-app-build"]')?.content ?? "";
+    const importModule = name => import(`${basePath()}/${name}?v=${encodeURIComponent(assetVersion)}`);
+    const [status, { prepareBillingVault }] = await Promise.all([
+      api("/encryption/status"), importModule("billing-key-client.mjs"),
+      import(`/cloud/crypto-vault.js?v=${encodeURIComponent(assetVersion)}`)
+    ]);
+    const keys = await prepareBillingVault(api,authentication);
+    if (legacyMode) {
+      if (!status.canMaintain) throw new Error("暗号化後の旧バックアップは第一管理者が操作できます。");
+      const { prepareBillingLegacyMaintenance } = await importModule("billing-checkpoint-restore.mjs");
+      const client = await prepareBillingLegacyMaintenance(api, keys, authentication);
+      renderLegacyStatus(await client.status());
+      state.legacyMaintenance = client;
+      el["login-view"].hidden = true;
+      el["legacy-view"].hidden = false;
+      el["legacy-verify"].focus();
+      return "legacy-maintenance";
+    }
+    let staged = null;
+    if (status.canStage) {
+      const { stageBillingMigration } = await importModule("billing-migration-client.mjs");
+      const restore = status.checkpointEnabled ? (await importModule("billing-checkpoint-restore.mjs")).restoreBillingCheckpoint : null;
+      staged = await stageBillingMigration(api,keys,authentication,(count,total) => {
+        el["passkey-login-label"].textContent = `暗号化を準備中（${count}/${total}）`;
+      },{ restore,activate:status.canActivate });
+    }
+    if (status.mode === "encrypted" || staged?.activated) {
+      const { encryptedBillingApp, refreshBillingGrants } = await importModule("billing-encrypted-app.mjs");
+      await refreshBillingGrants(api,keys,authentication);
+      state.encryptedApp = encryptedBillingApp(api,session,keys);
+    }
+    return Boolean(staged && !staged.activated);
+  }
+
+  function renderLegacyStatus({ entries, settlements, openingBalances, auditDetails, cleanedAt }) {
+    const when = cleanedAt
+      ? new Intl.DateTimeFormat("ja-JP", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Tokyo" })
+        .format(new Date(cleanedAt.replace(" ", "T") + "Z")) + "（日本時間）"
+      : null;
+    el["legacy-counts"].textContent = when
+      ? `現行DBの平文原本を整理済み（${when}）。`
+      : `現行DBに残る平文原本は明細${entries}件、入出金${settlements}件、開始残高${openingBalances}件、操作ログの詳細${auditDetails}件です。`;
+    return !cleanedAt;
+  }
+
+  async function legacyAction(action) {
+    const client = state.legacyMaintenance;
+    if (!client || state.legacyBusy) return;
+    el["legacy-error"].textContent = "";
+    state.legacyBusy = true;
+    for (const id of ["legacy-verify", "legacy-cleanup", "legacy-logout"]) el[id].disabled = true;
+    try {
+      await action(client);
+    } catch (error) {
+      if (state.legacyMaintenance === client) {
+        el["legacy-error"].textContent = error.status ? error.message : "照合に失敗しました。保存済みの世代から再開できます。";
+      }
+    } finally {
+      state.legacyBusy = false;
+      for (const id of ["legacy-verify", "legacy-cleanup", "legacy-logout"]) el[id].disabled = false;
+    }
+  }
+
+  function verifyLegacyBackups() {
+    return legacyAction(async client => {
+      el["legacy-cleanup-form"].hidden = true;
+      el["legacy-confirmation"].value = "";
+      el["legacy-progress"].textContent = "旧バックアップを確認中…";
+      const { generations, unreferencedParts } = await client.verify((count, total) => {
+        el["legacy-progress"].textContent = `バックアップを復元確認中（${count}/${total}世代）`;
+      });
+      const leftovers = unreferencedParts ? `世代から参照されていない分割ファイルが${unreferencedParts}件あります。` : "";
+      el["legacy-progress"].textContent = `${generations}世代を暗号化し、復元を確認しました。${leftovers}`;
+      el["legacy-cleanup-form"].hidden = !renderLegacyStatus(await client.status());
+    });
+  }
+
+  function cleanLegacyPlaintext(event) {
+    event.preventDefault();
+    return legacyAction(async client => {
+      const confirmation = el["legacy-confirmation"].value;
+      if (confirmation !== "平文原本を整理") {
+        el["legacy-error"].textContent = "「平文原本を整理」と入力してください。";
+        return;
+      }
+      renderLegacyStatus(await client.cleanup(confirmation));
+      el["legacy-confirmation"].value = "";
+      el["legacy-cleanup-form"].hidden = true;
+    });
   }
 
   async function logout() {
@@ -171,6 +272,13 @@
   function showLogin() {
     el["boot-view"].hidden = true;
     state.session = null;
+    state.encryptedApp?.close();
+    state.encryptedApp = null;
+    state.legacyMaintenance = null;
+    el["legacy-view"].hidden = true;
+    el["legacy-confirmation"].value = "";
+    el["legacy-cleanup-form"].hidden = true;
+    for (const id of ["legacy-progress", "legacy-error", "legacy-counts"]) el[id].textContent = "";
     state.summaryGeneration++;
     state.summaryController?.abort();
     state.summary = null;
@@ -807,6 +915,19 @@
       month: (options.body?.entryDate || options.body?.settlementDate || state.summary?.month || el["month-input"].value).slice(0, 7),
       documentType: options.body?.documentType || el["document-filter"].value
     } : null;
+    if (state.encryptedApp && (financialMutation || path.startsWith("/summary?") || path.startsWith("/accounts?includeSummary=1"))) {
+      try {
+        return await state.encryptedApp.request(path, options, state.summary?.account.id || state.session?.accountId);
+      } catch (error) {
+        if (error.status === 401 && financialMutation) {
+          state.uncertainOperationView = operationView;
+          el["login-operation-note"].textContent = uncertainOperationMessage;
+          el["login-operation-note"].hidden = false;
+          throw Object.assign(new Error(uncertainOperationMessage), { status:401 });
+        }
+        throw error;
+      }
+    }
     const response = await fetch(`${basePath()}/api${path}`, {
       method: options.method || "GET",
       headers: { ...options.headers, ...(options.body ? { "Content-Type": "application/json" } : {}) },
@@ -814,6 +935,7 @@
       signal: options.signal,
       credentials: "same-origin"
     });
+    if (response.ok && options.raw) return response;
     const data = await response.json().catch(() => ({}));
     if (options.signal?.aborted) throw new DOMException("Aborted", "AbortError");
     if (!response.ok) {
@@ -865,7 +987,7 @@
       login_success: "ログイン成功", login_failure: "ログイン失敗", login_locked: "ログインを一時停止",
       login_blocked: "停止中のログイン試行", logout: "ログアウト",
       entry_created: "明細を追加", entry_updated: "明細を編集", entry_deleted: "明細を削除",
-      settlement_created: "入出金を追加", settlement_updated: "入出金を編集", settlement_deleted: "入出金を削除"
+      settlement_created: "入出金を追加", settlement_updated: "入出金を編集", settlement_deleted: "入出金を削除", encrypted_legacy_source_cleaned: "現行DBの平文原本を整理"
     }[type] || type;
   }
 

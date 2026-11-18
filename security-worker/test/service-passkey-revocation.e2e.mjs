@@ -1270,13 +1270,11 @@ async function startServiceWorkers(passkeysEnabled) {
   // Registry now includes these services even though this test's revocation
   // scenarios remain scoped to Cloud/Diary/Billing.
   processes.push(startWorker("downloader2-worker", 8816, [`SESSION_SECRET:${sessionSecret}`, "ALLOW_LOCAL_HTTP:true"]));
-  processes.push(startWorker("health-worker", 8817, [`SESSION_SECRET:${sessionSecret}`, "PASSKEY_ENABLED:true"]));
   await Promise.all(Object.entries(services).map(([name, service]) =>
     waitForUrl(`http://127.0.0.1:${service.port}${sessionPath(name)}`)));
   await waitForUrl("http://127.0.0.1:8814/ai/api/session");
   await waitForUrl("http://127.0.0.1:8815/");
   await waitForUrl("http://127.0.0.1:8816/downloader2/api/session");
-  await waitForUrl("http://127.0.0.1:8817/health/");
 }
 
 function startSecurityWorker(passkeysEnabled) {

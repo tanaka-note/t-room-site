@@ -76,7 +76,7 @@ export function browserTests(target) {
     billing: ['billing-worker/test/dialog-navigation.browser.mjs'],
     inventory: ['inventory-worker/test/inventory.browser.mjs'] })[target] || [];
   if (target === 'cloud') existing.unshift('cloud-worker/tests/trash-retention.browser.mjs', 'cloud-worker/tests/move-partial.browser.mjs', 'cloud-worker/tests/scoped-moves.browser.mjs', 'cloud-worker/tests/folder-history-loading.browser.mjs', 'cloud-worker/tests/backup-status.browser.mjs', 'cloud-worker/tests/diary-backup-mount.browser.mjs', 'cloud-worker/tests/photo-preview-loading.browser.mjs');
-  if (target === 'diary') existing.push('diary-worker/tests/browser/archive-navigation.mjs','diary-worker/tests/e2ee/progressive.browser.mjs','diary-worker/tests/browser/photo-selection-snapshot.mjs','diary-worker/tests/e2ee/photo-selection.browser.mjs','diary-worker/tests/e2ee/photo-editing.browser.mjs','diary-worker/tests/e2ee/integrity.browser.mjs');
+  if (target === 'diary') existing.push('diary-worker/tests/browser/archive-navigation.mjs','diary-worker/tests/e2ee/progressive.browser.mjs','diary-worker/tests/browser/photo-selection-snapshot.mjs','diary-worker/tests/e2ee/photo-selection.browser.mjs','diary-worker/tests/e2ee/photo-editing.browser.mjs','diary-worker/tests/e2ee/photo-mixed.browser.mjs','diary-worker/tests/e2ee/integrity.browser.mjs');
   const searchClear = ['site', 'cloud', 'diary', 'inventory'].includes(target) ? ['tools/test-search-clear.browser.mjs'] : [];
   return ['cloud', 'security', 'diary', 'billing'].includes(target)
     ? [...existing, ...searchClear, 'diary-worker/tests/browser/passkey-account-dialog.mjs'] : [...existing, ...searchClear];
@@ -90,8 +90,9 @@ export function affected(paths) {
     if (/^(docs\/|README\.md$|AGENTS\.md$)/.test(path) || /\.md$/.test(path)) continue;
     if (path.startsWith('tcloud-windows/')) { add('tcloud-windows'); continue; }
     if (['tools/verify-tcloud-windows.mjs', 'tools/build-tcloud-shell-probe.mjs'].includes(path)) { add('tooling', 'tcloud-windows'); continue; }
+    if (path === 'site-worker/retired-services.mjs') { add('site', 'health'); continue; }
     if (['tools/web-app-registry.mjs', 'tools/test-web-app-build-freshness.mjs'].includes(path)) { add('tooling', 'site'); continue; }
-    if (/^(tools\/(verify|install-verify|check-cloud-infrastructure|test-cloud-infrastructure|test-development|test-release|test-browser|browser-|local-dev|release|health-production-|worker-logs)|\.github\/|\.node-version$)/.test(path)) { add('tooling'); continue; }
+    if (/^(tools\/(verify|install-verify|check-cloud-infrastructure|test-cloud-infrastructure|test-development|test-release|test-browser|browser-|local-dev|release|worker-logs)|\.github\/|\.node-version$)/.test(path)) { add('tooling'); continue; }
     if (path === '.gitignore' || path === 'tools/test-secret-ignore.mjs') { add('tooling'); continue; }
     if (['tools/test-session-secret.mjs', 'tools/test-password-auth.mjs', 'tools/test-passkey-rolling.mjs', 'tools/fixtures/passkey-rolling-binding.mjs'].includes(path)) { add('auth'); continue; }
     if (path === 'assets/session-secret.mjs') add(...services, 'auth');

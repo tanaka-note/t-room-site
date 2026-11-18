@@ -1,5 +1,5 @@
 // Photo presentation owns image loading and gestures; session, history and uploads stay with the caller.
-export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, canDelete = () => false, canNavigate = () => true, createImage = () => new Image() }) {
+export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, canDelete = () => false, canNavigate = () => true, loadImage = (image, photo, kind) => { image.src = photo[`${kind}Url`]; }, releaseImage = () => {}, prefetch = () => {}, downloadPhoto = null, createImage = () => new Image() }) {
   let imageRequestId = 0;
   let imageLoad = null;
   const fullscreenErrorMessage = 'この環境では全画面に切り替えられません。';
@@ -157,6 +157,15 @@ export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, c
       });
       document.addEventListener('fullscreenchange', syncFullscreen);
     }
+    if (downloadPhoto) nodes.downloadOriginal.addEventListener('click', async event => {
+      event.preventDefault();
+      if (nodes.downloadOriginal.getAttribute('aria-busy') === 'true') return;
+      const photo = selection.photos[selection.index], requestId = imageRequestId;
+      nodes.downloadOriginal.setAttribute('aria-busy', 'true');
+      try { await downloadPhoto(photo); }
+      catch { if (requestId === imageRequestId) { nodes.status.textContent = '元画像を保存できませんでした。もう一度お試しください。'; nodes.status.hidden = false; } }
+      finally { nodes.downloadOriginal.removeAttribute('aria-busy'); }
+    });
     new ResizeObserver(paintTransform).observe(stage);
     nodes.dialog.addEventListener('close', () => { resetTransform(); exitFullscreen(); });
     // Some browsers deliver Escape to the modal even while its child is fullscreen.
@@ -193,10 +202,13 @@ export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, c
 
   function cancelPhotoViewerImageLoad() {
     imageRequestId++;
+    releaseImage(nodes.image);
     if (imageLoad) {
+      releaseImage(imageLoad);
       imageLoad.onload = null;
       imageLoad.onerror = null;
       imageLoad.removeAttribute("src");
+      imageLoad.remove?.();
       imageLoad = null;
     }
   }
@@ -210,22 +222,26 @@ export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, c
     preview.draggable = false;
     preview.alt = photo.fileName || "日記の写真";
     preview.hidden = !photo.thumbnailUrl;
-    if (photo.thumbnailUrl) preview.src = photo.thumbnailUrl;
+
     nodes.image.replaceWith(preview);
     nodes.image = preview;
     nodes.status.textContent = "写真を読み込んでいます...";
     nodes.status.hidden = false;
 
     const image = createImage();
-    image.id = preview.id;
+    image.id = `${preview.id}-loading`;
     image.draggable = false;
     image.alt = preview.alt;
     image.decoding = "async";
     imageLoad = image;
+    image.hidden = true;
+    preview.after?.(image);
     const isCurrent = () => requestId === imageRequestId;
     preview.onerror = () => { if (isCurrent()) preview.hidden = true; };
     const failed = () => {
       if (!isCurrent()) return;
+      releaseImage(image);
+      image.remove?.();
       imageLoad = null;
       nodes.status.textContent = "写真を読み込めませんでした。";
     };
@@ -237,7 +253,10 @@ export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, c
         image.onload = null;
         image.onerror = null;
         imageLoad = null;
+        releaseImage(nodes.image);
+        image.hidden = false;
         nodes.image.replaceWith(image);
+        image.id = 'photo-viewer-image';
         nodes.image = image;
         paintTransform();
         nodes.status.hidden = true;
@@ -245,7 +264,8 @@ export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, c
         failed();
       }
     };
-    image.src = photo.displayUrl;
+    if (photo.thumbnailUrl) loadImage(preview, photo, "thumbnail");
+    loadImage(image, photo, "display");
   }
 
   function renderPhotoViewer() {
@@ -258,7 +278,9 @@ export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, c
     const dimensions = photo.width && photo.height ? ` / ${photo.width}×${photo.height}` : "";
     nodes.file.textContent = `${photo.fileName} / ${formatBytes(photo.originalSize)}${dimensions}`;
     if (nodes.deleteButton) nodes.deleteButton.hidden = !canDelete(photo);
-    nodes.downloadOriginal.href = `${photo.originalUrl}?download=1`;
+    nodes.downloadOriginal.href = downloadPhoto ? "#" : `${photo.originalUrl}?download=1`;
+    prefetch(selection.photos[selection.index - 1]);
+    prefetch(selection.photos[selection.index + 1]);
   }
 
   function movePhotoViewer(direction) {

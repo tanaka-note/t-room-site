@@ -424,6 +424,15 @@ async function handleApi(request, env, url, path, context, getSession, timing) {
     return json({ error: "不正なリクエストです。" }, 403);
   }
 
+  // A missing deployment flag must never reopen a plaintext photo writer after
+  // cutover. Check the durable rollout before legacy handlers can write to R2.
+  if(!encryptionEnabled(env)&&request.method!=='GET'&&/^\/api\/(photos|photo-upload-sessions)(?:\/|$)/.test(path)) {
+    const installed=await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='diary_e2ee_control'").first();
+    if(installed) {
+      const control=await readRollout(env.DB);
+      if(control.everEncrypted||control.phase!=='legacy')throw new HttpError(423,'暗号化対応アプリで日記を開き直してください。写真の平文保存はできません。');
+    }
+  }
   if(encryptionEnabled(env)) {
     try {
       if(path==='/api/encryption/prepare'&&['GET','POST'].includes(request.method)) {
@@ -448,7 +457,7 @@ async function handleApi(request, env, url, path, context, getSession, timing) {
     }catch(error){
       if(error instanceof HttpError)throw error;
       if(String(error.message).includes('DiaryWritesPaused'))throw new HttpError(423,'日記の書き込みを一時停止しています。');
-      const guidance={DiaryCapacityExceeded:'日記の読み込み上限に達するため保存を中止しました。編集内容は保持しています。不要な下書き・ゴミ箱を整理してから再試行してください。',DiaryMaintenanceAuthorizationInvalid:'暗号化移行の継続確認が切れました。保存済みの内容は保持されています。パスキーでログインすると再開します。',RecentAuthenticationRequired:'暗号化移行を再開するため、パスキーでログインしてください。保存済みの内容は保持されています。',MigrationRetryConflict:'保存済みの移行内容と一致しません。データを保持したまま停止しました。管理者へ確認してください。',EncryptionPreparationRequired:'日記の鍵を準備しています。管理者の次のパスキーログイン後に、もう一度ログインしてください。'};
+      const guidance={PhotoEncryptionRequired:'写真の保存方式が更新されました。本文を保管し、日記を開き直して未添付の写真を選び直してください。',DiaryCapacityExceeded:'日記の読み込み上限に達するため保存を中止しました。編集内容は保持しています。不要な下書き・ゴミ箱を整理してから再試行してください。',DiaryMaintenanceAuthorizationInvalid:'暗号化移行の継続確認が切れました。保存済みの内容は保持されています。パスキーでログインすると再開します。',RecentAuthenticationRequired:'暗号化移行を再開するため、パスキーでログインしてください。保存済みの内容は保持されています。',MigrationRetryConflict:'保存済みの移行内容と一致しません。データを保持したまま停止しました。管理者へ確認してください。',EncryptionPreparationRequired:'日記の鍵を準備しています。管理者の次のパスキーログイン後に、もう一度ログインしてください。'};
       if(Object.hasOwn(guidance,error.message))throw new HttpError(error.status||409,guidance[error.message]);
       if([400,401,403,404,409,413,423,428,503].includes(error.status))throw new HttpError(error.status,'暗号化された日記を処理できません。ログイン・鍵の準備状態・書き込み停止状態を確認してください。');
       throw error;
@@ -667,6 +676,7 @@ async function serveAsset(request, env, url, path) {
     ["/dialog-navigation.js", "/dialog-navigation.js"],
     ["/diary-photo-processing.js", "/diary-photo-processing.js"],
     ["/diary-photo-upload.js", "/diary-photo-upload.js"],
+    ["/diary-photo-images.js", "/diary-photo-images.js"],
     ["/diary-photo-viewer.js", "/diary-photo-viewer.js"],
     ["/diary-photo-save.js", "/diary-photo-save.js"],
     ["/diary-rich-text.js", "/diary-rich-text.js"],

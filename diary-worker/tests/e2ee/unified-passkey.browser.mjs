@@ -1,3 +1,4 @@
+import {photoHeader} from '../../e2ee/photo-crypto.mjs';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {readFile,mkdtemp,writeFile,utimes,unlink,rmdir} from 'node:fs/promises';
@@ -114,7 +115,7 @@ try {
     const media=f.db.sqlite.prepare('SELECT status,account_id,original_key,metadata FROM diary_e2ee_media').all();
     assert.equal(media.length,31);assert.ok(media.every(row=>row.status==='attached'&&row.account_id===user.serviceAccountId));
     assert.equal(JSON.stringify(media).includes('SYNTHETIC_PRIVATE_PHOTO'),false);assert.equal(JSON.stringify(wire).includes('SYNTHETIC_PRIVATE_PHOTO'),false);
-    for(const row of media)assert.deepEqual([...f.r2.get(row.original_key).bytes],[...originalPng]);
+    for(const row of media)assert.ok(photoHeader(f.r2.get(row.original_key).bytes));
     const committed=f.db.sqlite.prepare("SELECT committed_ids FROM diary_e2ee_uploads WHERE status='committed'").all();
     assert.equal(committed.length,1);assert.equal(JSON.parse(committed[0].committed_ids).length,31);
     assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) AS n FROM diary_photos').get().n,0);

@@ -1,12 +1,25 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { SERVICES } from './registry.js';
 import { backupService } from './backup.js';
 import { getBackupSnapshot } from './browser.js';
-import { dispatchServices } from './dispatch.js';
+import { billingCheckpoint } from './billing-checkpoint.js';
+import { planBillingLegacy, readBillingLegacyArchive, readBillingLegacySource, verifyBillingLegacyCoverage, writeBillingLegacyArchive, saveBillingLegacyVerification } from './billing-legacy.js';
+import { dispatchServices, scheduledBackupServices } from './dispatch.js';
 export { D1BackupWorkflow } from './workflow.js';
 
 export class BackupBrowserIntegration extends WorkerEntrypoint {
   async getSnapshot(options) { return getBackupSnapshot(this.env, options); }
+}
+export class BillingCheckpointIntegration extends WorkerEntrypoint {
+  async writeCheckpoint(generation) { return billingCheckpoint(this.env,generation,true); }
+  async readCheckpoint(generation) { return billingCheckpoint(this.env,generation); }
+  async planLegacy(recoveryFingerprint) { return planBillingLegacy(this.env.BACKUP, recoveryFingerprint); }
+  async readLegacySource(key, etag, size) { return readBillingLegacySource(this.env.BACKUP, key, etag, size); }
+  async readLegacyArchive(id) { return readBillingLegacyArchive(this.env.BACKUP, id); }
+  async writeLegacyArchive(archive) { return writeBillingLegacyArchive(this.env.BACKUP, archive); }
+  async saveLegacyVerification(generation, report, writer) { return saveBillingLegacyVerification(this.env.BACKUP, generation, report, writer); }
+  async verifyLegacyCoverage(recoveryFingerprint, receipts) {
+    return verifyBillingLegacyCoverage(this.env.BACKUP, recoveryFingerprint, receipts);
+  }
 }
 export default {
   fetch() { return new Response('Not found', { status: 404 }); },
@@ -18,7 +31,7 @@ export default {
     const results = [];
     // Complete every service before rejecting the invocation. Returned business
     // failures must reach the Cron outcome just like unexpected exceptions.
-    for (const id of Object.keys(SERVICES)) {
+    for (const id of scheduledBackupServices()) {
       let state;
       try {
         const value = (await backupService(env, id, now))?.state;

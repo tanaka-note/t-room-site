@@ -12,6 +12,7 @@ import { verifiedGeneration } from '../src/integrity.js';
 import { BACKUP_TABLES } from '../../diary-worker/src/backup.js';
 import { validateExportManifest, readExportParts,exportSpec } from '../src/export-backup.js';
 import { assertArchiveSchema } from '../src/schema-guard.js';
+import { BILLING_ENCRYPTED_MIGRATION, SECURITY_BILLING_MIGRATION } from '../src/billing-encrypted.js';
 
 // Offline recovery only. This pre-family schema must never be used for live
 // capture, and all replay DDL still comes from checked-in migrations.
@@ -30,6 +31,33 @@ function validateOldHousehold(p){
   for(const t of spec.tables){const table=p.tables[t.name];if(JSON.stringify(table.columns)!==JSON.stringify(t.columns)||!Array.isArray(table.rows)||table.rowCount!==table.rows.length||table.rows.some(row=>!row||Object.keys(row).sort().join(',')!==[...t.columns].sort().join(',')))throw new Error('SnapshotInvalid');}
 }
 
+function diarySnapshotTables(payload) {
+  if (![3, 6, 7, 8].includes(payload.formatVersion) || payload.source?.database !== 'diary-db') throw new Error('SnapshotInvalid');
+  const omittedEntryColumns = new Set(['last_published_at', 'entry_time', 'weather']);
+  const tables = BACKUP_TABLES.map(table => {
+    if (table.name === 'diary_entries' && payload.formatVersion === 3) {
+      return { ...table, columns: table.columns.filter(column => !omittedEntryColumns.has(column)) };
+    }
+    if (table.name === 'diary_photos' && ([3, 6].includes(payload.formatVersion)
+      || !payload.tables?.diary_photos?.columns?.includes?.('backup_identity'))) {
+      return { ...table, columns: table.columns.filter(column => column !== 'backup_identity') };
+    }
+    return table;
+  });
+  if (Object.keys(payload.tables ?? {}).sort().join(',') !== tables.map(table => table.name).sort().join(',')) throw new Error('SnapshotInvalid');
+  for (const { name, columns } of tables) {
+    const table = payload.tables[name];
+    const keys = [...columns].sort().join(',');
+    if (JSON.stringify(table?.columns) !== JSON.stringify(columns) || !Array.isArray(table.rows)
+      || table.rowCount !== table.rows.length || table.rows.some(row => !row || Object.keys(row).sort().join(',') !== keys
+        || Object.values(row).some(value => value !== null && typeof value !== 'string'
+          && (typeof value !== 'number' || !Number.isFinite(value) || Number.isInteger(value) && !Number.isSafeInteger(value))))) {
+      throw new Error('SnapshotInvalid');
+    }
+  }
+  return tables;
+}
+
 export async function restoreIsolated(bucket, key, service, {anchor,minimumGeneration=1}={}) {
   let tables=service==='diary'?BACKUP_TABLES:SERVICES[service]?.tables;
   if(!tables) throw new Error('UnsupportedService');
@@ -37,18 +65,15 @@ export async function restoreIsolated(bucket, key, service, {anchor,minimumGener
     if (p?.format === 'troom-d1-export-v3') return validateExportManifest(p,service);
     if(service==='household'&&p?.expectedMigration==='0005_dataset_lifecycle.sql')return validateOldHousehold(p);
     if(service!=='diary') return validateSnapshot(p,service);
-    if(![7,8].includes(p.formatVersion) || p.source?.database!=='diary-db') throw new Error('SnapshotInvalid');
-    assert.deepEqual(Object.keys(p.tables).sort(),tables.map(t=>t.name).sort());
-    for(const t of tables) {
-      assert.deepEqual(p.tables[t.name].columns,t.columns);
-      assert.equal(p.tables[t.name].rowCount,p.tables[t.name].rows.length);
-    }
+    tables=diarySnapshotTables(p);
   });
   if(!verified) throw new Error('GenerationMissing');
   if(service==='household')tables=recoverySpec(service,verified.payload.expectedMigration).tables;
   const exported=verified.payload.format==='troom-d1-export-v3';
   const encryptedDiary=service==='diary'&&verified.payload.expectedMigration===DIARY_ENCRYPTED_MIGRATION;
-  const encryptedSecurity=service==='security'&&verified.payload.expectedMigration===SECURITY_DIARY_MIGRATION;
+  const encryptedSecurity=service==='security'&&[SECURITY_DIARY_MIGRATION,SECURITY_BILLING_MIGRATION].includes(verified.payload.expectedMigration);
+  const encryptedBilling=service==='billing'&&verified.payload.expectedMigration===BILLING_ENCRYPTED_MIGRATION;
+  const billingVaults=service==='security'&&verified.payload.expectedMigration===SECURITY_BILLING_MIGRATION;
   let diaryDirectory;
   if(encryptedDiary){
     if(!anchor)throw new Error('DiaryTrustedAnchorRequired');
@@ -56,7 +81,7 @@ export async function restoreIsolated(bucket, key, service, {anchor,minimumGener
     diaryDirectory=await verifyDirectory(metadata.directory,anchor,minimumGeneration);
     await validateKeyMetadata(metadata,diaryDirectory,anchor);
   }
-  if(encryptedDiary||encryptedSecurity)tables=exportSpec(service,verified.payload.expectedMigration).tables;
+  if(encryptedDiary||encryptedSecurity||encryptedBilling)tables=exportSpec(service,verified.payload.expectedMigration).tables;
   if(exported)await assertArchiveSchema(service,verified.payload.expectedMigration,verified.payload.schema);
   const db=new DatabaseSync(':memory:');
   try {
@@ -66,6 +91,8 @@ export async function restoreIsolated(bucket, key, service, {anchor,minimumGener
     for(const file of migrations.filter(f=>!legacyHousehold||f<=verified.payload.expectedMigration))db.exec(readFileSync(new URL(file,dir),'utf8'));
     if(encryptedDiary)for(const file of ['schema.sql','legacy-fences.sql'])db.exec(readFileSync(new URL('../../diary-worker/e2ee/'+file,import.meta.url),'utf8'));
     if(encryptedSecurity)db.exec(readFileSync(new URL('../../security-worker/e2ee/diary-keys.sql',import.meta.url),'utf8'));
+    if(billingVaults)db.exec(readFileSync(new URL('../../security-worker/e2ee/billing-vaults.sql',import.meta.url),'utf8'));
+    if(encryptedBilling)db.exec(readFileSync(new URL('../../billing-worker/encryption/migration-preparation.sql',import.meta.url),'utf8'));
     // Triggers are from trusted migrations, never from the archive. Disable
     // replay side effects (inventory stock, immutable audit, etc.) only here.
     const triggers=db.prepare("SELECT name,sql FROM sqlite_schema WHERE type='trigger'").all();
@@ -93,7 +120,13 @@ export async function restoreIsolated(bucket, key, service, {anchor,minimumGener
     }
     // Check every archived cell before deliberate authorization quarantine.
     const canonical=rows=>rows.map(r=>JSON.stringify(Object.fromEntries(Object.entries(r).sort(([a],[b])=>a.localeCompare(b))))).sort();
-    if(!exported)for(const t of tables) assert.deepEqual(canonical(db.prepare(`SELECT ${t.columns.join(',')} FROM ${t.name}`).all()),canonical(verified.payload.tables[t.name].rows),t.name);
+    if (!exported) for (const t of tables) {
+      const actual = canonical(db.prepare(`SELECT ${t.columns.join(',')} FROM ${t.name}`).all());
+      const expected = canonical(verified.payload.tables[t.name].rows);
+      if (service === 'diary') {
+        if (actual.length !== expected.length || actual.some((row, index) => row !== expected[index])) throw new Error('RestoreMismatch');
+      } else assert.deepEqual(actual, expected, t.name);
+    }
     if(service==='security') db.exec("UPDATE security_identities SET status='disabled',is_security_admin=0; UPDATE security_credentials SET status='revoked'; UPDATE security_service_links SET status='disabled'; UPDATE security_invitations SET status='expired'");
     if(['billing','payments','inventory','calendar','portfolio'].includes(service)) db.exec(`UPDATE ${service}_accounts SET is_active=0,session_version=session_version+1`);
     if(service==='diary') db.exec('UPDATE diary_accounts SET active=0,session_version=session_version+1,must_change_password=1');

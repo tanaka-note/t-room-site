@@ -5,8 +5,12 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.*
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -23,7 +27,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -32,6 +38,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.flow.collectLatest
 import java.time.*
 import java.time.format.DateTimeFormatter
 import java.time.temporal.TemporalAdjusters
@@ -45,9 +54,12 @@ private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
 
 @Composable fun CalendarApp(model: MainViewModel, activity: MainActivity) {
     val state by model.state.collectAsStateWithLifecycle()
-    val dark = isSystemInDarkTheme()
-    val primary = when (state.settings.theme) { "mint" -> Color(0xFF26795C); "lavender" -> Color(0xFF7754AA); else -> Color(0xFF2775A4) }
-    val colors = if (dark) darkColorScheme(primary = primary.copy(alpha = 1f), background = Color(0xFF121C24), surface = Color(0xFF19242D)) else lightColorScheme(primary = primary, background = Color(0xFFF6FAFD), surface = Color(0xFFF6FAFD), surfaceVariant = Color(0xFFE8F2F8))
+    val dark = when (state.settings.appearance) { "light" -> false; "dark" -> true; else -> isSystemInDarkTheme() }
+    val colors = remember(state.settings.theme, dark) { calendarColorScheme(state.settings.theme, dark) }
+    LaunchedEffect(dark) {
+        val bars = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT) { dark }
+        activity.enableEdgeToEdge(statusBarStyle = bars, navigationBarStyle = bars)
+    }
     MaterialTheme(colorScheme = colors) {
         Surface(Modifier.fillMaxSize()) {
             if (state.account == null) LoginScreen(state, model, activity) else CalendarShell(state, model, activity)
@@ -81,6 +93,9 @@ private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
     val drawer = rememberDrawerState(DrawerValue.Closed); val scope = rememberCoroutineScope()
     var page by remember { mutableStateOf(CalendarPage.MONTH) }; var initialPageApplied by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(today()) }; var month by remember { mutableStateOf(YearMonth.from(today())) }
+    var preferredDay by remember { mutableIntStateOf(selected.dayOfMonth) }
+    fun selectDay(day: LocalDate) { selected = day; preferredDay = day.dayOfMonth; month = YearMonth.from(day) }
+    fun showMonth(value: YearMonth) { month = value; selected = calendarSelectedDate(value, preferredDay) }
     var query by remember { mutableStateOf("") }; var searching by remember { mutableStateOf(false) }
     var trackFilter by remember { mutableStateOf<String?>(null) }; var trackDetail by remember { mutableStateOf<NamedItem?>(null) }
     var editing by remember { mutableStateOf<CalendarEvent?>(null) }; var editingOccurrence by remember { mutableStateOf<Occurrence?>(null) }
@@ -88,6 +103,7 @@ private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
     var prefillTrack by remember { mutableStateOf<String?>(null) }; var detail by remember { mutableStateOf<Occurrence?>(null) }
     var logoutDialog by remember { mutableStateOf(false) }; var seriesChoice by remember { mutableStateOf<Occurrence?>(null) }
     var reviewConflict by remember { mutableStateOf(true) }
+    fun addEvent() { editing = null; editingOccurrence = null; prefillTrack = trackDetail?.id; editMode = "ALL"; editorOpen = true }
     val savedScreens = rememberSaveableStateHolder()
     val events = model.events()
     val visible = events.filter { it.deletedAt == null }
@@ -97,7 +113,7 @@ private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
     LaunchedEffect(Unit) { while (true) { delay(30000); if (CalendarActivityWindow.foreground) model.sync(false) } }
     BackHandler(drawer.isOpen) { scope.launch { drawer.close() } }
     BackHandler(trackDetail != null && !drawer.isOpen) { trackDetail = null }
-    ModalNavigationDrawer(drawerState = drawer, gesturesEnabled = !editorOpen, drawerContent = {
+    ModalNavigationDrawer(drawerState = drawer, gesturesEnabled = !editorOpen && (page != CalendarPage.MONTH || drawer.isOpen), drawerContent = {
         ModalDrawerSheet(Modifier.width(292.dp)) {
             Spacer(Modifier.height(12.dp)); Text(state.account?.name.orEmpty(), Modifier.padding(horizontal = 20.dp, vertical = 12.dp), style = MaterialTheme.typography.titleMedium)
             CalendarPage.entries.forEach { item -> NavigationDrawerItem(label = { Text(item.label) }, selected = page == item, onClick = { initialPageApplied = true; page = item; trackFilter = null; trackDetail = null; query = ""; scope.launch { drawer.close() } }, modifier = Modifier.padding(horizontal = 8.dp, vertical = 1.dp)) }
@@ -107,16 +123,16 @@ private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
         }
     }) {
         Scaffold(contentWindowInsets = WindowInsets.safeDrawing, floatingActionButton = {
-            if (page != CalendarPage.SETTINGS) FloatingActionButton(onClick = { editing = null; editingOccurrence = null; prefillTrack = trackDetail?.id; editMode = "ALL"; editorOpen = true }) { Icon(Icons.Default.Add, "予定を追加") }
+            if (page != CalendarPage.SETTINGS) FloatingActionButton(onClick = { addEvent() }, containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary) { Icon(Icons.Default.Add, "予定を追加") }
         }) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
-                Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().height(48.dp).background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = .55f)), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = { scope.launch { drawer.open() } }, modifier = Modifier.size(44.dp)) { Icon(Icons.Default.Menu, "メニュー") }
                     Text(if (page in listOf(CalendarPage.MONTH, CalendarPage.WEEK, CalendarPage.AGENDA)) "${month.year}年${month.monthValue}月" else page.label, Modifier.weight(1f), maxLines = 1, style = MaterialTheme.typography.titleMedium)
                     if (page in listOf(CalendarPage.MONTH, CalendarPage.WEEK, CalendarPage.AGENDA)) {
-                        IconButton(onClick = { if (page == CalendarPage.WEEK) selected = selected.minusWeeks(1) else month = month.minusMonths(1); if (page == CalendarPage.WEEK) month = YearMonth.from(selected) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ChevronLeft, "前へ") }
-                        IconButton(onClick = { if (page == CalendarPage.WEEK) selected = selected.plusWeeks(1) else month = month.plusMonths(1); if (page == CalendarPage.WEEK) month = YearMonth.from(selected) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ChevronRight, "次へ") }
-                        IconButton(onClick = { selected = today(); month = YearMonth.from(selected) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Today, "今日") }
+                        IconButton(onClick = { if (page == CalendarPage.WEEK) selectDay(selected.minusWeeks(1)) else showMonth(month.minusMonths(1)) }, enabled = month > YearMonth.of(1, 1), modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ChevronLeft, "前へ") }
+                        IconButton(onClick = { if (page == CalendarPage.WEEK) selectDay(selected.plusWeeks(1)) else showMonth(month.plusMonths(1)) }, enabled = month < YearMonth.of(9999, 12), modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ChevronRight, "次へ") }
+                        IconButton(onClick = { selectDay(today()) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Today, "今日") }
                         IconButton(onClick = { searching = !searching; if (!searching) query = "" }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Search, "検索") }
                     }
                 }
@@ -129,7 +145,7 @@ private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
                 Box(Modifier.weight(1f)) {
                     savedScreens.SaveableStateProvider(if (page == CalendarPage.TRACKS && trackDetail != null) "TRACK-${trackDetail!!.id}" else page.name) {
                     when (page) {
-                        CalendarPage.MONTH -> MonthScreen(month, selected, visible, model.holidays, onDay = { selected = it; month = YearMonth.from(it) }, onEvent = { detail = it }, onMove = { month = month.plusMonths(it.toLong()) }, matches = matches)
+                        CalendarPage.MONTH -> MonthScreen(month, selected, visible, model.holidays, onDay = { selectDay(it) }, onEvent = { detail = it }, onMonth = { showMonth(it) }, onAdd = { addEvent() }, matches = matches)
                         CalendarPage.WEEK -> WeekScreen(selected, visible, model.holidays, onEvent = { detail = it }, matches = matches)
                         CalendarPage.AGENDA -> AgendaScreen(month, visible, model.holidays, onEvent = { detail = it }, matches = matches)
                         CalendarPage.TRACKS -> if (trackDetail == null) TrackingScreen(state, events, onSelect = { trackDetail = it }, onSettings = { model.settings(it) }, onNew = { name -> model.named("track", NamedItem(name = name)) }) else TrackingDetail(trackDetail!!, state, events, onBack = { trackDetail = null }, onAdd = { editing = null; editingOccurrence = null; prefillTrack = trackDetail?.id; editMode = "ALL"; editorOpen = true }, onCalendar = { trackFilter = trackDetail?.id; page = CalendarPage.MONTH; trackDetail = null }, onEvent = { detail = it }, onEdit = { model.named("track", it); trackDetail = it }, onMerge = { source, target -> scope.launch { model.merge("track", source, target); trackDetail = null; } })
@@ -170,7 +186,7 @@ private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
         val saved = model.repository.saveBatch(changes, versions)
         if (saved) {
             model.sync()
-            editorOpen = false; selected = value.start.toLocalDate(); month = YearMonth.from(selected)
+            editorOpen = false; selectDay(value.start.toLocalDate())
         }
         saved
     })
@@ -193,35 +209,66 @@ private fun conflictPreview(kind: String, v: org.json.JSONObject): String = when
     else -> "${v.optString("name")}\n${if (v.optBoolean("archived")) "アーカイブ" else "使用中"}\n目安：${v.optionalLong("targetDays")?.let { "${it}日" } ?: "なし"}"
 }
 
-@Composable private fun MonthScreen(month: YearMonth, selected: LocalDate, events: List<CalendarEvent>, holidays: Map<LocalDate, String>, onDay: (LocalDate) -> Unit, onEvent: (Occurrence) -> Unit, onMove: (Int) -> Unit, matches: (Occurrence) -> Boolean) {
+@Composable private fun MonthScreen(month: YearMonth, selected: LocalDate, events: List<CalendarEvent>, holidays: Map<LocalDate, String>, onDay: (LocalDate) -> Unit, onEvent: (Occurrence) -> Unit, onMonth: (YearMonth) -> Unit, onAdd: () -> Unit, matches: (Occurrence) -> Boolean) {
+    val pager = rememberPagerState(initialPage = calendarMonthPage(month), pageCount = { CALENDAR_MONTH_COUNT })
+    val currentOnMonth by rememberUpdatedState(onMonth)
+    var pendingPage by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(month) {
+        val target = calendarMonthPage(month)
+        pendingPage = target
+        try {
+            if (pager.currentPage != target || pager.currentPageOffsetFraction != 0f) pager.animateScrollToPage(target, animationSpec = tween(250))
+        } finally {
+            // A newer button request cancels this effect. Retain the pending
+            // state so an intermediate settled page cannot overwrite that request.
+            if (currentCoroutineContext().isActive) pendingPage = null
+        }
+    }
+    LaunchedEffect(pager) {
+        snapshotFlow { Triple(pager.settledPage, pager.isScrollInProgress, pendingPage) }.collectLatest { (_, scrolling, pending) ->
+            if (!scrolling && pending == null) {
+                withFrameNanos { }
+                if (!pager.isScrollInProgress && pendingPage == null) currentOnMonth(calendarMonthAt(pager.settledPage))
+            }
+        }
+    }
+    val dayList = remember(events, selected, matches) { events.flatMap { it.occurrences(selected, selected) }.filterNot { it.deleted }.filter(matches).sortedWith(compareByDescending<Occurrence> { it.event.allDay }.thenBy { it.start }) }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().height(24.dp)) { listOf("日", "月", "火", "水", "木", "金", "土").forEachIndexed { i, text -> Text(text, Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = if (i == 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) } }
+        HorizontalPager(state = pager, modifier = Modifier.fillMaxWidth().weight(1f), key = { it }) { index ->
+            MonthGrid(calendarMonthAt(index), selected, events, holidays, onDay, onEvent, matches)
+        }
+        Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 74.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) { Text(selected.format(dateFormat), style = MaterialTheme.typography.labelLarge); Text("選択中・${dayList.size}件", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary) }
+            TextButton(onClick = onAdd, contentPadding = PaddingValues(horizontal = 8.dp)) { Icon(Icons.Default.Add, null, Modifier.size(18.dp)); Text("予定を追加") }
+        }
+        if (dayList.isNotEmpty()) LazyColumn(Modifier.fillMaxWidth().heightIn(max = 124.dp), contentPadding = PaddingValues(end = 74.dp, bottom = 4.dp)) { items(dayList, key = { it.key }) { EventRow(it, onEvent) } }
+    }
+}
+
+@Composable private fun MonthGrid(month: YearMonth, selectedDay: LocalDate, events: List<CalendarEvent>, holidays: Map<LocalDate, String>, onDay: (LocalDate) -> Unit, onEvent: (Occurrence) -> Unit, matches: (Occurrence) -> Boolean) {
     val first = month.atDay(1).let { it.minusDays((it.dayOfWeek.value % 7).toLong()) }
     val rows = ((month.atDay(1).dayOfWeek.value % 7 + month.lengthOfMonth() + 6) / 7)
     val instances = remember(events, month, matches) { events.flatMap { it.occurrences(first, first.plusDays(rows * 7L - 1)) }.filterNot { it.deleted }.filter(matches) }
-    var drag by remember { mutableStateOf(0f) }
-    Column(Modifier.fillMaxSize().pointerInput(month) { detectHorizontalDragGestures(onHorizontalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (kotlin.math.abs(drag) > 70) onMove(if (drag > 0) -1 else 1); drag = 0f }) }) {
-        Row(Modifier.fillMaxWidth().height(24.dp)) { listOf("日", "月", "火", "水", "木", "金", "土").forEachIndexed { i, text -> Text(text, Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = if (i == 0) Color(0xFFB34E61) else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) } }
-        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+        BoxWithConstraints(Modifier.fillMaxSize()) {
             val lines = ((maxHeight.value / rows - 29) / 18).toInt().coerceIn(1, 6)
             Column(Modifier.fillMaxSize()) {
                 repeat(rows) { row -> Row(Modifier.fillMaxWidth().weight(1f)) {
                     repeat(7) { col ->
                         val day = first.plusDays((row * 7 + col).toLong())
                         val list = instances.filter { it.start.toLocalDate() <= day && it.end > day.atStartOfDay() }.sortedWith(compareByDescending<Occurrence> { it.event.allDay }.thenBy { it.start })
-                        Column(Modifier.weight(1f).fillMaxHeight().border(0.3.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .45f)).background(if (day == selected) MaterialTheme.colorScheme.primary.copy(alpha = .06f) else Color.Transparent).clickable { onDay(day) }.padding(horizontal = 2.dp, vertical = 3.dp)) {
-                            Box(Modifier.align(Alignment.CenterHorizontally).size(24.dp).clip(RoundedCornerShape(12.dp)).background(if (day == today()) MaterialTheme.colorScheme.primary else Color.Transparent), contentAlignment = Alignment.Center) { Text(day.dayOfMonth.toString(), fontSize = 12.sp, color = if (day == today()) MaterialTheme.colorScheme.onPrimary else if (day.month != month.month) MaterialTheme.colorScheme.onSurface.copy(alpha = .4f) else if (col == 0 || holidays.containsKey(day)) Color(0xFFB34E61) else MaterialTheme.colorScheme.onSurface) }
-                            holidays[day]?.let { Text(it, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color(0xFFB34E61)) }
+                        val chosen = day == selectedDay
+                        Column(Modifier.weight(1f).fillMaxHeight().border(if (chosen) 1.5.dp else .3.dp, if (chosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant).background(if (chosen) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .65f) else Color.Transparent).clickable { onDay(day) }.semantics { selected = chosen; contentDescription = day.format(DateTimeFormatter.ofPattern("yyyy年M月d日(E)", Locale.JAPAN)) + (if (chosen) " 選択中" else "") + (if (day == today()) " 今日" else "") }.padding(horizontal = 2.dp, vertical = 3.dp)) {
+                            Box(Modifier.align(Alignment.CenterHorizontally).size(24.dp).clip(RoundedCornerShape(12.dp)).background(if (chosen) MaterialTheme.colorScheme.primary else Color.Transparent).then(if (day == today() && !chosen) Modifier.border(1.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp)) else Modifier), contentAlignment = Alignment.Center) { Text(day.dayOfMonth.toString(), fontSize = 12.sp, color = if (chosen) MaterialTheme.colorScheme.onPrimary else if (day.month != month.month) MaterialTheme.colorScheme.onSurface.copy(alpha = .4f) else if (col == 0 || holidays.containsKey(day)) MaterialTheme.colorScheme.error else if (day == today()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface) }
+                            holidays[day]?.let { Text(it, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.error) }
                             val available = maxOf(1, lines - if (holidays.containsKey(day)) 1 else 0)
-                            list.take(available).forEach { occurrence -> val color = eventColors[occurrence.event.color] ?: eventColors.getValue("blue"); Text(occurrence.event.title, Modifier.fillMaxWidth().padding(top = 1.dp).clip(RoundedCornerShape(3.dp)).background(color.copy(alpha = .13f)).clickable { onEvent(occurrence) }.padding(horizontal = 2.dp, vertical = 1.dp), fontSize = 11.sp, lineHeight = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = if (occurrence.cancelled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface, textDecoration = if (occurrence.cancelled) TextDecoration.LineThrough else null) }
+                            list.take(available).forEach { occurrence -> val color = eventColors[occurrence.event.color] ?: eventColors.getValue("blue"); Row(Modifier.fillMaxWidth().padding(top = 1.dp).clip(RoundedCornerShape(3.dp)).background(color.copy(alpha = .16f)).clickable { onEvent(occurrence) }) { Box(Modifier.width(3.dp).height(17.dp).background(color)); Text(occurrence.event.title, Modifier.padding(horizontal = 2.dp, vertical = 1.dp), fontSize = 11.sp, lineHeight = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = if (occurrence.cancelled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface, textDecoration = if (occurrence.cancelled) TextDecoration.LineThrough else null) } }
                             if (list.size > available) Text("＋${list.size - available}件", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 } }
             }
         }
-        val dayList = instances.filter { it.start.toLocalDate() <= selected && it.end > selected.atStartOfDay() }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) { Text(selected.format(dateFormat), style = MaterialTheme.typography.labelLarge); Text("  ${dayList.size}件", style = MaterialTheme.typography.labelSmall) }
-        if (dayList.isNotEmpty()) LazyColumn(Modifier.fillMaxWidth().heightIn(max = 124.dp), contentPadding = PaddingValues(end = 74.dp, bottom = 4.dp)) { items(dayList, key = { it.key }) { EventRow(it, onEvent) } }
-    }
 }
 
 @Composable fun EventRow(item: Occurrence, onClick: (Occurrence) -> Unit) {

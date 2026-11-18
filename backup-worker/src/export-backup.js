@@ -6,6 +6,7 @@ import { assertSchema,assertArchiveSchema,assertEncryptedSchema } from './schema
 import { compress, decode, digest, verifiedPut, verifiedGeneration } from './integrity.js';
 import { sqlStatements, exportedRows } from './export-sql.js';
 import { listObjects } from './backup.js';
+import { BILLING_ENCRYPTED_MIGRATION, SECURITY_BILLING_MIGRATION, SECURITY_BILLING_VAULTS, billingEncryptedSpec } from './billing-encrypted.js';
 
 const FORMAT = 'troom-d1-export-v3';
 const PART_BYTES = 1024 * 1024;
@@ -21,6 +22,9 @@ export const DATABASES = {
 };
 
 export function exportSpec(service,migration) {
+  if(service==='billing'&&migration===BILLING_ENCRYPTED_MIGRATION)return billingEncryptedSpec(SERVICES.billing);
+  if(service==='security'&&migration===SECURITY_BILLING_MIGRATION)return {...SERVICES.security,migration,
+    tables:[...SERVICES.security.tables,...SECURITY_DIARY_TABLES,SECURITY_BILLING_VAULTS]};
   if(service==='diary'&&migration===DIARY_ENCRYPTED_MIGRATION)return {database:'diary-db',binding:'DIARY_DB',migration,tables:[...BACKUP_TABLES.filter(t=>t.name==='diary_accounts').map(t=>({...t,sourceColumns:t.columns.join(',')})),...ENCRYPTED_DIARY_TABLES]};
   if(service==='security'&&migration===SECURITY_DIARY_MIGRATION)return {...SERVICES.security,migration,tables:[...SERVICES.security.tables,...SECURITY_DIARY_TABLES]};
   if (service === 'diary') return { database: 'diary-db', binding: 'DIARY_DB', migration: '0022_photo_backup_identity.sql',
@@ -29,7 +33,10 @@ export function exportSpec(service,migration) {
   return SERVICES[service];
 }
 export const exportBucket = (env, service) => service === 'diary' ? env.DIARY_BACKUP : env.BACKUP;
-export const exportPrefix = (service,migration) => service === 'diary' ? (migration===DIARY_ENCRYPTED_MIGRATION?'v10/':'v9/') : service==='security'&&migration===SECURITY_DIARY_MIGRATION?'d1/security/v4/':`d1/${service}/v3/`;
+export const exportPrefix = (service,migration) => service === 'diary' ? (migration===DIARY_ENCRYPTED_MIGRATION?'v10/':'v9/')
+  : migration===SECURITY_BILLING_MIGRATION?'d1/security/v5/'
+  : migration===BILLING_ENCRYPTED_MIGRATION?'d1/billing/v4/'
+  : service==='security'&&migration===SECURITY_DIARY_MIGRATION?'d1/security/v4/':`d1/${service}/v3/`;
 export const exportDay = now => new Date(now + 9 * 3600000).toISOString().slice(0, 10);
 
 async function schemaMetadata(db, service, spec) {
@@ -46,7 +53,8 @@ async function schemaMetadata(db, service, spec) {
     return { name: t.name, columns: t.columns, sourceColumns: actual.join(',') };
   });
   const schema = results.at(-1).results;
-  if([DIARY_ENCRYPTED_MIGRATION,SECURITY_DIARY_MIGRATION].includes(spec.migration)||service==='diary'&&schema.some(row=>row.name==='diary_e2ee_control'))await assertEncryptedSchema(service,schema);
+  if([BILLING_ENCRYPTED_MIGRATION,SECURITY_BILLING_MIGRATION].includes(spec.migration))await assertArchiveSchema(service,spec.migration,schema);
+  else if([DIARY_ENCRYPTED_MIGRATION,SECURITY_DIARY_MIGRATION].includes(spec.migration)||service==='diary'&&schema.some(row=>row.name==='diary_e2ee_control'))await assertEncryptedSchema(service,schema);
   else await assertSchema(service, schema);
   return { tables, schema };
 }
@@ -146,6 +154,17 @@ export async function saveExport(env, service, now, { fetcher = fetch, sleep = m
       const legacy=service==='diary'&&(await db.prepare('SELECT phase FROM diary_e2ee_control WHERE id=1').first())?.phase==='legacy';
       if(!legacy)migration=service==='diary'?DIARY_ENCRYPTED_MIGRATION:SECURITY_DIARY_MIGRATION;
     }
+  }
+  if (service==='billing') {
+    const db=env.BILLING_DB;
+    if (db && await db.prepare("SELECT 1 AS present FROM sqlite_schema WHERE type='table' AND name='billing_encryption_migration'").first()
+      && (await db.prepare('SELECT activated_at FROM billing_encryption_migration WHERE id=1').first())?.activated_at) {
+      migration=BILLING_ENCRYPTED_MIGRATION;
+    }
+  }
+  if (service==='security' && migration===SECURITY_DIARY_MIGRATION && env.SECURITY_DB
+    && await env.SECURITY_DB.prepare("SELECT 1 AS present FROM sqlite_schema WHERE type='table' AND name='security_billing_vaults'").first()) {
+    migration=SECURITY_BILLING_MIGRATION;
   }
   const spec = exportSpec(service,migration), bucket = exportBucket(env, service), prefix = exportPrefix(service,migration), day = exportDay(now);
   const keyMetadata=migration===DIARY_ENCRYPTED_MIGRATION?await readDiaryKeyMetadata(env.SECURITY_DB):null;

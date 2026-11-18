@@ -5,6 +5,7 @@ import { handleEncryptedMedia } from "./media.mjs";
 import { verifyDirectory,DIARY_READER_PROTOCOL } from './crypto.mjs';
 import { createStore } from './store.mjs';
 import { readRollout,READ_FORMATS } from './rollout.mjs';
+import {PHOTO_PREFIX} from './photo-crypto.mjs';
 
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 export const encryptionEnabled=env=>String(env.DIARY_ENCRYPTION_ENABLED||'false')==='true';
@@ -67,7 +68,7 @@ export async function handleEncryptedApi(request,env,url,path,session,{json,read
   if(path==='/api/encryption/mutation'&&request.method==='POST') {
     const body=await readJson(request,2_000_000);if(body.proposal?.household!==session.activeHouseholdId)fail(403,'HouseholdDenied');
     if(body.operation==='import')fail(403,'UseIsolatedMigrationTool');
-    const photos=await env.DB.prepare("SELECT id,household,account_id,status,expires_at FROM diary_e2ee_media WHERE id IN (SELECT value FROM json_each(?))").bind(JSON.stringify(body.proposal?.photoIds||[])).all();for(const row of photos.results)registry.photos[row.id]={household:row.household,accountId:row.account_id,status:row.status,expiresAt:row.expires_at};
+    const photos=await env.DB.prepare("SELECT id,household,account_id,status,expires_at,original_key,display_key,thumbnail_key FROM diary_e2ee_media WHERE id IN (SELECT value FROM json_each(?))").bind(JSON.stringify(body.proposal?.photoIds||[])).all();for(const row of photos.results)registry.photos[row.id]={household:row.household,accountId:row.account_id,status:row.status,expiresAt:row.expires_at,encrypted:['original','display','thumbnail'].every(kind=>row[`${kind}_key`].startsWith(PHOTO_PREFIX))};
     return json(await store.mutation(actor,body.proposal,body.operation));
   }
   if(path==='/api/encryption/remove'&&request.method==='POST') {

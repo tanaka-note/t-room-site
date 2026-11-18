@@ -106,6 +106,12 @@ API応答の`Server-Timing`は`diary_total`（Workerでの総時間）、`diary_
 
 失敗時の匿名の送信試行UUID、段階、HTTP status、例外分類、経過時間、Cloudflare Ray IDのconsole出力も維持する。これらの診断にはファイル名・本文・画像・Cookie・token・account/entry/photo IDを含めず、新たなログ収集先や永続保存設定は作らない。詳細調査と制約は[2026-10-23の調査記録](../docs/history/diary-photo-upload-20261023.md)を参照。
 
+## 新規写真の暗号化と既存写真の混在
+
+新しい暗号化投稿経路では、原本・表示用・サムネイルを端末内で暗号化し、写真ごとの鍵を既存の暗号化済み写真情報へ含める。旧写真のobjectは維持し、写真単位で読取方式を選ぶ。一覧・編集・ビューア・原本保存を共通の復号経路へ接続し、サムネイルの先読みは画面前後720px・最大4件、メモリ内Blob cacheは64件・24MiBに制限する。原本は先読みしない。
+
+切替前に平文で一時保存した未添付写真は確定できないため、本文を保ったまま新しい画面で写真を選び直す。添付済みの旧写真と保存済み下書きは維持する。設定による平文uploadへのfallbackは設けない。鍵・移行境界と実機確認の残項目は[新規写真の本体暗号化](../docs/security/diary-encryption.md#新規写真の本体暗号化2026-11-18prでの追加)を参照。`pnpm run test:photo-encryption` で混在・原本保存・切替対策を合成検証する。
+
 ## Googleフォトの一回限りの写真移行
 
 `scripts/prepare-takeout.py --source <ZIPの保存先> --output <packageフォルダ> --year 2025` は、全分割ZIPのJSONを照合し、日本時間の撮影日ごとに元画像・表示用WebP・サムネイルと `manifest.json` をローカルへ準備する。PythonのPillowとpillow-heifを使用する。元ZIPは変更せず、動画は対象外。同日の同一SHA-256は重複として記録し、撮影日時不明・不一致・非対応画像は除外一覧へ残す。撮影日時はGoogleのJSON、次にEXIFを使い、ファイル作成日時やファイル名から推測しない。
