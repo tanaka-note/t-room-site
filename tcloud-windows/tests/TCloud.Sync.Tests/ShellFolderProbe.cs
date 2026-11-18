@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Win32;
@@ -31,12 +32,21 @@ public static class ShellFolderProbe
         _ = File.ReadAllText(path);
         var originalAttributes = File.GetAttributes(viewPath);
         var registryPath = @"Software\Classes\CLSID\" + ClassId;
-        using (var existing = Registry.CurrentUser.OpenSubKey(registryPath))
+        // Elevated COM clients ignore per-user classes. Use an equally temporary
+        // machine registration only when this process already has administrator rights.
+        // Never prompt for elevation or replace an existing registration in either hive.
+        using var identity = WindowsIdentity.GetCurrent();
+        var elevated = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+        var registry = elevated ? Registry.LocalMachine : Registry.CurrentUser;
+        foreach (var hive in new[] { Registry.CurrentUser, Registry.LocalMachine })
+        {
+            using var existing = hive.OpenSubKey(registryPath);
             if (existing is not null) throw new InvalidOperationException("The synthetic class is already registered.");
+        }
         var registered = false;
         try
         {
-            using (var key = Registry.CurrentUser.CreateSubKey(registryPath))
+            using (var key = registry.CreateSubKey(registryPath))
             {
                 registered = true;
                 key.SetValue("", "T-Cloud synthetic folder probe");
@@ -53,7 +63,7 @@ public static class ShellFolderProbe
             foreach (var inspectedPath in new[] { path, Path.Combine(viewPath, "new.txt"), Path.Combine(viewPath, "nested", "deeper", "probe.txt") })
             {
                 var result = RunClient(inspectedPath);
-                Console.WriteLine(JsonSerializer.Serialize(new { useClassSuffix, relativePath = Path.GetRelativePath(viewPath, inspectedPath), result }));
+                Console.WriteLine(JsonSerializer.Serialize(new { useClassSuffix, elevated, relativePath = Path.GetRelativePath(viewPath, inspectedPath), result }));
                 if (result.CanDelete || result.HasDeleteCommand || !result.CanRename)
                     throw new InvalidOperationException("The native folder did not meet the Shell capability requirements.");
             }
@@ -82,8 +92,8 @@ public static class ShellFolderProbe
         }
         finally
         {
-            File.SetAttributes(viewPath, originalAttributes);
-            if (registered) Registry.CurrentUser.DeleteSubKeyTree(registryPath, throwOnMissingSubKey: true);
+            try { File.SetAttributes(viewPath, originalAttributes); }
+            finally { if (registered) registry.DeleteSubKeyTree(registryPath, throwOnMissingSubKey: true); }
         }
     }
 

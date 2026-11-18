@@ -267,6 +267,13 @@ static Task Destination()
 
 static async Task NativeHydration()
 {
+    // Hydration overlaps the filter's background fetches; repeat on fresh placeholders
+    // to expose failures that depend on which request finishes first.
+    for (var iteration = 0; iteration < 3; iteration++) await NativeHydrationOnce();
+}
+
+static async Task NativeHydrationOnce()
+{
     using var fixture = CloudFilesFixture.Create();
     var plain = RandomNumberGenerator.GetBytes(3 * 1024 * 1024 + 107);
     try
