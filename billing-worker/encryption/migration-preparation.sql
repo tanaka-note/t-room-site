@@ -2,13 +2,18 @@ CREATE TABLE billing_encryption_migration (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   generation TEXT NOT NULL UNIQUE,
   started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  audit_through_id INTEGER NOT NULL CHECK (audit_through_id >= 0)
+  audit_through_id INTEGER NOT NULL CHECK (audit_through_id >= 0),
+  writer_public_key TEXT,
+  activated_at TEXT,
+  verified_checkpoint TEXT,
+  CHECK (activated_at IS NULL OR verified_checkpoint IS NOT NULL)
 );
 
 CREATE TABLE billing_encryption_candidate_ledgers (
   generation TEXT NOT NULL REFERENCES billing_encryption_migration(generation),
   ledger_id TEXT NOT NULL,
   account_id TEXT REFERENCES billing_accounts(id),
+  recovery_wrapped_key TEXT,
   revision INTEGER NOT NULL CHECK (revision > 0),
   digest TEXT,
   signature TEXT,
@@ -21,6 +26,45 @@ CREATE TABLE billing_encryption_candidate_ledgers (
 );
 CREATE UNIQUE INDEX billing_candidate_one_audit_ledger
   ON billing_encryption_candidate_ledgers(generation) WHERE account_id IS NULL;
+
+CREATE TABLE billing_encryption_grants (
+  generation TEXT NOT NULL,
+  ledger_id TEXT NOT NULL,
+  identity_id TEXT NOT NULL,
+  credential_id TEXT NOT NULL,
+  service_link_id TEXT NOT NULL,
+  key_source TEXT NOT NULL CHECK (key_source IN ('billing','cloud')),
+  wrapped_key TEXT NOT NULL,
+  PRIMARY KEY (generation,ledger_id,credential_id,service_link_id,key_source),
+  FOREIGN KEY (generation,ledger_id) REFERENCES billing_encryption_candidate_ledgers(generation,ledger_id)
+);
+
+CREATE TABLE billing_encryption_live_ledgers (
+  generation TEXT NOT NULL,
+  ledger_id TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  digest TEXT NOT NULL,
+  signature TEXT NOT NULL,
+  writer_public_key TEXT NOT NULL,
+  records_json TEXT NOT NULL CHECK (json_valid(records_json) AND length(records_json) <= 1500000),
+  PRIMARY KEY (generation,ledger_id),
+  FOREIGN KEY (generation,ledger_id) REFERENCES billing_encryption_candidate_ledgers(generation,ledger_id)
+);
+
+CREATE TABLE billing_encryption_operations (
+  generation TEXT NOT NULL REFERENCES billing_encryption_migration(generation),
+  id TEXT NOT NULL,
+  actor_id TEXT NOT NULL REFERENCES billing_accounts(id),
+  fingerprint TEXT NOT NULL,
+  expected_revisions TEXT NOT NULL CHECK (json_valid(expected_revisions)),
+  PRIMARY KEY (generation,id)
+);
+
+CREATE TRIGGER billing_encryption_operation_revision BEFORE INSERT ON billing_encryption_operations
+WHEN EXISTS (SELECT 1 FROM json_each(NEW.expected_revisions) expected
+  LEFT JOIN billing_encryption_live_ledgers ledger ON ledger.generation=NEW.generation AND ledger.ledger_id=expected.key
+  WHERE ledger.revision IS NOT expected.value)
+BEGIN SELECT RAISE(ABORT, 'billing encrypted revision conflict'); END;
 
 CREATE TABLE billing_encryption_candidate_records (
   generation TEXT NOT NULL,

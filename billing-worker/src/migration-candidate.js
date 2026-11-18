@@ -6,7 +6,7 @@ const storedCiphertext = /^[A-Za-z0-9_-]{22,174784}$/;
 const maxPage = 32;
 const maxRecords = 10000;
 
-function validateRecord(record, revision) {
+export function validateBillingCiphertext(record, revision) {
   if (!record || typeof record.id !== "string" || !opaqueId.test(record.id)
     || record.revision !== revision || typeof record.iv !== "string" || !storedIv.test(record.iv)
     || typeof record.ciphertext !== "string" || !storedCiphertext.test(record.ciphertext)
@@ -14,25 +14,26 @@ function validateRecord(record, revision) {
 }
 
 function ledgerStatement(db, migration, scope) {
-  return db.prepare(`SELECT generation, ledger_id, account_id, revision, digest, signature, record_count
+  return db.prepare(`SELECT generation, ledger_id, account_id, revision, digest, signature, record_count,recovery_wrapped_key
     FROM billing_encryption_candidate_ledgers WHERE generation = ? AND ledger_id = ?`)
     .bind(migration, scope.ledgerId);
 }
 
-export async function reserveBillingCandidate(db, migration, scope, accountId, { revision, recordCount }) {
+export async function reserveBillingCandidate(db, migration, scope, accountId, { revision, recordCount, recoveryWrappedKey = null }) {
   if (!Number.isSafeInteger(recordCount) || recordCount < 0 || recordCount > maxRecords
     || !Number.isSafeInteger(revision) || revision <= 0) {
     throw new Error("Invalid billing candidate header");
   }
   const [, read] = await db.batch([
     db.prepare(`INSERT INTO billing_encryption_candidate_ledgers
-      (generation,ledger_id,account_id,revision,record_count)
-      VALUES (?,?,?,?,?) ON CONFLICT(generation,ledger_id) DO NOTHING`)
-      .bind(migration, scope.ledgerId, accountId, revision, recordCount),
+      (generation,ledger_id,account_id,revision,record_count,recovery_wrapped_key)
+      VALUES (?,?,?,?,?,?) ON CONFLICT(generation,ledger_id) DO NOTHING`)
+      .bind(migration, scope.ledgerId, accountId, revision, recordCount, recoveryWrappedKey),
     ledgerStatement(db, migration, scope)
   ]);
   const stored = read.results?.[0];
-  if (!stored || stored.account_id !== accountId || stored.revision !== revision || stored.record_count !== recordCount) {
+  if (!stored || stored.account_id !== accountId || stored.revision !== revision || stored.record_count !== recordCount
+    || stored.recovery_wrapped_key !== recoveryWrappedKey) {
     throw new Error("Billing candidate header conflicts with the stored revision");
   }
 }
@@ -41,7 +42,7 @@ export async function writeBillingCandidatePage(db, migration, scope, records) {
   if (!Array.isArray(records) || !records.length || records.length > maxPage) throw new Error("Invalid billing candidate page");
   const header = await ledgerStatement(db, migration, scope).first();
   if (!header) throw new Error("Billing candidate header is missing");
-  for (const record of records) validateRecord(record, header.revision);
+  for (const record of records) validateBillingCiphertext(record, header.revision);
   if (new Set(records.map(record => record.id)).size !== records.length) throw new Error("Duplicate billing candidate ciphertext");
   // SQLite aborts the entire statement if a retry changes a stored envelope or
   // would exceed the signed count, including when concurrent pages arrive.

@@ -17,18 +17,22 @@ const sources = {
   }
 };
 const maxPage = 50;
-const readMigration = db => db.prepare("SELECT generation, started_at, audit_through_id FROM billing_encryption_migration WHERE id = 1");
+const readMigration = db => db.prepare("SELECT generation,started_at,audit_through_id,writer_public_key,activated_at,verified_checkpoint FROM billing_encryption_migration WHERE id=1");
 const isGeneration = generation => typeof generation === "string"
   && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(generation);
 
 // The caller establishes recovery-key possession and authorization before
 // invoking this transition. A retry must retain its original generation.
-export async function freezeBillingMigrationSource(db, generation) {
+export function billingMigrationState(db) {
+  return readMigration(db).first();
+}
+
+export async function freezeBillingMigrationSource(db, generation, writerPublicKey = null) {
   if (!isGeneration(generation)) throw new Error("Invalid billing migration generation");
   const [write, read] = await db.batch([
-    db.prepare(`INSERT INTO billing_encryption_migration (id,generation,audit_through_id)
-      SELECT 1,?,COALESCE(MAX(id),0) FROM billing_audit_logs WHERE TRUE
-      ON CONFLICT(id) DO NOTHING`).bind(generation),
+    db.prepare(`INSERT INTO billing_encryption_migration (id,generation,audit_through_id,writer_public_key)
+      SELECT 1,?,COALESCE(MAX(id),0),? FROM billing_audit_logs WHERE TRUE
+      ON CONFLICT(id) DO NOTHING`).bind(generation, writerPublicKey ? JSON.stringify(writerPublicKey) : null),
     readMigration(db)
   ]);
   const state = read.results?.[0];

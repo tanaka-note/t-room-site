@@ -58,9 +58,15 @@ async function publicEnvelope(value, writer) {
 export async function billingVaultContext(env, input, validateSession) {
   const actor = await billingActor(env, input, validateSession);
   if (!actor) return null;
+  const cloud = await env.DB.prepare(`SELECT encrypted_payload,payload_iv FROM security_tcloud_client_vaults
+    WHERE credential_id=? AND identity_id=?`).bind(actor.credentialId,actor.identityId).first();
+  const owners = await env.DB.prepare(`SELECT DISTINCT writer_public_key FROM security_billing_vaults
+    WHERE identity_id=? AND writer_public_key IS NOT NULL ORDER BY writer_public_key`).bind(primaryAdmin).all();
   return {
     credentialId: actor.credentialId, supportsPrf: actor.supportsPrf, primaryOwner: actor.primaryOwner,
-    vault: formatVault(await ownVaultRow(env, actor), actor.primaryOwner)
+    vault: formatVault(await ownVaultRow(env, actor), actor.primaryOwner),
+    cloudEnvelope: cloud ? { encryptedPayload: cloud.encrypted_payload, payloadIv: cloud.payload_iv } : null,
+    writerKeys: owners.results.map(row => JSON.parse(row.writer_public_key))
   };
 }
 

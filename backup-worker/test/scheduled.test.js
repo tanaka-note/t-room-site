@@ -15,7 +15,7 @@ const scheduledTime=Date.now();
 const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8')
  .replace(/^import .*;\r?\n/gm,'')
  .replace(/^export \{.*;\r?\n/gm,'')
- .replace('export class BackupBrowserIntegration','class BackupBrowserIntegration')
+ .replace(/^export class /gm,'class ')
  .replace('export default {','globalThis.worker = {');
 function harness(backup) {
  const info=[],errors=[],calls=[];

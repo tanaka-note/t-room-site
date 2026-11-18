@@ -1,11 +1,16 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { backupService } from './backup.js';
 import { getBackupSnapshot } from './browser.js';
+import { billingCheckpoint } from './billing-checkpoint.js';
 import { dispatchServices, scheduledBackupServices } from './dispatch.js';
 export { D1BackupWorkflow } from './workflow.js';
 
 export class BackupBrowserIntegration extends WorkerEntrypoint {
   async getSnapshot(options) { return getBackupSnapshot(this.env, options); }
+}
+export class BillingCheckpointIntegration extends WorkerEntrypoint {
+  async writeCheckpoint(generation) { return billingCheckpoint(this.env,generation,true); }
+  async readCheckpoint(generation) { return billingCheckpoint(this.env,generation); }
 }
 export default {
   fetch() { return new Response('Not found', { status: 404 }); },

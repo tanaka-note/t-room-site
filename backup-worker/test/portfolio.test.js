@@ -35,7 +35,7 @@ const rows=(db,table)=>db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()
 function scheduledWorker() {
  const source=readFileSync(new URL('../src/index.js',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'')
   .replace(/^export \{ D1BackupWorkflow \}.*;\r?\n/gm,'')
-  .replace('export class BackupBrowserIntegration','class BackupBrowserIntegration').replace('export default {','globalThis.worker = {');
+  .replace(/^export class /gm,'class ').replace('export default {','globalThis.worker = {');
  const calls=[],context={WorkerEntrypoint:class{},crypto,getBackupSnapshot,dispatchServices,scheduledBackupServices,console:{log(){},error(){}},
   backupService:async(env,id,now)=>{calls.push({id,now});return id==='portfolio'?backupService(env,id,now,async()=>{}):{state:'ok'};}};
  vm.runInNewContext(source,context);return {worker:context.worker,calls};

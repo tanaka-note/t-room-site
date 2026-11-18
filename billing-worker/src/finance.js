@@ -43,6 +43,56 @@ export function summarizeSettlements(settlements) {
   }, { incomingYen: 0, outgoingYen: 0, offsetYen: 0 });
 }
 
+export function normalizeAccountId(value) {
+  const id = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return /^[a-z0-9-]{1,50}$/.test(id) ? id : "";
+}
+
+function normalizeDate(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return "";
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value ? "" : value;
+}
+
+function positiveYen(value) {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isSafeInteger(number) && number >= 1 && number <= 999999999999 ? number : null;
+}
+
+function normalizeText(value, maxLength) {
+  if (typeof value !== "string") return "";
+  const text = value.trim().replace(/\r\n/g, "\n");
+  return text.length > maxLength ? "" : text;
+}
+
+export function entryInput(body) {
+  const accountId = normalizeAccountId(body?.accountId);
+  const documentType = body?.documentType;
+  const entryDate = normalizeDate(body?.entryDate);
+  const categories = documentType === "invoice" ? ["purchase", "discount", "offset", "other"] : ["purchase", "offset", "other"];
+  const category = body?.category;
+  const amount = positiveYen(body?.amountYen);
+  const description = normalizeText(body?.description, 100);
+  if (!accountId || !["invoice", "payment_notice"].includes(documentType) || !entryDate
+    || !categories.includes(category) || amount === null || !description) return null;
+  return {
+    accountId, documentType, entryDate, category,
+    amountYen: signedDocumentAmount(category, amount, body.otherDirection === "minus" ? "minus" : "plus"),
+    description, note: normalizeText(body.note, 500)
+  };
+}
+
+export function settlementInput(body) {
+  const accountId = normalizeAccountId(body?.accountId);
+  const settlementDate = normalizeDate(body?.settlementDate);
+  const direction = body?.direction;
+  const method = body?.method;
+  const amountYen = positiveYen(body?.amountYen);
+  if (!accountId || !settlementDate || !["incoming", "outgoing"].includes(direction)
+    || !["bank_transfer", "cash", "offset", "other"].includes(method) || amountYen === null) return null;
+  return { accountId, settlementDate, direction, method, amountYen, note: normalizeText(body.note, 500) };
+}
+
 export function serializeEntry(row) {
   return {
     id: Number(row.id),

@@ -23,5 +23,10 @@ export async function prepareBillingVault(api, authentication) {
       if (!vault || (context.primaryOwner && !vault.writer)) throw error;
     }
   }
-  await unlockBillingVault(prfOutput, credentialId, vault);
+  const keys = await unlockBillingVault(prfOutput, credentialId, vault);
+  const cloud = context.cloudEnvelope && globalThis.TRoomCrypto
+    ? await globalThis.TRoomCrypto.unlockPasskeyClientPrivateKey(prfOutput, context.cloudEnvelope).catch(() => null) : null;
+  const writerPublicKey = vault.writer?.publicKey;
+  return { ...keys,cloud,writerPublicKey,primaryOwner:context.primaryOwner,
+    writerKeys:[...context.writerKeys,...(writerPublicKey ? [writerPublicKey] : [])] };
 }
