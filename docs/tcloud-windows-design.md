@@ -159,15 +159,19 @@ WindowsPasskeyは既存RP ID／origin、requiredの本人確認、credential別P
 
 Windows APIは`/cloud/api/windows-sync/`配下に分離する。端末の登録自体に定期的な期限を設けず、一回限り・120秒のnonceを署名して更新する。nonceとアクセストークンはhashだけをDBへ保存し、証明の消費と発行を同じD1 batchで条件付き確定する。各データAPIでIdentity・credential・service link・root scope・global epoch・Cloud version・復号用公開鍵指紋を再確認する。Securityの追加migrationは認可状態変更だけを数える世代表とtriggerを追加し、既存Webの認証処理を変えない。無効化後に再有効化しても以前の端末認可は復活しない。カウンター更新、表示名変更、通常のWebログアウトは端末認可を失効させない。Windowsの許可APIを明示し、Web認証・共有発行・暗号設定・原本削除・ゴミ箱操作へ同期用tokenを流用できないようにする。
 
+端末あたり同時に有効なnonceは8件、同じnonceの署名確認は5回までに制限する。登録・更新・解除と、既知のnonceに対する証明の失敗を共通監査へ残し、Windows端末の認証方式として区別する。Windows端末認可をWebの現在ログイン中sessionへ登録・延長しない。無効Identityの既存整理処理は、追加された世代表・triggerの厳密なDDL照合後も従来の削除条件を維持し、認可のtombstoneだけを残す。
+
 ローカルfixtureでWebログアウト後・1年経過後の自動更新、同じ証明の同時再送の片方だけ成功、nonceの期限・改変・蓄積制限、scope・RSA鍵・認可世代の変更後の拒否、一時障害後の再試行を確認した。WindowsではDPAPI登録情報の再読込と移設・改ざん拒否、CNG署名による自動更新、並行アクセスの更新集約、HTTP認可期限切れの安全な再試行を検査する。
 
-公開時はSecurity `0032_windows_device_authority.sql`、Cloud `0014_windows_device_grants.sql`の追加migrationを先に適用する。`WINDOWS_SYNC_ENABLED`の既定はfalseとし、両migrationと対象Workerの確認後に有効化する。停止時はこのWindows用flagだけをfalseへ戻す。既存WebやR2本体を変更・削除するrollbackは不要。製品の初回登録画面・常駐・実HDDのCFAPIと同期処理への統合は継続中であり、診断用の一時キーを運用端末の登録済みキーとして扱わない。利用不能でも平文秘密鍵の保存へ切り替えない。保存済み本体はプロバイダー停止・登録解除後も通常のファイルとして保持する。
+公開時は`WINDOWS_SYNC_ENABLED`を既定のfalseにしたWorkerと、旧・新schemaをともに厳密照合できるバックアップ処理を先行公開する。その後Security `0032_windows_device_authority.sql`、Cloud `0014_windows_device_grants.sql`の追加migrationを適用し、対象Workerと両schemaの確認後にWindows用flagを有効化する。停止時はこのflagだけをfalseへ戻す。既存WebやR2本体を変更・削除するrollbackは不要。製品の初回登録画面・常駐・実HDDのCFAPIと同期処理への統合は継続中であり、診断用の一時キーを運用端末の登録済みキーとして扱わない。利用不能でも平文秘密鍵の保存へ切り替えない。保存済み本体はプロバイダー停止・登録解除後も通常のファイルとして保持する。
 
 ### HDD原本の保持
 
 全原本を常時オフライン保存するため、取得前のプレースホルダーにも`CF_PLACEHOLDER_CREATE_FLAG_ALWAYS_FULL`を設定する。取得処理は`CfSetPinState(PINNED)`と`CfHydratePlaceholder(0, CF_EOF)`を使い、pin設定成功だけでは保存完了と判定しない。全体の取得成功を待って完了を記録する。自動脱水・ストリーミングによる本体非保持を許可しない。Microsoftの[ALWAYS_FULLの仕様](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/ne-cfapi-cf_placeholder_create_flags)は一度取得した本体の脱水を禁止し、[pinの仕様](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/ne-cfapi-cf_pin_state)もpin中の脱水を拒否する。
 
 所有する一時フォルダ内の合成原本で、全体のバックグラウンド取得、pin属性、脱水要求の拒否、pin解除後もALWAYS_FULLにより脱水が拒否されることを実機確認した。アプリ接続停止後の独立プロセスによる全原本の読み取り・名前変更・内容の上書き、同期登録解除後も編集内容が残ることを検査する。実際のHDDへの常設登録・実データ転送・再起動を伴う製品の確認はまだ行っていない。
+
+`CloudFilesRootRegistration`は媒体と登録済みroot identity・実ファイルIDを照合して再接続し、別の同期rootや既存ファイル入りの未登録フォルダを採用しない。停止時は登録・本体を維持する。明示的な登録解除でも原本を削除しない。`CloudFilesProvider`はFULL取得、常時保持、削除拒否、同期範囲外へのrename拒否を実装した。ネイティブ通知の識別情報をコピーして別処理で取得し、全体が認証済みの原本から転送する。大容量の準備中は`CfReportProviderProgress`で60秒の取得timeoutを更新し、終了時は処理の停止を待つ。合成暗号データの端末内復号・独立プロセスの読み取り・範囲内rename・範囲外移動と削除の拒否・停止／解除後の本体保持まで実機で確認した。実データのsnapshot・変更feed・アップロード／旧版確定との接続は継続中。
 
 ## 同期APIの追加設計
 

@@ -63,7 +63,21 @@ export const DISABLED_IDENTITY_CLEANUP_GUARD = `
 export async function cleanupDisabledIdentities(db, retentionCutoff) {
   if (!Number.isFinite(Date.parse(retentionCutoff))) throw new Error("Invalid Identity retention cutoff");
   // New tables/triggers require a new dependency review before enabling deletion.
-  const schema = await db.prepare("SELECT name, type FROM sqlite_master WHERE type IN ('table', 'trigger') AND name NOT GLOB 'sqlite_*' AND name NOT GLOB '_cf_*' AND name != 'd1_migrations'").all();
+  const schema = await db.prepare("SELECT name, type, tbl_name, sql FROM sqlite_master WHERE type IN ('table', 'trigger') AND name NOT GLOB 'sqlite_*' AND name NOT GLOB '_cf_*' AND name != 'd1_migrations' ORDER BY type,name").all();
+  const windows=row=>row.tbl_name==='security_windows_authority_versions'||row.name.startsWith('windows_');
+  const windowsRows=(schema.results||[]).filter(windows);
+  if(windowsRows.length) {
+    // The optional table has no FK/cascade into Identity. Its exact triggers
+    // only advance tombstones; keeping them prevents delete/recreate revival.
+    const shape=windowsRows.map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
+    const hash=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(shape))))]
+      .map(value=>value.toString(16).padStart(2,'0')).join('');
+    if(hash!=='953eaa6945a4f7dd167e467de9d500ff32c5ac304dce6d829683ccfcad088a8d') {
+      console.warn('Identity cleanup skipped: Windows authority schema requires review');
+      return {deleted:0,skipped:'schema'};
+    }
+    schema.results=schema.results.filter(row=>!windows(row));
+  }
   if ((schema.results || []).some((row) => row.type === "trigger" ? !KNOWN_TRIGGERS.has(row.name) : !KNOWN_TABLES.has(row.name))
     || [...KNOWN_TABLES].some((name) => !(schema.results || []).some((row) => row.name === name))) {
     console.warn("Identity cleanup skipped: schema requires dependency review");

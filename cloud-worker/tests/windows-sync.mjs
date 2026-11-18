@@ -4,6 +4,8 @@ import { handleWindowsSync, cleanupWindowsSync, deviceChallengeMessage, windowsD
 import { db, env, context, api, handoff, securityDb } from './session-fixture.mjs';
 
 context.handleWindowsSync=handleWindowsSync; context.cleanupWindowsSync=cleanupWindowsSync;
+const audits=[];const originalAudit=context.recordSecurityAudit;
+context.recordSecurityAudit=async(...args)=>{audits.push(args[2]);return originalAudit(...args);};
 env.WINDOWS_SYNC_ENABLED='true';
 let generation='a'.repeat(64), unavailable=false;
 const rsa=await crypto.subtle.generateKey({name:'RSA-OAEP',modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},false,['encrypt','decrypt']);
@@ -73,6 +75,7 @@ test('concurrent proofs consume exactly once; tampering cannot enlarge scope or 
   const challenge=(await call('/challenge','POST',{deviceId:device.token.deviceId})).body;
   const bad=await device.sign({...challenge,scopeHash:'b'.repeat(64)});
   assert.equal((await call('/token','POST',bad)).status,401);
+  assert.ok(audits.some(event=>event.eventType==='windows_device_proof_failure'&&event.outcome==='failure'&&event.authMethod==='windows-device'));
   const good=await device.sign(challenge);
   const results=await Promise.all([call('/token','POST',good),call('/token','POST',good)]);
   assert.deepEqual(results.map(r=>r.status).sort(),[200,401]);
@@ -84,6 +87,10 @@ test('concurrent proofs consume exactly once; tampering cannot enlarge scope or 
   const limited=await register();
   for(let n=0;n<8;n++)assert.equal((await call('/challenge','POST',{deviceId:limited.token.deviceId})).status,200);
   assert.equal((await call('/challenge','POST',{deviceId:limited.token.deviceId})).status,429,'outstanding nonce storage is bounded');
+  const capped=await register();const cap=(await call('/challenge','POST',{deviceId:capped.token.deviceId})).body;
+  const wrong=await capped.sign({...cap,scopeHash:'0'.repeat(64)});
+  for(let n=0;n<5;n++)assert.equal((await call('/token','POST',wrong)).status,401);
+  assert.equal((await call('/token','POST',await capped.sign(cap))).status,429,'a challenge has a bounded signature verification budget');
 });
 test('transient failures keep the grant, but authority changes or RSA key changes revoke it permanently',async()=>{
   const device=await register();

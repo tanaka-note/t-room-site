@@ -17,6 +17,11 @@ if (args.Contains("--progressive-probe"))
     return 0;
 }
 
+if(args.Contains("--provider-probe"))
+{
+    await ProviderTests.Transfer();Console.WriteLine("PASS operational provider fixture");return 0;
+}
+
 if (args.Contains("--key-probe"))
 {
     await NativePrivateKey();
@@ -76,6 +81,8 @@ if (args.Contains("--native"))
     tests.Add(("DPAPI session protection rejects modified cookies and another session binding", NativeAccountProtection));
     tests.Add(("persistent device signatures interoperate without exporting private keys or reusing cookie protection", NativeDeviceKey));
     tests.Add(("PC-protected registration resumes and renews without a Web cookie or another passkey", DeviceClientTests.PersistentDevice));
+    tests.Add(("persistent sync roots resume only their owner and unlink without deleting originals", RootRegistrationTests.Persistence));
+    tests.Add(("operational CFAPI transport keeps verified originals and permits only in-root rename", ProviderTests.Transfer));
     tests.Add(("browser PRF envelopes unlock existing member and administrator keys in Windows", NativePasskeyEnvelope));
 }
 var failed = 0;

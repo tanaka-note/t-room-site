@@ -118,10 +118,14 @@ internal static class CloudFilesNative
     [DllImport("cldapi.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
     internal static extern int CfUnregisterSyncRoot(string path);
     [DllImport("cldapi.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
+    internal static extern int CfGetSyncRootInfoByPath(string path, int infoClass, nint buffer, uint length, out uint returned);
+    [DllImport("cldapi.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
     internal static extern int CfConnectSyncRoot(string path, [In] CallbackRegistration[] callbacks,
         nint context, uint flags, out long connectionKey);
     [DllImport("cldapi.dll", PreserveSig = true)]
     internal static extern int CfDisconnectSyncRoot(long connectionKey);
+    [DllImport("cldapi.dll", PreserveSig = true)]
+    internal static extern int CfReportProviderProgress(long connectionKey, long transferKey, long total, long completed);
     [DllImport("cldapi.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
     internal static extern int CfCreatePlaceholders(string path, [In, Out] Placeholder[] placeholders, uint count, uint flags, out uint processed);
     [DllImport("cldapi.dll", PreserveSig = true)]

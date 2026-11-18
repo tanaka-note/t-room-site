@@ -38,7 +38,7 @@ export async function assertSchema(service, rows) {
   const windowsRows=rows.filter(windows);
   if(windowsRows.length) {
     const expected=service==='security'?'953eaa6945a4f7dd167e467de9d500ff32c5ac304dce6d829683ccfcad088a8d'
-      :'dbb56d5e8aa53e704c71869088091fe5fefe5f7c923dee0dd23e107371956bef';
+      :'1daa6b05da32595f44478904b056c787f3c0cd6ac6cbb1551840f79d495d90e9';
     const shape=windowsRows.map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
     if(await digest(new TextEncoder().encode(JSON.stringify(shape)))!==expected)throw new Error('SchemaReviewRequired');
     rows=rows.filter(row=>!windows(row));

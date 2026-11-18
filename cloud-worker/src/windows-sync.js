@@ -109,6 +109,10 @@ async function proof(request, env, deps, purpose) {
   const challenge = await env.DB.prepare('SELECT * FROM cloud_windows_challenges WHERE id=? AND device_id=? AND purpose=?')
     .bind(input.challengeId, row.id, purpose).first();
   if (!challenge || challenge.consumed_at != null || challenge.expires_at <= now()) throw new DeviceError(401, 'proof_expired_or_used');
+  const counted=await env.DB.prepare('UPDATE cloud_windows_challenges SET attempts=attempts+1 WHERE id=? AND attempts<5 AND consumed_at IS NULL AND expires_at>?')
+    .bind(challenge.id,now()).run();
+  if(counted.meta?.changes!==1)throw new DeviceError(429,'proof_attempt_limit');
+  try {
   decode(input.nonce, 32);
   if (await digest(input.nonce) !== challenge.nonce_hash) throw new DeviceError(401, 'invalid_proof');
   const signature = decode(input.signature, 64);
@@ -132,6 +136,11 @@ async function proof(request, env, deps, purpose) {
   if (results.at(-2)?.meta?.changes !== 1) throw new DeviceError(401, 'proof_expired_or_used');
   await deps.audit(purpose === 'enroll' ? 'windows_device_registered' : 'windows_device_renewed', JSON.parse(row.binding_json), row.id);
   return json({ deviceId: row.id, scopeHash: row.scope_hash, accessToken, expiresAt });
+  } catch(error) {
+    await deps.audit('windows_device_proof_failure',JSON.parse(row.binding_json),row.id,'failure',{
+      reason:error instanceof DeviceError?error.code:'authorization_unavailable'});
+    throw error;
+  }
 }
 async function access(request, env, deps) {
   const authorization = request.headers.get('Authorization') || '';

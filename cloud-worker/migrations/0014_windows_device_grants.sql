@@ -18,6 +18,7 @@ CREATE TABLE cloud_windows_challenges (
   purpose TEXT NOT NULL CHECK(purpose IN ('enroll','renew')),
   nonce_hash TEXT NOT NULL,
   expires_at INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts BETWEEN 0 AND 5),
   consumed_at INTEGER,
   proof_id TEXT
 );

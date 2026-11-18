@@ -8,7 +8,7 @@ import { handleYouTubeSearchRequest } from "./youtube-search.js";
 import { handleWindowsSync, cleanupWindowsSync } from "./windows-sync.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-883da984e370";
+const APP_BUILD_ID = "cloud-f91d02bf629e";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -165,11 +165,11 @@ export default {
               const row = await env.DB.prepare('SELECT public_key_jwk FROM cloud_crypto_config WHERE id=1').first();
               return row ? JSON.parse(row.public_key_jwk) : null;
             },
-            audit: (eventType, binding, deviceId) => recordSecurityAudit(env, request, {
-              service: 'cloud', eventType, outcome: 'success', identityId: binding.identityId,
+            audit: (eventType, binding, deviceId, outcome = 'success', details = {}) => recordSecurityAudit(env, request, {
+              service: 'cloud', eventType, outcome, identityId: binding.identityId,
               credentialId: binding.credentialId, serviceLinkId: binding.serviceLinkId,
-              serviceAccountId: binding.serviceAccountId, role: binding.role, authMethod: 'passkey',
-              sessionId: 'windows-' + deviceId, targetType: 'windows_device', targetId: deviceId
+              serviceAccountId: binding.serviceAccountId, role: binding.role, authMethod: 'windows-device',
+              sessionId: 'windows-' + deviceId, targetType: 'windows_device', targetId: deviceId, details
             }),
             dispatch: async (value, dataPath, binding, deviceId) => {
               const account = binding.role === 'member' ? PASSKEY_MEMBER_ACCOUNT : ACCOUNTS.find(item => item.role === binding.role);
