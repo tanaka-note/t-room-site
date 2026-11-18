@@ -4,6 +4,12 @@ using System.Text.Json;
 using TCloud.Sync.Core;
 using TCloud.Sync.Windows;
 
+if (args.Length == 2 && args[0] == "--hydrate-fixture")
+{
+    await HydrationProbe.RunClientAsync(args[1]);
+    return 0;
+}
+
 if (args.Contains("--key-probe"))
 {
     await NativePrivateKey();
@@ -37,6 +43,7 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("browser encryption interoperates in both directions", BrowserCrypto),
     ("ciphertext integrity and chunk identity are authenticated", Integrity),
     ("random reads cross encrypted chunks and stop at EOF", Ranges),
+    ("Cloud Files transfer ranges satisfy native alignment and EOF requirements", NativeTransferRanges),
     ("disk absence and missing listings never delete online files", MissingIsNotDeletion),
     ("local deletion never deletes online; racing edits preserve both", DeletionAndConflicts),
     ("remote deletion cannot resurrect an offline edit", RemoteDeletion),
@@ -120,6 +127,20 @@ static Task Ranges()
     Check(ChunkRanges.ForRead(20000, 8192, 19900, 200).Single().PlainLength == 100, "EOF clamp");
     Check(ChunkRanges.ForRead(0, 8192, 0, 5).Count == 0, "empty file");
     Throws<ArgumentOutOfRangeException>(() => ChunkRanges.ForRead(1, 8192, -1, 1));
+    return Task.CompletedTask;
+}
+
+static Task NativeTransferRanges()
+{
+    Check(CloudFilesRange.ForRequest(20000, 8100, 100) == new CloudFilesRange(4096, 8192), "unaligned request spans native pages");
+    Check(CloudFilesRange.ForRequest(20000, 8192, 4096) == new CloudFilesRange(8192, 4096), "aligned request");
+    Check(CloudFilesRange.ForRequest(20000, 19990, 100) == new CloudFilesRange(16384, 3616), "EOF clips overshoot");
+    Check(CloudFilesRange.ForRequest(20000, 8193, -1) == new CloudFilesRange(8192, 11808), "CF_EOF sentinel");
+    var large = CloudFilesRange.ForRequest(long.MaxValue, long.MaxValue - 10, 100);
+    Check(large.Offset % 4096 == 0 && large.Offset + large.Length == long.MaxValue, "no overflow near maximum size");
+    Throws<ArgumentOutOfRangeException>(() => CloudFilesRange.ForRequest(0, 0, 1));
+    Throws<ArgumentOutOfRangeException>(() => CloudFilesRange.ForRequest(10, 10, 1));
+    Throws<ArgumentOutOfRangeException>(() => CloudFilesRange.ForRequest(10, 0, 0));
     return Task.CompletedTask;
 }
 
@@ -253,17 +274,9 @@ static async Task NativeHydration()
         fixture.Add("fixture.bin", plain);
         var path = Path.Combine(fixture.Root, "fixture.bin");
         Check(new FileInfo(path).Length == plain.Length, "logical size before hydration");
-        await using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 4096, FileOptions.Asynchronous | FileOptions.RandomAccess))
-        {
-            foreach (var offset in new long[] { plain.Length - 1107, 8191, 1024 * 1024 + 3, 0 })
-            {
-                stream.Position = offset;
-                var buffer = new byte[1000];
-                await stream.ReadExactlyAsync(buffer);
-                Check(buffer.AsSpan().SequenceEqual(plain.AsSpan((int)offset, buffer.Length)), "random seek content");
-            }
-        }
-        Check((await File.ReadAllBytesAsync(path)).AsSpan().SequenceEqual(plain), "complete hydration");
+        var result = await HydrationProbe.ReadAsync(path, plain);
+        Check(result.Succeeded, $"consumer {result.Stage} failed with 0x{result.HResult:X8}; provider errors: "
+            + string.Join(",", fixture.Errors.Select(error => $"0x{error.HResult:X8}")));
         Check(fixture.FetchCount > 0, "native fetch callback actually ran");
         Check(fixture.Errors.IsEmpty, "provider callback errors");
     }

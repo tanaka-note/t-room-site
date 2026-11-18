@@ -142,15 +142,13 @@ public sealed class CloudFilesFixture : IDisposable
             if (info.FileIdentityLength is 0 or > 4096) throw new InvalidDataException("識別情報が不正です。");
             var identity = Marshal.PtrToStringUTF8(info.FileIdentity, (int)info.FileIdentityLength)!;
             if (!data.TryGetValue(identity, out var bytes)) throw new FileNotFoundException();
-            var offset = parameters.RequiredOffset;
-            if (offset < 0 || offset >= bytes.Length) throw new InvalidDataException("取得範囲が不正です。");
-            var length = (int)Math.Min(parameters.RequiredLength, bytes.Length - offset);
-            if (length <= 0) throw new InvalidDataException("取得範囲が不正です。");
+            var range = CloudFilesRange.ForRequest(bytes.LongLength, parameters.RequiredOffset, parameters.RequiredLength);
             var pinned = GCHandle.Alloc(bytes, GCHandleType.Pinned);
             try
             {
-                transfer.Buffer = pinned.AddrOfPinnedObject() + checked((int)offset);
-                transfer.Length = length;
+                transfer.Buffer = pinned.AddrOfPinnedObject() + checked((int)range.Offset);
+                transfer.Offset = range.Offset;
+                transfer.Length = range.Length;
                 CloudFilesNative.Check(CloudFilesNative.CfExecute(operation, transfer));
                 Interlocked.Increment(ref fetchCount);
             }

@@ -88,6 +88,8 @@ Shell拡張はC++のネイティブDLLとし、ExplorerへCLRを読み込む方�
 
 OS一時領域の独立したNTFSフォルダを登録し、同じ条件で削除拒否の有無を比較した。別プロセスからの通常削除は拒否された。改名、直接書込、バックアップ先を指定したFile.Replaceは成功した。プロバイダー自身のI/Oだけでは削除通知を検証できないため、PowerShellの独立した子プロセスから実行している。
 
+任意位置の読み取り試験もプロバイダーと別の.NETプロセスへ分離し、末尾・先頭・チャンク境界・全体をハッシュで照合する。TRANSFER_DATAはWindowsの要件に従い、開始位置と転送長を4 KiB境界へ広げ、論理EOFだけを短い最終転送とする。CF_EOFと大きい値でのオーバーフローも回帰対象に含める。失敗時は合成fixtureの処理段階と数値HRESULTを返し、ファイル内容を出力しない。[TRANSFER_DATAの範囲要件](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/ns-cfapi-cf_operation_parameters)。
+
 Excelを非表示の専用インスタンスで起動し、合成.xlsxのCFAPIファイルを編集・保存した。閉じてから読み取り専用で開き直し、セルの更新値を確認した。削除拒否コールバックは保存中にも発生したが、保存と内容確認が成功した。ただし保存後の実ファイルは通常ファイルへ置き換わり、その直後の別プロセスからの削除は成功した。保存成功だけを削除保護との両立の証拠にしない。
 
 保存後のファイルをCfConvertToPlaceholderのALWAYS_FULLで再管理すると、保存内容を保持したまま削除要求を拒否できた。変換時にDEHYDRATEやMARK_IN_SYNCは指定しない。未送信の編集を送信済み扱いにしない。この変換は保存・新規ファイル検出後に必要となり、変換までの空白と常駐停止中の挙動を別途扱う。[変換API](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/nf-cfapi-cfconverttoplaceholder)。
