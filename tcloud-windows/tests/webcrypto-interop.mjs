@@ -9,7 +9,15 @@ const context = { crypto: webcrypto, TextEncoder, TextDecoder, Uint8Array, Array
 context.window = context;
 vm.runInNewContext(await readFile(new URL('../../cloud-worker/public/vendor/argon2.umd.min.js', import.meta.url), 'utf8'), context);
 vm.runInNewContext(await readFile(new URL('../../cloud-worker/public/crypto-vault.js', import.meta.url), 'utf8'), context);
-if (request.mode === 'file-package') {
+if (request.mode === 'device-signature') {
+  const key = await webcrypto.subtle.importKey('jwk', request.publicKey, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+  const c = request.challenge;
+  const message = ['T-ROOM Cloud Storage Windows device authorization v1', 'https://tanaka-note.com/cloud/',
+    c.DeviceId, c.ChallengeId, c.Nonce, c.ScopeHash, String(c.ExpiresAt)].join('\n');
+  const valid = await webcrypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, Buffer.from(request.signature, 'base64'), new TextEncoder().encode(message));
+  const wrongPurpose = await webcrypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, Buffer.from(request.signature, 'base64'), new TextEncoder().encode(message.replace('Windows device authorization', 'file metadata')));
+  process.stdout.write(JSON.stringify({ valid, wrongPurpose }));
+} else if (request.mode === 'file-package') {
   const folderBytes = Buffer.from(request.folderKey, 'base64');
   const keyBytes = Buffer.from(request.fileKey, 'base64');
   try {

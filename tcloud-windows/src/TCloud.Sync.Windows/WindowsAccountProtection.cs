@@ -10,16 +10,22 @@ public static class WindowsAccountProtection
 {
     private const int MaxBytes = 64 * 1024;
 
-    public static byte[] Protect(ReadOnlySpan<byte> plaintext, ReadOnlySpan<byte> sessionBinding) => Transform(plaintext, sessionBinding, true);
-    public static byte[] Unprotect(ReadOnlySpan<byte> ciphertext, ReadOnlySpan<byte> sessionBinding) => Transform(ciphertext, sessionBinding, false);
+    public static byte[] Protect(ReadOnlySpan<byte> plaintext, ReadOnlySpan<byte> sessionBinding)
+        => Transform(plaintext, sessionBinding, true, "TCloud.Windows.Session.Cookie.v1");
+    public static byte[] Unprotect(ReadOnlySpan<byte> ciphertext, ReadOnlySpan<byte> sessionBinding)
+        => Transform(ciphertext, sessionBinding, false, "TCloud.Windows.Session.Cookie.v1");
+    public static byte[] ProtectDeviceRecord(ReadOnlySpan<byte> plaintext, ReadOnlySpan<byte> deviceBinding)
+        => Transform(plaintext, deviceBinding, true, "TCloud.Windows.Device.Registration.v1");
+    public static byte[] UnprotectDeviceRecord(ReadOnlySpan<byte> ciphertext, ReadOnlySpan<byte> deviceBinding)
+        => Transform(ciphertext, deviceBinding, false, "TCloud.Windows.Device.Registration.v1");
 
-    private static byte[] Transform(ReadOnlySpan<byte> value, ReadOnlySpan<byte> binding, bool protect)
+    private static byte[] Transform(ReadOnlySpan<byte> value, ReadOnlySpan<byte> binding, bool protect, string purposeName)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
         if (value.Length is 0 or > MaxBytes || binding.Length != 32)
             throw new ArgumentException("保護データまたはセッション識別情報が不正です。");
         var input = value.ToArray();
-        var purpose = Encoding.UTF8.GetBytes("TCloud.Windows.Session.Cookie.v1");
+        var purpose = Encoding.UTF8.GetBytes(purposeName);
         var entropy = new byte[purpose.Length + binding.Length];
         purpose.CopyTo(entropy, 0);
         binding.CopyTo(entropy.AsSpan(purpose.Length));

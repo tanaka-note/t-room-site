@@ -82,7 +82,7 @@ public sealed class CloudFilesFixture : IDisposable
         catch { if (Directory.Exists(root)) Directory.Delete(root); throw; }
     }
 
-    public void Add(string name, ReadOnlySpan<byte> plaintext, string relativeDirectory = "")
+    public void Add(string name, ReadOnlySpan<byte> plaintext, string relativeDirectory = "", bool alwaysKeep = false)
     {
         ObjectDisposedException.ThrowIf(disposed != 0, this);
         if (!VolumeInspector.IsExpectedVolumePresent(root, volume)) throw new IOException("保存先が接続されていません。");
@@ -100,7 +100,7 @@ public sealed class CloudFilesFixture : IDisposable
             CloudFilesNative.Placeholder[] placeholders = [new()
             {
                 RelativeFileName = safeName, FileIdentity = identityMemory, FileIdentityLength = (uint)identityBytes.Length,
-                Flags = 2, // MARK_IN_SYNC, not ALWAYS_FULL
+                Flags = alwaysKeep ? 2u | 8u : 2u, // MARK_IN_SYNC; optionally disallow dehydration after hydration
                 FsMetadata = new()
                 {
                     Basic = new() { CreationTime = timestamp, LastAccessTime = timestamp, LastWriteTime = timestamp,
@@ -113,6 +113,17 @@ public sealed class CloudFilesFixture : IDisposable
         }
         catch { if (data.TryRemove(identity, out var bytes)) CryptographicOperations.ZeroMemory(bytes); throw; }
         finally { Marshal.FreeHGlobal(identityMemory); }
+    }
+
+    // Negative control for the permanent-local-original test, limited to owned synthetic data.
+    public int TryDehydrateForProbe(string relativePath, bool clearPin = false)
+    {
+        ObjectDisposedException.ThrowIf(disposed != 0, this);
+        if (!VolumeInspector.IsExpectedVolumePresent(root, volume)) throw new IOException("保存先が接続されていません。");
+        var path = LocalPaths.ResolveUnderRoot(root, relativePath);
+        using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        if (clearPin) CloudFilesNative.Check(CloudFilesNative.CfSetPinState(handle, 0 /* UNSPECIFIED */, 0, 0));
+        return CloudFilesNative.CfDehydratePlaceholder(handle, 0, -1, 0, 0);
     }
 
     public void ConvertExisting(string relativePath)

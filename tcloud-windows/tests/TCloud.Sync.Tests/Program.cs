@@ -69,11 +69,12 @@ var tests = new List<(string Name, Func<Task> Run)>
 if (args.Contains("--native"))
 {
     tests.Add(("Windows full hydration supports cached asynchronous reads and random seeks", () => NativeHydration(true)));
-    tests.Add(("saved plaintext originals remain readable after provider stop and unregistration", NativeOfflineOriginal));
+    tests.Add(("retained plaintext originals resist dehydration and remain editable without the provider", NativeOfflineOriginal));
     tests.Add(("real Windows deletion requests can be rejected without losing the file", NativeDeleteVeto));
     tests.Add(("application file replacement retains its saved body after Cloud Files conversion", NativeReplacementConversion));
     tests.Add(("persisted Windows RSA keys decrypt but cannot export private material or sign", NativePrivateKey));
     tests.Add(("DPAPI session protection rejects modified cookies and another session binding", NativeAccountProtection));
+    tests.Add(("persistent device signatures interoperate without exporting private keys or reusing cookie protection", NativeDeviceKey));
     tests.Add(("browser PRF envelopes unlock existing member and administrator keys in Windows", NativePasskeyEnvelope));
 }
 var failed = 0;
@@ -368,18 +369,33 @@ static async Task NativeHydrationOnce(int size, bool full)
 
 static async Task NativeOfflineOriginal()
 {
-    using var fixture = CloudFilesFixture.Create();
+    using var fixture = CloudFilesFixture.Create(denyDeletes: true);
     var plain = RandomNumberGenerator.GetBytes(3 * 1024 * 1024 + 107);
     try
     {
-        fixture.Add("fixture.bin", plain);
+        fixture.Add("fixture.bin", plain, alwaysKeep: true);
         var path = Path.Combine(fixture.Root, "fixture.bin");
-        Check((await HydrationProbe.ReadAsync(path, plain)).Succeeded, "initial original saved in plaintext");
+        await Task.Run(() =>
+        {
+            using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            CloudFilesLocalStorage.HydrateAndKeep(handle);
+        });
+        Check((File.GetAttributes(path) & (FileAttributes)0x80000) != 0, "original is pinned locally");
+        Check((await HydrationProbe.ReadAsync(path, plain)).Succeeded, "background hydration saved the complete plaintext original");
+        var dehydration = fixture.TryDehydrateForProbe("fixture.bin");
+        Check(dehydration is unchecked((int)0x80070188) or unchecked((int)0x800701B2), $"retained original rejects dehydration: 0x{dehydration:X8}");
+        dehydration = fixture.TryDehydrateForProbe("fixture.bin", clearPin: true);
+        Check(dehydration == unchecked((int)0x800701B2), $"always-full original rejects dehydration even without pin: 0x{dehydration:X8}");
         var fetches = fixture.FetchCount;
         fixture.StopProvider();
         Check((await HydrationProbe.ReadAsync(path, plain)).Succeeded, "stopped app requires no provider, key or login to read saved original");
+        var renamed = Path.Combine(fixture.Root, "renamed.bin");
+        var rename = FixtureClient.Run($"[System.IO.File]::Move({FixtureClient.PathArgument(path)}, {FixtureClient.PathArgument(renamed)})");
+        Check(rename.Succeeded, "offline original can be renamed without the provider");
+        var edit = FixtureClient.Run($"[System.IO.File]::WriteAllText({FixtureClient.PathArgument(renamed)}, 'offline revision')");
+        Check(edit.Succeeded && await File.ReadAllTextAsync(renamed) == "offline revision", "offline original can be overwritten without a login");
         fixture.UnregisterProvider();
-        Check((await HydrationProbe.ReadAsync(path, plain)).Succeeded, "unregistered backup is still an ordinary readable body");
+        Check(await File.ReadAllTextAsync(renamed) == "offline revision", "unregistration retains the locally edited body");
         Check(fixture.FetchCount == fetches, "offline reads never recall the cloud or require authentication");
     }
     finally { CryptographicOperations.ZeroMemory(plain); }
@@ -453,6 +469,59 @@ static Task NativePrivateKey()
         if (imported) WindowsPrivateKey.Delete(keyId);
     }
     return Task.CompletedTask;
+}
+
+static async Task NativeDeviceKey()
+{
+    var keyId = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+    try
+    {
+        WindowsDeviceKey.Create(keyId);
+        var now = DateTimeOffset.UtcNow;
+        var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var challenge = new WindowsDeviceChallenge(Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"), nonce,
+            Convert.ToHexString(SHA256.HashData("synthetic scope"u8)).ToLowerInvariant(), now.AddMinutes(2).ToUnixTimeSeconds());
+        var signature = WindowsDeviceKey.SignChallenge(keyId, challenge, now);
+        Check(signature.Length == 64, "P-256 proof has the expected raw signature form");
+        using (var key = WindowsDeviceKey.Open(keyId))
+        {
+            Check(key.VerifyData(WindowsDeviceKey.ChallengeMessage(challenge, now), signature, HashAlgorithmName.SHA256,
+                DSASignatureFormat.IeeeP1363FixedFieldConcatenation), "persisted signing key verifies after reopen");
+            Throws<CryptographicException>(() => key.ExportParameters(true));
+            Throws<CryptographicException>(() => key.ExportPkcs8PrivateKey());
+        }
+        Throws<CryptographicException>(() => WindowsDeviceKey.Create(keyId));
+        Throws<CryptographicException>(() => WindowsDeviceKey.SignChallenge(keyId, challenge with { ExpiresAt = now.ToUnixTimeSeconds() }, now));
+        Throws<CryptographicException>(() => WindowsDeviceKey.SignChallenge(keyId, challenge with { Nonce = nonce + "=" }, now));
+        var start = new ProcessStartInfo("node") { UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
+        start.ArgumentList.Add(Path.Combine(RepositoryRoot(), "tcloud-windows", "tests", "webcrypto-interop.mjs"));
+        using var child = Process.Start(start) ?? throw new IOException("Could not start device proof fixture.");
+        var output = child.StandardOutput.ReadToEndAsync();
+        var errors = child.StandardError.ReadToEndAsync();
+        await child.StandardInput.WriteAsync(JsonSerializer.Serialize(new { mode = "device-signature", publicKey = WindowsDeviceKey.PublicKey(keyId),
+            challenge, signature = Convert.ToBase64String(signature) }));
+        child.StandardInput.Close();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        try { await child.WaitForExitAsync(timeout.Token); }
+        catch { child.Kill(entireProcessTree: true); await child.WaitForExitAsync(); throw; }
+        _ = await errors;
+        Check(child.ExitCode == 0, "device proof fixture completed");
+        using var document = JsonDocument.Parse(await output);
+        Check(document.RootElement.GetProperty("valid").GetBoolean() && !document.RootElement.GetProperty("wrongPurpose").GetBoolean(),
+            "WebCrypto verifies the device proof and rejects another purpose");
+        var binding = RandomNumberGenerator.GetBytes(32);
+        var record = "{\"version\":1,\"synthetic\":true}"u8.ToArray();
+        var protectedRecord = WindowsAccountProtection.ProtectDeviceRecord(record, binding);
+        var restored = WindowsAccountProtection.UnprotectDeviceRecord(protectedRecord, binding);
+        try { Check(restored.AsSpan().SequenceEqual(record), "registered device state is protected for this Windows account"); }
+        finally { CryptographicOperations.ZeroMemory(restored); }
+        Throws<CryptographicException>(() => WindowsAccountProtection.Unprotect(protectedRecord, binding));
+        var cookie = WindowsAccountProtection.Protect(record, binding);
+        Throws<CryptographicException>(() => WindowsAccountProtection.UnprotectDeviceRecord(cookie, binding));
+    }
+    finally { WindowsDeviceKey.Delete(keyId); }
+    Throws<CryptographicException>(() => WindowsDeviceKey.Open(keyId));
 }
 
 static Task NativeAccountProtection()

@@ -129,6 +129,12 @@ internal static class CloudFilesNative
     [DllImport("cldapi.dll", PreserveSig = true)]
     internal static extern int CfConvertToPlaceholder(SafeFileHandle handle, byte[] identity, uint identityLength,
         uint flags, out long convertUsn, nint overlapped);
+    [DllImport("cldapi.dll", PreserveSig = true)]
+    internal static extern int CfSetPinState(SafeFileHandle handle, int pinState, uint flags, nint overlapped);
+    [DllImport("cldapi.dll", PreserveSig = true)]
+    internal static extern int CfHydratePlaceholder(SafeFileHandle handle, long offset, long length, uint flags, nint overlapped);
+    [DllImport("cldapi.dll", PreserveSig = true)]
+    internal static extern int CfDehydratePlaceholder(SafeFileHandle handle, long offset, long length, uint flags, nint overlapped);
 
     internal static void Check(int result) { if (result < 0) Marshal.ThrowExceptionForHR(result); }
 }

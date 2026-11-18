@@ -37,7 +37,8 @@ Windows Server 2025のCIでは、部分取得中のファイルを非同期で�
 | 同名ファイルの配置 | 既存のオンラインfile IDと現在の版を確認し、既存ファイルへの上書きとして処理する。関連付けが確定できない場合は保留する |
 | オンライン削除 | 削除状態を確認し、HDDの対応するファイルを同期場所から取り除く。開いているファイルの処理は使用終了を待つ |
 | オンライン削除と未送信編集の競合 | 編集版を同期対象外の回復フォルダに保全してから同期場所を更新する。回復コピーは手動で戻すまで保持する |
-| 認証期限切れ | 通信と反映を保留し、HDDの取得済み本体を利用可能なままにする。再認証後はオンラインの差分と削除を確認してから未送信の編集を送る |
+| 同期用アクセス権の期限切れ | 登録済み端末の証明で自動更新する。通常の期限経過ではパスキー入力を要求しない。通信できない間は反映を保留し、HDDの取得済み本体と未送信編集を保持する |
+| 端末認可の失効 | オンライン同期を停止する。HDDの取得済み本体は引き続き認証なしで利用できる。本人が再登録した場合は、オンラインの差分と削除を確認してから未送信の編集を送る |
 
 同期履歴の破損・消失や別PCへの移行時は、先に既存ファイルとオンラインの状態を照合し、空の履歴から自動アップロードを始めない。外部からファイルが欠損した場合も、オンラインの削除状態とローカルの未送信編集を照合して回復を判断する。
 
@@ -144,6 +145,8 @@ WindowsPrivateKeyにCNGのユーザー単位の永続RSA取り込みを実装し
 
 WindowsAccountProtectionにDPAPI CurrentUserのCookieバイト保護を実装した。LOCAL_MACHINEは指定せず、用途とsession bindingを追加entropyに含める。合成Cookieで復元、改ざん拒否、別bindingの拒否を確認した。他のWindowsアカウントでの実行は未確認。これらのhelper自身はサーバーsessionを検証・延長しない。
 
+WindowsDeviceKeyにCNGのユーザー単位・非抽出ECDSA P-256署名鍵を追加した。復号用RSA鍵と分離し、サーバーに渡す公開鍵だけを書き出す。固定のWindows端末認可用途・origin・端末ID・challenge ID・nonce・scope hash・短命の有効期限を署名へ含める。合成鍵で再オープン、既存鍵の上書き拒否、秘密鍵の書出し拒否、期限切れ・不正nonceの拒否、WebCryptoによるP1363署名検証と別用途の拒否を確認した。DPAPIの端末登録情報はCookieと用途を分離し、相互に復元できないことを確認した。このhelperだけでは登録の永続化やサーバー側のnonce消費・失効確認を実現したことにはしない。
+
 PasskeyEnvelopeは既存Web版と同じHKDF-SHA256・用途文字列・AES-GCMでPRF envelopeを端末内解除し、CNGへ取り込んだ公開鍵との一致を確認する。既存crypto-vault.jsが生成した管理者／memberの合成envelopeを実際に解除し、用途を入れ替えると失敗することも確認した。秘密鍵・PRFは処理後に消去し、PRFを送信用assertionへ含めない。
 
 管理者用envelopeのpublicKeyJwkは現行Security実装で意図的にnullとして保存される。管理者公開鍵はCloudへのhandoff成功後、同じX-TCloud-SessionでGET /cloud/api/crypto-configから取得し、初期化済み・対応cryptoVersion・RSA形式を確認して使う。memberは引き続きcredential固有のvault内公開鍵を使い、管理者公開鍵を流用しない。公開鍵を取得できない場合や秘密鍵と一致しない場合は処理を中断し、取り込み済みの不一致キーを削除する。初期の診断画面は管理者envelope内に公開鍵があると誤認していたため、実パスキーの署名検証後に失敗した。現行のnullを含む応答形・設定APIの取得・認証エラー・公開鍵不一致を合成fixtureへ追加した。
@@ -153,6 +156,12 @@ WindowsPasskeyは既存RP ID／origin、requiredの本人確認、credential別P
 `tests/TCloud.Sync.AuthProbe`に、本人がボタンを押したときだけ現行の認証・handoffを使用する診断画面を追加した。通常利用を既定とし、管理者利用は明示選択する。既存ブラウザのCookieを読み取らず、独立したメモリー内CookieContainerを使用する。端末内で既存envelopeを解除し、合成データで復号と非抽出性を確認してから、このツールが作ったCNGキーを削除し、Cloud／Securityの当該検証sessionをログアウトする。本番ファイルの一覧・本体取得や変更は実行しない。結果ファイルは成功項目・API版・利用区分・例外の種類／数値コード・処理段階・確認時刻だけを記録し、Cookie、token、Identity、credential、PRF、秘密鍵、復号鍵を含めない。
 
 通常のWindowsクライアントへの初回登録画面・長期端末認可・失効処理・再起動時の自動復帰は未接続。診断用の一時キーを運用端末の登録済みキーとして扱わない。利用不能でもDPAPIで平文秘密鍵を自動保存する代替へ切り替えない。保存済み本体はプロバイダー停止・登録解除後も別プロセスの通常の非同期読み取りで原本と一致することを合成データで確認した。
+
+### HDD原本の保持
+
+全原本を常時オフライン保存するため、取得前のプレースホルダーにも`CF_PLACEHOLDER_CREATE_FLAG_ALWAYS_FULL`を設定する。取得処理は`CfSetPinState(PINNED)`と`CfHydratePlaceholder(0, CF_EOF)`を使い、pin設定成功だけでは保存完了と判定しない。全体の取得成功を待って完了を記録する。自動脱水・ストリーミングによる本体非保持を許可しない。Microsoftの[ALWAYS_FULLの仕様](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/ne-cfapi-cf_placeholder_create_flags)は一度取得した本体の脱水を禁止し、[pinの仕様](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/ne-cfapi-cf_pin_state)もpin中の脱水を拒否する。
+
+所有する一時フォルダ内の合成原本で、全体のバックグラウンド取得、pin属性、脱水要求の拒否、pin解除後もALWAYS_FULLにより脱水が拒否されることを実機確認した。アプリ接続停止後の独立プロセスによる全原本の読み取り・名前変更・内容の上書き、同期登録解除後も編集内容が残ることを検査する。実際のHDDへの常設登録・実データ転送・再起動を伴う製品の確認はまだ行っていない。
 
 ## 同期APIの追加設計
 
