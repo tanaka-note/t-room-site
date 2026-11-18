@@ -15,6 +15,7 @@ public sealed class CloudFilesFixture : IDisposable
     private readonly string root;
     private readonly VolumeBinding volume;
     private readonly CloudFilesNative.Callback fetch;
+    private readonly CloudFilesNative.Callback cancelFetch;
     private readonly CloudFilesNative.Callback rejectDelete;
     private readonly ConcurrentDictionary<string, byte[]> data = new(StringComparer.Ordinal);
     private long connection;
@@ -35,6 +36,7 @@ public sealed class CloudFilesFixture : IDisposable
         this.root = root;
         volume = VolumeInspector.ValidateDestination(root, []);
         fetch = Fetch;
+        cancelFetch = CancelFetch;
         rejectDelete = RejectDelete;
         try
         {
@@ -53,7 +55,10 @@ public sealed class CloudFilesFixture : IDisposable
             CloudFilesNative.Check(CloudFilesNative.CfRegisterSyncRoot(root, registration, policies, 0));
             registered = true;
             var callbacks = new List<CloudFilesNative.CallbackRegistration>
-            { new() { Type = 0, Function = Marshal.GetFunctionPointerForDelegate(fetch) } };
+            {
+                new() { Type = 0, Function = Marshal.GetFunctionPointerForDelegate(fetch) },
+                new() { Type = 2, Function = Marshal.GetFunctionPointerForDelegate(cancelFetch) }
+            };
             if (denyDeletes)
                 callbacks.Add(new() { Type = 9, Function = Marshal.GetFunctionPointerForDelegate(rejectDelete) });
             callbacks.Add(new() { Type = -1 });
@@ -126,7 +131,7 @@ public sealed class CloudFilesFixture : IDisposable
 
     private void Fetch(in CloudFilesNative.CallbackInfo info, in CloudFilesNative.CallbackParameters parameters)
     {
-        FetchDiagnostics.Enqueue($"request {parameters.RequiredOffset}+{parameters.RequiredLength}; optional {parameters.OptionalOffset}+{parameters.OptionalLength}; flags {parameters.Flags}; size {info.FileSize}");
+        FetchDiagnostics.Enqueue($"request {parameters.RequiredOffset}+{parameters.RequiredLength}; optional {parameters.OptionalOffset}+{parameters.OptionalLength}; flags {parameters.Flags}; size {info.FileSize}; ABI {info.StructSize}/{parameters.ParamSize}");
         var operation = new CloudFilesNative.OperationInfo
         {
             StructSize = (uint)Marshal.SizeOf<CloudFilesNative.OperationInfo>(), Type = 0,
@@ -157,6 +162,12 @@ public sealed class CloudFilesFixture : IDisposable
             }
             finally { pinned.Free(); }
         }
+        catch (Exception error) when (error.HResult == unchecked((int)0x8007018E))
+        {
+            // A progressive/background request may be cancelled by a seek or close.
+            // It no longer has an I/O to complete; do not publish a failed transfer.
+            FetchDiagnostics.Enqueue("transfer-cancelled");
+        }
         catch (Exception error)
         {
             Errors.Enqueue(error);
@@ -164,6 +175,12 @@ public sealed class CloudFilesFixture : IDisposable
             transfer.CompletionStatus = CloudFilesNative.StatusUnsuccessful;
             _ = CloudFilesNative.CfExecute(operation, transfer);
         }
+    }
+
+    private void CancelFetch(in CloudFilesNative.CallbackInfo info, in CloudFilesNative.CallbackParameters parameters)
+    {
+        // Notification only: our in-memory transfer has no pending network work.
+        FetchDiagnostics.Enqueue($"cancel {parameters.RequiredOffset}+{parameters.RequiredLength}; flags {parameters.Flags}");
     }
 
     private void RejectDelete(in CloudFilesNative.CallbackInfo info, in CloudFilesNative.CallbackParameters parameters)
@@ -201,6 +218,7 @@ public sealed class CloudFilesFixture : IDisposable
             throw new IOException("検証用フォルダの範囲を確認できません。");
         if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         GC.KeepAlive(fetch);
+        GC.KeepAlive(cancelFetch);
         GC.KeepAlive(rejectDelete);
     }
 }
