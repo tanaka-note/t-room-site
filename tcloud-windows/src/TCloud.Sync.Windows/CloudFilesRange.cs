@@ -2,6 +2,18 @@ namespace TCloud.Sync.Windows;
 
 public readonly record struct CloudFilesRange(long Offset, long Length)
 {
+    public static CloudFilesRange ForVerifiedChunks(long fileSize, int chunkSize, long offset, long length)
+    {
+        if (chunkSize is < 4096 or > 64 * 1024 * 1024 || chunkSize % 4096 != 0)
+            throw new ArgumentOutOfRangeException(nameof(chunkSize));
+        var requested = ForRequest(fileSize, offset, length);
+        var start = requested.Offset / chunkSize * chunkSize;
+        var end = requested.Offset + requested.Length;
+        var padding = (chunkSize - end % chunkSize) % chunkSize;
+        end += Math.Min(padding, fileSize - end);
+        return new(start, end - start);
+    }
+
     /// <summary>TRANSFER_DATA needs 4 KiB boundaries, except for the final length at logical EOF.</summary>
     public static CloudFilesRange ForRequest(long fileSize, long offset, long length)
     {

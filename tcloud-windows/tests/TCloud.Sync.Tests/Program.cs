@@ -136,6 +136,9 @@ static Task NativeTransferRanges()
     Check(CloudFilesRange.ForRequest(20000, 8192, 4096) == new CloudFilesRange(8192, 4096), "aligned request");
     Check(CloudFilesRange.ForRequest(20000, 19990, 100) == new CloudFilesRange(16384, 3616), "EOF clips overshoot");
     Check(CloudFilesRange.ForRequest(20000, 8193, -1) == new CloudFilesRange(8192, 11808), "CF_EOF sentinel");
+    Check(CloudFilesRange.ForVerifiedChunks(20000, 8192, 8191, 1000) == new CloudFilesRange(0, 16384), "complete verified chunks across a boundary");
+    Check(CloudFilesRange.ForVerifiedChunks(20000, 8192, 19990, 100) == new CloudFilesRange(16384, 3616), "verified final chunk stops at EOF");
+    Throws<ArgumentOutOfRangeException>(() => CloudFilesRange.ForVerifiedChunks(20000, 8193, 0, 1));
     var large = CloudFilesRange.ForRequest(long.MaxValue, long.MaxValue - 10, 100);
     Check(large.Offset % 4096 == 0 && large.Offset + large.Length == long.MaxValue, "no overflow near maximum size");
     Throws<ArgumentOutOfRangeException>(() => CloudFilesRange.ForRequest(0, 0, 1));
@@ -269,13 +272,17 @@ static async Task NativeHydration()
 {
     // Hydration overlaps the filter's background fetches; repeat on fresh placeholders
     // to expose failures that depend on which request finishes first.
-    for (var iteration = 0; iteration < 3; iteration++) await NativeHydrationOnce();
+    for (var iteration = 0; iteration < 3; iteration++)
+    {
+        await NativeHydrationOnce(3 * 1024 * 1024 + 107);
+        await NativeHydrationOnce(24 * 1024 * 1024 + 107);
+    }
 }
 
-static async Task NativeHydrationOnce()
+static async Task NativeHydrationOnce(int size)
 {
     using var fixture = CloudFilesFixture.Create();
-    var plain = RandomNumberGenerator.GetBytes(3 * 1024 * 1024 + 107);
+    var plain = RandomNumberGenerator.GetBytes(size);
     try
     {
         fixture.Add("fixture.bin", plain);

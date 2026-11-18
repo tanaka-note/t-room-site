@@ -19,6 +19,9 @@ public sealed class CloudFilesFixture : IDisposable
     private readonly CloudFilesNative.Callback openCompleted;
     private readonly CloudFilesNative.Callback rejectDelete;
     private readonly ConcurrentDictionary<string, byte[]> data = new(StringComparer.Ordinal);
+    private readonly object transferGate = new();
+    private readonly ManualResetEventSlim transfersDone = new(true);
+    private int activeTransfers;
     private long connection;
     private bool registered;
     private int disposed;
@@ -140,6 +143,43 @@ public sealed class CloudFilesFixture : IDisposable
             StructSize = (uint)Marshal.SizeOf<CloudFilesNative.OperationInfo>(), Type = 0,
             ConnectionKey = info.ConnectionKey, TransferKey = info.TransferKey, RequestKey = info.RequestKey
         };
+        try
+        {
+            if (info.FileIdentityLength is 0 or > 4096) throw new InvalidDataException("識別情報が不正です。");
+            // Native callback pointers expire on return. Copy identity and scalar keys
+            // before queuing any I/O, and let the native dispatcher return promptly.
+            var identity = Marshal.PtrToStringUTF8(info.FileIdentity, (int)info.FileIdentityLength)!;
+            var request = parameters;
+            lock (transferGate)
+            {
+                if (Volatile.Read(ref disposed) != 0) return;
+                activeTransfers++;
+                transfersDone.Reset();
+                _ = Task.Run(() =>
+                {
+                    try { Transfer(operation, request, identity); }
+                    finally
+                    {
+                        lock (transferGate) { if (--activeTransfers == 0) transfersDone.Set(); }
+                    }
+                });
+            }
+        }
+        catch (Exception error)
+        {
+            Errors.Enqueue(error);
+            var failure = new CloudFilesNative.TransferParameters
+            {
+                ParamSize = (uint)Marshal.SizeOf<CloudFilesNative.TransferParameters>(),
+                Offset = parameters.RequiredOffset, Length = parameters.RequiredLength,
+                CompletionStatus = CloudFilesNative.StatusUnsuccessful
+            };
+            _ = CloudFilesNative.CfExecute(operation, failure);
+        }
+    }
+
+    private void Transfer(CloudFilesNative.OperationInfo operation, CloudFilesNative.CallbackParameters parameters, string identity)
+    {
         var transfer = new CloudFilesNative.TransferParameters
         {
             ParamSize = (uint)Marshal.SizeOf<CloudFilesNative.TransferParameters>(),
@@ -147,25 +187,32 @@ public sealed class CloudFilesFixture : IDisposable
         };
         try
         {
-            if (Volatile.Read(ref disposed) != 0 || !VolumeInspector.IsExpectedVolumePresent(root, volume))
+            if (Volatile.Read(ref disposed) != 0) throw new OperationCanceledException();
+            if (!VolumeInspector.IsExpectedVolumePresent(root, volume))
                 throw new IOException("保存先が接続されていません。");
-            if (info.FileIdentityLength is 0 or > 4096) throw new InvalidDataException("識別情報が不正です。");
-            var identity = Marshal.PtrToStringUTF8(info.FileIdentity, (int)info.FileIdentityLength)!;
             if (!data.TryGetValue(identity, out var bytes)) throw new FileNotFoundException();
-            var range = CloudFilesRange.ForRequest(bytes.LongLength, parameters.RequiredOffset, parameters.RequiredLength);
+            // Web originals authenticate whole 8 MiB (or larger) plaintext chunks.
+            // Retain the complete verified chunks instead of discarding already fetched bytes.
+            var range = CloudFilesRange.ForVerifiedChunks(bytes.LongLength, 8 * 1024 * 1024,
+                parameters.RequiredOffset, parameters.RequiredLength);
             var pinned = GCHandle.Alloc(bytes, GCHandleType.Pinned);
             try
             {
-                transfer.Buffer = pinned.AddrOfPinnedObject() + checked((int)range.Offset);
-                transfer.Offset = range.Offset;
-                transfer.Length = range.Length;
-                CloudFilesNative.Check(CloudFilesNative.CfExecute(operation, transfer));
-                FetchDiagnostics.Enqueue($"transferred {transfer.Offset}+{transfer.Length}");
-                Interlocked.Increment(ref fetchCount);
+                var end = range.Offset + range.Length;
+                for (var position = range.Offset; position < end;)
+                {
+                    transfer.Offset = position;
+                    transfer.Length = Math.Min(8 * 1024 * 1024, end - position);
+                    transfer.Buffer = pinned.AddrOfPinnedObject() + checked((int)position);
+                    CloudFilesNative.Check(CloudFilesNative.CfExecute(operation, transfer));
+                    FetchDiagnostics.Enqueue($"transferred {transfer.Offset}+{transfer.Length}");
+                    Interlocked.Increment(ref fetchCount);
+                    position += transfer.Length;
+                }
             }
             finally { pinned.Free(); }
         }
-        catch (Exception error) when (error.HResult == unchecked((int)0x8007018E))
+        catch (Exception error) when (error is OperationCanceledException || error.HResult == unchecked((int)0x8007018E))
         {
             // A progressive/background request may be cancelled by a seek or close.
             // It no longer has an I/O to complete; do not publish a failed transfer.
@@ -213,6 +260,7 @@ public sealed class CloudFilesFixture : IDisposable
     {
         if (Interlocked.Exchange(ref disposed, 1) != 0) return;
         if (connection != 0) { CloudFilesNative.Check(CloudFilesNative.CfDisconnectSyncRoot(connection)); connection = 0; }
+        if (!transfersDone.Wait(TimeSpan.FromSeconds(15))) throw new TimeoutException("検証用の取得処理の終了を確認できません。");
         if (registered) { CloudFilesNative.Check(CloudFilesNative.CfUnregisterSyncRoot(root)); registered = false; }
         foreach (var bytes in data.Values) CryptographicOperations.ZeroMemory(bytes);
         data.Clear();
@@ -227,5 +275,6 @@ public sealed class CloudFilesFixture : IDisposable
         GC.KeepAlive(cancelFetch);
         GC.KeepAlive(openCompleted);
         GC.KeepAlive(rejectDelete);
+        transfersDone.Dispose();
     }
 }
