@@ -51,8 +51,9 @@ internal static class HydrationProbe
                 {
                     if (range.Offset < 0 || range.Offset > plan.Length - 1000 || range.Hash.Length != 64)
                         throw new InvalidDataException("Invalid range.");
-                    stage = "read-at-" + range.Offset;
+                    stage = "seek-to-" + range.Offset;
                     stream.Position = range.Offset;
+                    stage = "read-at-" + range.Offset;
                     var bytes = new byte[1000];
                     await stream.ReadExactlyAsync(bytes);
                     if (Convert.ToHexString(SHA256.HashData(bytes)) != range.Hash) throw new InvalidDataException("Random read differs.");

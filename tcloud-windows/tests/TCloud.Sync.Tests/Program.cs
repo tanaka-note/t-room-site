@@ -276,7 +276,8 @@ static async Task NativeHydration()
         Check(new FileInfo(path).Length == plain.Length, "logical size before hydration");
         var result = await HydrationProbe.ReadAsync(path, plain);
         Check(result.Succeeded, $"consumer {result.Stage} failed with 0x{result.HResult:X8}; provider errors: "
-            + string.Join(",", fixture.Errors.Select(error => $"0x{error.HResult:X8}")));
+            + string.Join(",", fixture.Errors.Select(error => $"0x{error.HResult:X8}"))
+            + "; fetch trace: " + string.Join(" | ", fixture.FetchDiagnostics));
         Check(fixture.FetchCount > 0, "native fetch callback actually ran");
         Check(fixture.Errors.IsEmpty, "provider callback errors");
     }

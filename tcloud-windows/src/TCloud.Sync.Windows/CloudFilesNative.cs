@@ -82,6 +82,8 @@ internal static class CloudFilesNative
         [FieldOffset(8)] public uint Flags;
         [FieldOffset(16)] public long RequiredOffset;
         [FieldOffset(24)] public long RequiredLength;
+        [FieldOffset(32)] public long OptionalOffset;
+        [FieldOffset(40)] public long OptionalLength;
     }
     [UnmanagedFunctionPointer(CallingConvention.Winapi)]
     internal delegate void Callback(in CallbackInfo info, in CallbackParameters parameters);

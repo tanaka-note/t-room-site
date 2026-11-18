@@ -26,6 +26,7 @@ public sealed class CloudFilesFixture : IDisposable
     public int FetchCount => Volatile.Read(ref fetchCount);
     public int RejectedDeleteCount => Volatile.Read(ref rejectedDeleteCount);
     public ConcurrentQueue<Exception> Errors { get; } = new();
+    public ConcurrentQueue<string> FetchDiagnostics { get; } = new();
 
     private CloudFilesFixture(string root, bool denyDeletes)
     {
@@ -125,6 +126,7 @@ public sealed class CloudFilesFixture : IDisposable
 
     private void Fetch(in CloudFilesNative.CallbackInfo info, in CloudFilesNative.CallbackParameters parameters)
     {
+        FetchDiagnostics.Enqueue($"request {parameters.RequiredOffset}+{parameters.RequiredLength}; optional {parameters.OptionalOffset}+{parameters.OptionalLength}; flags {parameters.Flags}; size {info.FileSize}");
         var operation = new CloudFilesNative.OperationInfo
         {
             StructSize = (uint)Marshal.SizeOf<CloudFilesNative.OperationInfo>(), Type = 0,
@@ -150,6 +152,7 @@ public sealed class CloudFilesFixture : IDisposable
                 transfer.Offset = range.Offset;
                 transfer.Length = range.Length;
                 CloudFilesNative.Check(CloudFilesNative.CfExecute(operation, transfer));
+                FetchDiagnostics.Enqueue($"transferred {transfer.Offset}+{transfer.Length}");
                 Interlocked.Increment(ref fetchCount);
             }
             finally { pinned.Free(); }
