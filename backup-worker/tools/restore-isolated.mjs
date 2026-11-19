@@ -69,6 +69,7 @@ export async function restoreIsolated(bucket, key, service, {anchor,minimumGener
   });
   if(!verified) throw new Error('GenerationMissing');
   if(service==='household')tables=recoverySpec(service,verified.payload.expectedMigration).tables;
+  if(service==='cloud')tables=archiveSpec(service,verified.payload.expectedMigration).tables;
   const exported=verified.payload.format==='troom-d1-export-v3';
   const encryptedDiary=service==='diary'&&verified.payload.expectedMigration===DIARY_ENCRYPTED_MIGRATION;
   const encryptedSecurity=service==='security'&&[SECURITY_DIARY_MIGRATION,SECURITY_BILLING_MIGRATION].includes(verified.payload.expectedMigration);
