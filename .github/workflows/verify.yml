@@ -87,7 +87,8 @@ jobs:
         run: |
           # Regional Azure/EC2 mirrors stalled installs past the job limit. Preserve suites,
           # components and Signed-By; use the official archive over HTTPS.
-          for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+          # New runner images use mirror+file:/etc/apt/apt-mirrors.txt in deb822.
+          for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources /etc/apt/apt-mirrors.txt; do
             [ -f "$source" ] || continue
             sudo sed -i -E 's#https?://([a-z0-9-]+\.)*archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$source"
           done

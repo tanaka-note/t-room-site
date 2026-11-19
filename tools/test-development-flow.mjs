@@ -24,6 +24,14 @@ test('Ubuntu browser setup normalizes regional mirrors while preserving suites, 
   const command=workflow.match(/sudo sed -i -E 's#([^#]+)#([^#]+)#g'/);
   assert.ok(command,'the configured APT source transformation must be tested');
   const transform=text=>text.replace(new RegExp(command[1],'g'),command[2]);
+  const sources=workflow.match(/for source in ([^;\n]+); do/)[1].trim().split(/\s+/);
+  assert.ok(sources.includes('/etc/apt/apt-mirrors.txt'),'indirect mirror+file sources must normalize their actual mirror list');
+  const mirrorList='http://us-east-2.ec2.archive.ubuntu.com/ubuntu/\nhttp://archive.ubuntu.com/ubuntu/\n';
+  const normalizedMirrors='https://archive.ubuntu.com/ubuntu/\nhttps://archive.ubuntu.com/ubuntu/\n';
+  assert.equal(transform(mirrorList),normalizedMirrors);
+  const indirect='Types: deb\nURIs: mirror+file:/etc/apt/apt-mirrors.txt\nSuites: noble noble-updates noble-backports\nComponents: main universe\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n';
+  assert.equal(transform(indirect),indirect,'keep the configured indirect source and its trust settings');
+  if(process.platform!=='win32')assert.equal(execFileSync('sed',['-E',`s#${command[1]}#${command[2]}#g`],{input:mirrorList,encoding:'utf8'}),normalizedMirrors);
   for(const host of ['azure.archive.ubuntu.com','us-east-2.ec2.archive.ubuntu.com','eu-west-1.ec2.archive.ubuntu.com','us.archive.ubuntu.com','archive.ubuntu.com']) {
     const source=`deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://${host}/ubuntu noble main restricted\n`;
     assert.equal(transform(source),'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main restricted\n');
