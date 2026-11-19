@@ -135,8 +135,10 @@ test('storage listings are cached while failures and recoveries remain fresh', a
   const cache = { async match() { return stored?.clone(); }, async put(_key, value) { stored = value; } };
   try {
     const first = await getBackupSnapshot(env, {}, cache);
-    assert.equal(first.services.length, Object.keys(SERVICES).length);
-    assert.equal(first.services.some(service => service.id === 'health'), false);
+    assert.equal(first.services.length, Object.keys(SERVICES).filter(id => !['health', 'ai', 'downloader'].includes(id)).length + 1);
+    for (const id of ['health', 'ai', 'downloader', 'downloader2']) {
+      assert.equal(first.services.some(service => service.id === id), false);
+    }
     assert.equal(first.services.find(s => s.id === 'cloud').label, 'T-Cloud D1');
     const cached = await stored.json();
     cached.services.find(s => s.id === 'cloud').label = 'T-Cloud';

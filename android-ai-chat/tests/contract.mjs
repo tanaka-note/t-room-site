@@ -21,8 +21,6 @@ assert.match(store, /AndroidKeyStore/);
 assert.match(store, /KEY_PENDING/);
 
 const ai = assetlinks.find((entry) => entry.target?.package_name === "jp.tanaka.troom.ai");
-assert.ok(ai, "AI Chat package must be published in Digital Asset Links");
-assert.ok(ai.relation.includes("delegate_permission/common.get_login_creds"));
-assert.deepEqual(ai.target.sha256_cert_fingerprints, ["34:C8:E9:61:CB:1D:35:31:66:7E:57:1C:C2:02:5A:3B:2E:1A:FC:48:1A:8C:74:12:DE:DE:12:88:FF:E5:05:56"]);
+assert.equal(ai, undefined, "Retired AI Chat must have no Digital Asset Links association");
 
 console.log("AI Chat Android contract: PASS");

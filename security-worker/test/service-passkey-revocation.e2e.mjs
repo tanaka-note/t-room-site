@@ -103,7 +103,7 @@ try {
     "service-binding-folder-password",
     serviceBindingAdminKeys.publicKey
   );
-  for (const directory of ["security-worker", "cloud-worker", "diary-worker", "billing-worker", "ai-worker"]) {
+  for (const directory of ["security-worker", "cloud-worker", "diary-worker", "billing-worker"]) {
     runWrangler(directory, ["d1", "migrations", "apply", databaseName(directory), "--local"]);
   }
   runWrangler("diary-worker", ["d1", "execute", "diary-db", "--local", "--command", `
@@ -1261,20 +1261,8 @@ async function startServiceWorkers(passkeysEnabled) {
   processes.push(startWorker("billing-worker", services.billing.port, [
     `SESSION_SECRET:${sessionSecret}`, "SESSION_VERSION:3", `PASSKEY_ENABLED:${String(enabledByService.billing)}`, "ALLOW_LOCAL_HTTP:true"
   ]));
-  processes.push(startWorker("ai-worker", 8814, [
-    `SESSION_SECRET:${sessionSecret}`, "AI_SAFETY_SALT:ai-integration-safety-salt", "AI_PROVIDER_MODE:mock"
-  ]));
-  processes.push(startWorker("security-worker", 8815, [], [
-    "--config", "test/downloader-service-fixture.wrangler.jsonc"
-  ], "downloader-fixture"));
-  // Registry now includes these services even though this test's revocation
-  // scenarios remain scoped to Cloud/Diary/Billing.
-  processes.push(startWorker("downloader2-worker", 8816, [`SESSION_SECRET:${sessionSecret}`, "ALLOW_LOCAL_HTTP:true"]));
   await Promise.all(Object.entries(services).map(([name, service]) =>
     waitForUrl(`http://127.0.0.1:${service.port}${sessionPath(name)}`)));
-  await waitForUrl("http://127.0.0.1:8814/ai/api/session");
-  await waitForUrl("http://127.0.0.1:8815/");
-  await waitForUrl("http://127.0.0.1:8816/downloader2/api/session");
 }
 
 function startSecurityWorker(passkeysEnabled) {
@@ -2000,12 +1988,11 @@ function runWrangler(directory, args) {
 }
 
 function wranglerPath(directory) {
-  if (["ai-worker", "downloader2-worker"].includes(directory)) return `${repository}node_modules/wrangler/bin/wrangler.js`;
   return `${repository}${directory}/node_modules/wrangler/bin/wrangler.js`;
 }
 
 function databaseName(directory) {
-  return ({ "security-worker": "security-db", "cloud-worker": "cloud-db", "diary-worker": "diary-db", "billing-worker": "billing-db", "ai-worker": "ai-db" })[directory];
+  return ({ "security-worker": "security-db", "cloud-worker": "cloud-db", "diary-worker": "diary-db", "billing-worker": "billing-db" })[directory];
 }
 
 function sessionPath(name) {

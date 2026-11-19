@@ -187,7 +187,6 @@
         prepareServiceLinks().catch((error) => showMessage(error.message, true));
       }
       if (button.dataset.panel === "audit-panel" && !state.auditLoaded && !state.auditLoading) loadAudit();
-      if (button.dataset.panel === "ai-panel") loadAiBudgets().catch((error) => showMessage(error.message, true));
     }));
     populateAuditEventFilter();
   }
@@ -535,12 +534,7 @@
       if (requestId !== state.dashboardRequest) return;
       const labels = [["loginSuccess", "今日のログイン成功"], ["loginFailure", "今日のログイン失敗"], ["sessionResume", "セッション再開"], ["lockouts", "ロックアウト"], ["invited", "招待中"], ["pendingApproval", "承認待ち"], ["noPasskey", "パスキー未設定"], ["critical", "重大イベント"]];
       const activeUsers = (data.activeUsers || []).map((user) => `<div class="active-user-row"><strong>${escapeHtml(display.identityLabel(user.identityId, user.displayName))}</strong><span>${user.services.map((service) => escapeHtml(display.serviceLabel(service))).join(" / ")}</span></div>`).join("");
-      const definitions = data.clamavDefinitions || { issues: ["unknown"], result: "unknown" };
-      const definitionLabels = { rollout_pending: "定義の本番反映を確認中です（次回も確認を継続します）", rollout_ambiguous: "更新要求の成否を確認中です。重複更新を防ぐため再送を保留しています", stale_rollout: "Cloudflareの更新IDと更新履歴が不整合です。管理者の確認が必要です", reconciliation_stuck: "更新の成否を確定できません。管理者の確認が必要です", rollout_conflict: "別の本番更新を検出しました。自動上書きを停止しています", rollout_unknown_status: "Cloudflareが未対応の更新状態を返しました", rollout_reverted: "Cloudflare側で更新が切り戻されました", rollout_replaced: "別の更新に置き換えられました", candidate_expired: "保留中の候補定義が有効な期間を過ぎました", rollout_deferred: "処理中のジョブがあるため定義の反映を延期しています", deployment_unknown: "本番imageとの一致を確認できません", unknown: "状態を取得できません", expired: "定義が期限切れです（取得停止）", expiring: "定義が生成から5日以上経過しています", not_configured: "自動更新の設定・初回実行が未完了です", updater_stopped: "更新処理の実行を36時間以上確認できません", update_failed: "更新失敗が継続しています", update_interrupted: "更新処理が中断しています", monitor_stopped: "毎時定義監視が未確認、または完了を3時間以上確認できません" };
-      const definitionTime = value => value ? new Date(value * 1000).toLocaleString("ja-JP") : "未確認";
-      const definitionResults = { success: "更新・本番反映確認済み", failed: "更新失敗（本番反映状態を要確認）", running: "更新中", unknown: "未確認", deferred: "処理中ジョブのため延期" };
-      const definitionPanel = `<section class="card compact" id="clamav-definitions"><h3>DownloaderのClamAV定義</h3><p>${escapeHtml((definitions.issues || ["unknown"]).map(key => definitionLabels[key] || "未確認").join(" / ") || "確認済み定義は有効です")}</p><dl>${[["定義の生成日時", definitions.generatedAt],["有効期限（7日）", definitions.expiresAt],["最終更新確認", definitions.verifiedAt],["更新処理の最終実行", definitions.lastAttemptAt],["毎時監視の最終起動", definitions.hourlyMonitorStartedAt],["毎時監視の最終完了", definitions.hourlyMonitorCheckedAt],["定義状態の最終確認（日次含む）", definitions.monitorCheckedAt],["状態の最終変化", definitions.incidentChangedAt]].map(([label,value])=>`<dt>${label}</dt><dd>${escapeHtml(definitionTime(value))}</dd>`).join("")}</dl><p>更新結果: ${escapeHtml(definitionResults[definitions.result] || "未確認")} / 連続失敗 ${Number(definitions.failures || 0)}回</p><p>署名を検証した本番imageの記録です。実際の取得時にも定義を検証します。通知はGitHubの定義監視Issueを確認してください。</p></section>`;
-      $("#dashboard-panel").innerHTML = `<div class="section-heading"><h2>セキュリティ概要</h2><p>本日の認証状況と、対応が必要な項目を確認できます。</p></div><div class="stats">${labels.map(([key, label]) => `<div class="stat"><span>${label}</span><strong>${Number(data[key] || 0)}</strong></div>`).join("")}</div><section class="card compact active-users"><h3>現在ログイン中のユーザー</h3>${activeUsers || "<p>現在ログイン中のユーザーはいません。</p>"}</section>${definitionPanel}`;
+      $("#dashboard-panel").innerHTML = `<div class="section-heading"><h2>セキュリティ概要</h2><p>本日の認証状況と、対応が必要な項目を確認できます。</p></div><div class="stats">${labels.map(([key, label]) => `<div class="stat"><span>${label}</span><strong>${Number(data[key] || 0)}</strong></div>`).join("")}</div><section class="card compact active-users"><h3>現在ログイン中のユーザー</h3>${activeUsers || "<p>現在ログイン中のユーザーはいません。</p>"}</section>`;
       state.dashboardLoaded = true;
     } catch (error) {
       if (requestId === state.dashboardRequest) {
@@ -554,42 +548,6 @@
         panel.setAttribute("aria-busy", "false");
       }
     }
-  }
-
-  async function loadAiBudgets() {
-    const data = await get("/ai/budgets");
-    const container = $("#ai-budget-list");
-    container.innerHTML = (data.policies || []).map((policy) => {
-      const usage = policy.usage || {};
-      const spent = Number(usage.totalCostJpy || 0);
-      const stop = Number(policy.reserveEnabled ? policy.hardStopJpy : policy.softStopJpy);
-      const remaining = Math.max(0, stop - spent);
-      return `<form class="card compact ai-budget-card" data-ai-budget="${escapeHtml(policy.identityId)}">
-        <div class="section-heading"><h3>${escapeHtml(policy.displayName)}</h3><p>${escapeHtml(usage.period || "当月")} 利用額 ${spent.toLocaleString("ja-JP", { maximumFractionDigits: 2 })}円 / 残り安全枠 ${remaining.toLocaleString("ja-JP", { maximumFractionDigits: 2 })}円</p></div>
-        <div class="stats"><div class="stat"><span>input token</span><strong>${Number(usage.inputTokens || 0).toLocaleString()}</strong></div><div class="stat"><span>output token</span><strong>${Number(usage.outputTokens || 0).toLocaleString()}</strong></div><div class="stat"><span>cached token</span><strong>${Number(usage.cachedInputTokens || 0).toLocaleString()}</strong></div><div class="stat"><span>audio token</span><strong>${(Number(usage.audioInputTokens || 0) + Number(usage.audioOutputTokens || 0)).toLocaleString()}</strong></div></div>
-        <div class="budget-fields"><label>月額上限<input name="monthlyBudgetJpy" type="number" min="100" max="1000000" value="${Number(policy.monthlyBudgetJpy)}" required></label><label>通常安全停止<input name="softStopJpy" type="number" min="1" value="${Number(policy.softStopJpy)}" required></label><label>最終安全停止<input name="hardStopJpy" type="number" min="1" value="${Number(policy.hardStopJpy)}" required></label><label class="checkbox-row"><input name="reserveEnabled" type="checkbox" ${policy.reserveEnabled ? "checked" : ""}> 今月の予備枠を有効にする</label></div>
-        <p class="hint">予算変更・予備枠の解放はこのSecurity Centerだけで行えます。</p><button>安全設定を保存</button>
-      </form>`;
-    }).join("") || "<p>AI Chatの予算設定はありません。</p>";
-    container.querySelectorAll("[data-ai-budget]").forEach((form) => form.addEventListener("submit", saveAiBudget));
-  }
-
-  async function saveAiBudget(event) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const button = event.submitter || form.querySelector("button");
-    button.disabled = true;
-    try {
-      await post(`/ai/budgets/${encodeURIComponent(form.dataset.aiBudget)}`, {
-        monthlyBudgetJpy: Number(form.elements.monthlyBudgetJpy.value),
-        softStopJpy: Number(form.elements.softStopJpy.value),
-        hardStopJpy: Number(form.elements.hardStopJpy.value),
-        reserveEnabled: form.elements.reserveEnabled.checked
-      });
-      showMessage("AI Chatの安全設定を更新しました。", false);
-      await loadAiBudgets();
-    } catch (error) { showMessage(error.message, true); }
-    finally { button.disabled = false; }
   }
 
   async function loadIdentities() {
@@ -631,7 +589,7 @@
     const credentialRow = (item, historical = false) => `<div class="credential"><strong>${escapeHtml(item.label)}</strong>・${escapeHtml(statusLabel(item.status))}<br><small>登録 ${escapeHtml(formatDate(item.registered_at))} / 最終利用 ${escapeHtml(formatDate(item.last_used_at))} / ${escapeHtml(item.device_type || "端末種別不明")} / ${item.backed_up ? "複数端末で利用可能" : "この端末に保存"} / T-Cloudのパスキー利用準備: ${item.prf_enabled ? "PRF確認済み" : "PRF未確認（現在のパスキーで再確認できます）"}</small>${historical ? "" : `<button class="danger" data-revoke-credential="${escapeHtml(item.credential_id)}">無効化</button>`}</div>`;
     const credentials = currentCredentials.map((item) => credentialRow(item)).join("");
     const hasCredential = currentCredentials.length > 0;
-    const serviceLinks = data.links.filter((item) => item.service !== "health");
+    const serviceLinks = data.links.filter((item) => !["health", "ai", "downloader", "downloader2"].includes(item.service));
     const currentLinks = serviceLinks.filter((item) => ["pending", "active"].includes(item.status));
     const linkHistory = serviceLinks.filter((item) => !["pending", "active"].includes(item.status));
     const linkRow = (item, historical = false) => `<div class="link detail-item"><strong>${escapeHtml(item.account_display_name || item.display_label)}</strong>${item.service === "cloud" && item.service_account_id === "folder-member" && item.account_display_name ? `<small> / ${escapeHtml(item.display_label)}</small>` : ""}${item.folderUnavailable ? '<span class="warning-text">（連携先を取得できません）</span>' : ""}<br><small>${escapeHtml(display.serviceLabel(item.service))} / ${escapeHtml(item.role_label || display.roleLabel(item.role))} / ${escapeHtml(display.serviceLinkStatusLabel(item.status, { identityStatus: data.identity.status, service: item.service, hasCredential }))}</small>${historical ? "" : item.protected ? '<span class="protected-link">基幹連携</span>' : `<button class="danger" data-remove-link="${escapeHtml(item.id)}">連携解除</button>`}</div>`;
@@ -944,7 +902,7 @@
 
   function addLinkRow(service = null, containerSelector = "#link-rows", removable = true, excludedKeys = new Set()) {
     const availableServices = state.services
-      .filter((item) => containerSelector !== "#link-rows" || !["downloader", "downloader2", "inventory", "payments"].includes(item.id))
+      .filter((item) => containerSelector !== "#link-rows" || !["inventory", "payments"].includes(item.id))
       .filter((item) => !["inventory", "payments"].includes(item.id) || state.selectedIdentity?.identity.id === "primary-admin")
       .map((item) => ({
         ...item,
@@ -1227,7 +1185,7 @@
       auditLoaded: false, auditLoading: false, auditCursor: null, auditQuery: "", auditPage: 0,
       auditCursors: [null], auditPositions: [], auditDetails: new WeakMap(),
       dashboardLoaded: false, dashboardLoading: false, panelScroll: new Map() });
-    for (const selector of ["#identity-list", "#identity-detail", "#audit-list", "#link-rows", "#ai-budget-list", "#dashboard-panel"])
+    for (const selector of ["#identity-list", "#identity-detail", "#audit-list", "#link-rows", "#dashboard-panel"])
       $(selector).replaceChildren();
     $("#identity-detail").hidden = true;
     $("#audit-filter").reset();

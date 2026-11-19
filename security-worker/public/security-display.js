@@ -201,6 +201,7 @@
   function eventGroups() {
     const groups = new Map();
     for (const item of EVENT_DEFINITIONS) {
+      if (["AI Chat", "Downloader", "Downloader 2"].includes(item.group)) continue;
       if (!groups.has(item.group)) groups.set(item.group, []);
       groups.get(item.group).push({ value: item.value, label: item.label });
     }

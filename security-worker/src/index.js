@@ -7,7 +7,6 @@ import { billingKeyRecipients, billingVaultContext, enrollBillingVault } from ".
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName, identityDisplayName, auditDisplayNames, OWNER_DISPLAY_NAME } from "../../assets/account-display.mjs";
-import { readDefinitionStatus, runDefinitionSchedule } from "./definition-status.js";
 import { cleanupDisabledIdentities } from "./identity-cleanup.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { sessionCookieValue, sessionPolicyForAuthMethod } from "../../assets/session-policy.mjs";
@@ -56,9 +55,6 @@ const SERVICE_REGISTRY = Object.freeze({
   cloud: Object.freeze({ displayName: "T-Cloud", binding: "CLOUD_AUTH" }),
   diary: Object.freeze({ displayName: "日記", binding: "DIARY_AUTH" }),
   billing: Object.freeze({ displayName: "請求書", binding: "BILLING_AUTH" }),
-  ai: Object.freeze({ displayName: "AI Chat", binding: "AI_AUTH" }),
-  downloader: Object.freeze({ displayName: "T-lain Downloader", binding: "DOWNLOADER_AUTH" }),
-  downloader2: Object.freeze({ displayName: "T-lain Downloader 2", binding: "DOWNLOADER2_AUTH" }),
   inventory: Object.freeze({ displayName: "在庫照会", binding: "INVENTORY_AUTH" }),
   payments: Object.freeze({ displayName: "支払明細", binding: "PAYMENTS_AUTH" }),
   household: Object.freeze({ displayName: "家計簿", binding: "HOUSEHOLD_AUTH" }),
@@ -69,10 +65,7 @@ const PRIMARY_ADMIN_CORE_LINKS = new Set([
   "cloud\u0000admin\u0000",
   "diary\u0000main-admin\u0000",
   "diary\u0000main-user\u0000",
-  "billing\u0000owner\u0000",
-  "ai\u0000owner\u0000",
-  "downloader\u0000owner\u0000",
-  "downloader2\u0000owner\u0000"
+  "billing\u0000owner\u0000"
 ]);
 const REGISTERED_IDENTITY_AUDIT_EVENTS = Object.freeze([
   "identity_approved",
@@ -82,7 +75,7 @@ const REGISTERED_IDENTITY_AUDIT_EVENTS = Object.freeze([
   "session_resume"
 ]);
 const ACTIVE_SESSION_START_EVENTS = new Set(["password_login_success", "passkey_login_success"]);
-const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "payments", "household", "calendar", "portfolio"]);
+const ACTIVE_SESSION_SERVICE_IDS = Object.freeze(["cloud", "diary", "billing", "inventory", "payments", "household", "calendar", "portfolio"]);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -91,7 +84,7 @@ export default class SecurityWorker extends WorkerEntrypoint {
     const url = new URL(request.url);
     let pathname = url.pathname;
     try { pathname = decodeURIComponent(pathname); } catch { /* Let the asset handler reject malformed paths. */ }
-    if (/^\/security\/(?:health(?:\.html)?\/?$|health-(?:crypto\.mjs|redirect\.js|setup\.mjs)$|api\/health(?:\/|$))/.test(pathname)) {
+    if (/^\/security\/(?:health(?:\.html)?\/?$|health-(?:crypto\.mjs|redirect\.js|setup\.mjs)$|api\/(?:health|ai)(?:\/|$))/.test(pathname)) {
       return secure(new Response(request.method === "HEAD" ? null : "Gone", {
         status: 410, headers: { "Cache-Control": "no-store" },
       }));
@@ -124,28 +117,25 @@ export default class SecurityWorker extends WorkerEntrypoint {
   }
 
   async scheduled(event) {
-    if (event?.cron === '17 * * * *') {
-      const [definitions] = await Promise.allSettled([
-        runDefinitionSchedule(event, this.env, async () => {}),
-        archiveIfPending({ ...this.env, recordArchiveAudit: async event => { await storeAuditEvent(this.env, event); return { stored: true }; } }, auditRetentionCutoff(180))
-      ]);
-      if (definitions.status === 'rejected') throw definitions.reason;
+    const cron = event?.cron;
+    const archiveEnv = { ...this.env, recordArchiveAudit: async event => { await storeAuditEvent(this.env, event); return { stored: true }; } };
+    if (cron === '17 * * * *') {
+      await archiveIfPending(archiveEnv, auditRetentionCutoff(180));
       return;
     }
-    return runDefinitionSchedule(event, this.env, async () => {
-      const retentionDays = 180;
-      const retentionCutoff = auditRetentionCutoff(retentionDays);
-      await this.env.DB.batch([
-        this.env.DB.prepare("DELETE FROM security_challenges WHERE expires_at < ?").bind(nowSeconds() - 86400),
-        this.env.DB.prepare("DELETE FROM security_handoffs WHERE expires_at < ?").bind(nowSeconds() - 86400),
-        this.env.DB.prepare("DELETE FROM security_setup_sessions WHERE expires_at < ?").bind(nowSeconds() - 86400),
-        this.env.DB.prepare("UPDATE security_invitations SET status = 'expired' WHERE status = 'active' AND expires_at <= ?").bind(nowSeconds()),
-        this.env.DB.prepare("UPDATE security_active_sessions SET ended_at = COALESCE(ended_at, ?), end_reason = COALESCE(end_reason, 'expired'), updated_at = CURRENT_TIMESTAMP WHERE ended_at IS NULL AND expires_at <= ?").bind(new Date().toISOString(), nowSeconds()),
-        // Audit expiration is handled only by verified archival below.
-      ]);
-      const archived = await archiveAuditEvents({ ...this.env, recordArchiveAudit: async event => { await storeAuditEvent(this.env, event); return { stored: true }; } }, retentionCutoff);
-      if (archived) await cleanupDisabledIdentities(this.env.DB, retentionCutoff);
-    });
+    if (cron !== '41 18 * * *') throw new Error('security_maintenance_unexpected_cron');
+    const retentionDays = 180;
+    const retentionCutoff = auditRetentionCutoff(retentionDays);
+    await this.env.DB.batch([
+      this.env.DB.prepare("DELETE FROM security_challenges WHERE expires_at < ?").bind(nowSeconds() - 86400),
+      this.env.DB.prepare("DELETE FROM security_handoffs WHERE expires_at < ?").bind(nowSeconds() - 86400),
+      this.env.DB.prepare("DELETE FROM security_setup_sessions WHERE expires_at < ?").bind(nowSeconds() - 86400),
+      this.env.DB.prepare("UPDATE security_invitations SET status = 'expired' WHERE status = 'active' AND expires_at <= ?").bind(nowSeconds()),
+      this.env.DB.prepare("UPDATE security_active_sessions SET ended_at = COALESCE(ended_at, ?), end_reason = COALESCE(end_reason, 'expired'), updated_at = CURRENT_TIMESTAMP WHERE ended_at IS NULL AND expires_at <= ?").bind(new Date().toISOString(), nowSeconds()),
+      // Audit expiration is handled only by verified archival below.
+    ]);
+    const archived = await archiveAuditEvents(archiveEnv, retentionCutoff);
+    if (archived) await cleanupDisabledIdentities(this.env.DB, retentionCutoff);
   }
 
   async redeemHandoff(token, service) {
@@ -230,10 +220,6 @@ export default class SecurityWorker extends WorkerEntrypoint {
 
   async getBillingKeyRecipients(input) {
     return billingKeyRecipients(this.env, input, validatePasskeySession);
-  }
-
-  async getAiBudgetPolicy(identityId) {
-    return aiBudgetPolicy(this.env, normalizeIdentityId(identityId));
   }
 }
 
@@ -363,12 +349,6 @@ async function handleApi(request, env, url, path, context = null) {
     if (!id || normalizeText(id, 128) !== id) throw new HttpError(400, "履歴IDを確認してください。");
     return auditEventDetail(env, id);
   }
-  if (path === "/api/ai/budgets" && request.method === "GET") return listAiBudgets(env);
-  const aiBudgetMatch = path.match(/^\/api\/ai\/budgets\/([A-Za-z0-9_-]{1,64})$/);
-  if (aiBudgetMatch && request.method === "POST") {
-    requireMutation(request, url);
-    return updateAiBudget(aiBudgetMatch[1], request, env, admin);
-  }
 
   const identityMatch = path.match(/^\/api\/identities\/([A-Za-z0-9_-]{1,64})$/);
   if (identityMatch && request.method === "GET") return identityDetail(identityMatch[1], env);
@@ -447,7 +427,7 @@ async function bootstrapVerify(request, env, url) {
         JSON.stringify(credential.transports || []), verification.registrationInfo.credentialDeviceType,
         verification.registrationInfo.credentialBackedUp ? 1 : 0, body.prfEnabled ? 1 : 0, prfSalt),
     env.DB.prepare("UPDATE security_identities SET status = 'active', is_security_admin = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(PRIMARY_ADMIN_ID),
-    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND service NOT IN ('cloud', 'health')").bind(PRIMARY_ADMIN_ID),
+    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND service NOT IN ('cloud', 'health', 'ai', 'downloader', 'downloader2')").bind(PRIMARY_ADMIN_ID),
     insertSetupSessionStatement(env, setup),
     await localAuditStatement(env, { eventType: "passkey_registration", outcome: "success", identityId: PRIMARY_ADMIN_ID, authMethod: "passkey", serviceAccountId: "admin" }, request)
   ]);
@@ -891,7 +871,7 @@ async function saveOwnTCloudEnvelope(request, env) {
 
 async function dashboard(env) {
   const today = currentJstDayBounds();
-  const [counts, identityCounts, sessionState, clamavDefinitions] = await Promise.all([
+  const [counts, identityCounts, sessionState] = await Promise.all([
     env.DB.prepare(`SELECT
     login_success AS loginSuccess, login_failure AS loginFailure, lockouts,
     session_resume AS sessionResume, critical
@@ -903,10 +883,9 @@ async function dashboard(env) {
     SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM security_credentials c WHERE c.identity_id = i.id AND c.status = 'active') THEN 1 ELSE 0 END) AS noPasskey
     FROM security_identities i
     WHERE i.status != 'disabled'`).first(),
-    activeSessionState(env),
-    readDefinitionStatus(env)
+    activeSessionState(env)
   ]);
-  return json({ loginSuccess: Number(counts?.loginSuccess || 0), loginFailure: Number(counts?.loginFailure || 0), lockouts: Number(counts?.lockouts || 0), sessionResume: Number(counts?.sessionResume || 0), critical: Number(counts?.critical || 0), pendingApproval: Number(identityCounts?.pendingApproval || 0), invited: Number(identityCounts?.invited || 0), noPasskey: Number(identityCounts?.noPasskey || 0), activeUsers: sessionState.users, clamavDefinitions });
+  return json({ loginSuccess: Number(counts?.loginSuccess || 0), loginFailure: Number(counts?.loginFailure || 0), lockouts: Number(counts?.lockouts || 0), sessionResume: Number(counts?.sessionResume || 0), critical: Number(counts?.critical || 0), pendingApproval: Number(identityCounts?.pendingApproval || 0), invited: Number(identityCounts?.invited || 0), noPasskey: Number(identityCounts?.noPasskey || 0), activeUsers: sessionState.users });
 }
 
 async function activeSessionState(env, identityId = null) {
@@ -985,74 +964,6 @@ function publicActiveSession(row) {
   };
 }
 
-async function listAiBudgets(env) {
-  const rows = await env.DB.prepare(`SELECT p.identity_id, i.display_name, i.status,
-      p.monthly_budget_jpy, p.soft_stop_jpy, p.hard_stop_jpy, p.reserve_enabled, p.reserve_period, p.updated_at
-    FROM security_ai_budget_policies p JOIN security_identities i ON i.id = p.identity_id
-    WHERE i.status = 'active' ORDER BY i.is_security_admin DESC, i.display_name COLLATE NOCASE`).all();
-  const policies = [];
-  for (const row of rows.results || []) {
-    let usage = null;
-    try { usage = await env.AI_AUTH?.getUsageSummary(row.identity_id); } catch { /* policy remains manageable during an AI outage */ }
-    policies.push({ ...publicAiBudgetPolicy(row), displayName: identityDisplayName(row.id || row.identity_id, row.display_name), identityStatus: row.status, usage });
-  }
-  return json({ policies });
-}
-
-async function updateAiBudget(identityId, request, env, admin) {
-  requireFreshSecurityAdmin(admin);
-  const body = await readJson(request, 8192);
-  const monthlyBudgetJpy = integerRange(body.monthlyBudgetJpy, 100, 1_000_000);
-  const softStopJpy = integerRange(body.softStopJpy, 1, monthlyBudgetJpy || 0);
-  const hardStopJpy = integerRange(body.hardStopJpy, softStopJpy || 0, monthlyBudgetJpy || 0);
-  const reserveEnabled = body.reserveEnabled === true;
-  if (!monthlyBudgetJpy || !softStopJpy || !hardStopJpy) throw new HttpError(400, "AI利用予算の金額を確認してください。");
-  const identity = await env.DB.prepare("SELECT id FROM security_identities WHERE id = ? AND status = 'active'").bind(identityId).first();
-  if (!identity) throw new HttpError(404, "対象ユーザーが見つかりません。");
-  const current = await env.DB.prepare("SELECT * FROM security_ai_budget_policies WHERE identity_id = ?").bind(identityId).first();
-  const period = currentJstMonth();
-  await env.DB.batch([
-    env.DB.prepare(`INSERT INTO security_ai_budget_policies
-      (identity_id, monthly_budget_jpy, soft_stop_jpy, hard_stop_jpy, reserve_enabled, reserve_period)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(identity_id) DO UPDATE SET monthly_budget_jpy = excluded.monthly_budget_jpy,
-        soft_stop_jpy = excluded.soft_stop_jpy, hard_stop_jpy = excluded.hard_stop_jpy,
-        reserve_enabled = excluded.reserve_enabled, reserve_period = excluded.reserve_period,
-        updated_at = CURRENT_TIMESTAMP`)
-      .bind(identityId, monthlyBudgetJpy, softStopJpy, hardStopJpy, reserveEnabled ? 1 : 0, reserveEnabled ? period : null),
-    await localAuditStatement(env, {
-      eventType: "ai_budget_policy_updated", outcome: "success", identityId,
-      authMethod: "passkey", service: "security", details: {
-        changedBy: admin.identityId,
-        previousMonthlyBudgetJpy: Number(current?.monthly_budget_jpy || 0), monthlyBudgetJpy,
-        previousSoftStopJpy: Number(current?.soft_stop_jpy || 0), softStopJpy,
-        previousHardStopJpy: Number(current?.hard_stop_jpy || 0), hardStopJpy,
-        previousReserveEnabled: Boolean(current?.reserve_enabled && current?.reserve_period === period), reserveEnabled
-      }
-    }, request)
-  ]);
-  return json({ ok: true, policy: await aiBudgetPolicy(env, identityId) });
-}
-
-async function aiBudgetPolicy(env, identityId) {
-  if (!identityId) return null;
-  const row = await env.DB.prepare("SELECT * FROM security_ai_budget_policies WHERE identity_id = ?").bind(identityId).first();
-  return row ? publicAiBudgetPolicy(row) : null;
-}
-
-function publicAiBudgetPolicy(row) {
-  const period = currentJstMonth();
-  return {
-    identityId: row.identity_id,
-    monthlyBudgetJpy: Number(row.monthly_budget_jpy),
-    softStopJpy: Number(row.soft_stop_jpy),
-    hardStopJpy: Number(row.hard_stop_jpy),
-    reserveEnabled: Boolean(row.reserve_enabled) && row.reserve_period === period,
-    reservePeriod: row.reserve_period || null,
-    updatedAt: normalizeUtcTimestamp(row.updated_at)
-  };
-}
-
 async function listServiceRegistry(env) {
   const services = await Promise.all(Object.entries(SERVICE_REGISTRY).map(async ([id, descriptor]) => {
     let response;
@@ -1107,7 +1018,7 @@ async function identityDetail(id, env) {
   const identity = await env.DB.prepare("SELECT * FROM security_identities WHERE id = ?").bind(id).first();
   if (!identity) throw new HttpError(404, "Identityが見つかりません。");
   const [links, credentials, invitations, audits] = await Promise.all([
-    env.DB.prepare("SELECT * FROM security_service_links WHERE identity_id = ? AND service != 'health' ORDER BY service, created_at").bind(id).all(),
+    env.DB.prepare("SELECT * FROM security_service_links WHERE identity_id = ? AND service NOT IN ('health', 'ai', 'downloader', 'downloader2') ORDER BY service, created_at").bind(id).all(),
     env.DB.prepare("SELECT credential_id, transports_json, device_type, backed_up, prf_enabled, status, label, registered_at, approved_at, last_used_at, revoked_at FROM security_credentials WHERE identity_id = ? ORDER BY registered_at DESC").bind(id).all(),
     env.DB.prepare("SELECT id, expires_at, status, created_at, used_at, revoked_at FROM security_invitations WHERE identity_id = ? ORDER BY created_at DESC LIMIT 20").bind(id).all(),
     env.DB.prepare("SELECT * FROM security_audit_events WHERE identity_id = ? AND occurred_at >= ? ORDER BY occurred_at DESC LIMIT 50").bind(id, auditRetentionCutoff(180)).all()
@@ -1204,7 +1115,6 @@ async function createIdentityAndInvite(request, env, admin) {
   await env.DB.batch([
     env.DB.prepare("INSERT INTO security_identities (id, display_name, status) VALUES (?, ?, 'invited')").bind(identityId, displayName),
     ...linkStatements,
-    ...(links.some((link) => link.service === "ai") ? [insertDefaultAiBudgetPolicyStatement(env, identityId)] : []),
     insertInvitationStatement(env, invitation),
     await localAuditStatement(env, { eventType: "identity_created", outcome: "success", identityId, authMethod: "passkey", details: { changedBy: admin.identityId } }, request),
     await localAuditStatement(env, { eventType: "invite_created", outcome: "success", identityId, authMethod: "passkey", details: { expiresAt: invitation.expiresAt } }, request)
@@ -1229,7 +1139,6 @@ async function addIdentityLinks(identityId, request, env, admin) {
     const status = identity.status === "active" && link.service !== "cloud" ? "active" : "pending";
     statements.push(...await explicitServiceLinkStatements(env, identityId, link, status, admin, request, "identity_link_add"));
   }
-  if (links.some((link) => link.service === "ai")) statements.push(insertDefaultAiBudgetPolicyStatement(env, identityId));
   statements.push(env.DB.prepare("UPDATE security_identities SET updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identityId));
   await env.DB.batch(statements);
   return json({ ok: true, requiresReinvite: identity.status !== "active", requiresApproval: links.some((link) => link.service === "cloud") });
@@ -1237,7 +1146,7 @@ async function addIdentityLinks(identityId, request, env, admin) {
 
 async function removeIdentityLink(linkId, request, env, admin) {
   const link = await env.DB.prepare("SELECT id, identity_id, service, service_account_id, cloud_root_folder_id FROM security_service_links WHERE id = ?").bind(linkId).first();
-  if (!link) throw new HttpError(404, "サービス連携が見つかりません。");
+  if (!link || !normalizeService(link.service)) throw new HttpError(404, "サービス連携が見つかりません。");
   if (link.identity_id === PRIMARY_ADMIN_ID && isPrimaryAdminCoreLink(link)) throw new HttpError(409, "第一管理者の既定サービス連携は解除できません。");
   await env.DB.batch([
     env.DB.prepare("UPDATE security_service_links SET status = 'disabled', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(linkId),
@@ -1262,7 +1171,7 @@ async function approveIdentity(identityId, request, env, admin) {
     }
   }
   const cloudLinks = await env.DB.prepare("SELECT * FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND service_account_id = 'folder-member' AND status IN ('pending', 'active')").bind(identityId).all();
-  const pendingLinks = await env.DB.prepare("SELECT 1 AS ok FROM security_service_links WHERE identity_id = ? AND status = 'pending' AND service != 'health' LIMIT 1").bind(identityId).first();
+  const pendingLinks = await env.DB.prepare("SELECT 1 AS ok FROM security_service_links WHERE identity_id = ? AND status = 'pending' AND service NOT IN ('health', 'ai', 'downloader', 'downloader2') LIMIT 1").bind(identityId).first();
   const existingFolderEnvelopes = await env.DB.prepare(`SELECT service_link_id FROM security_tcloud_key_envelopes
     WHERE identity_id = ? AND credential_id = ? AND envelope_type = 'folder_key_rsa'`)
     .bind(identityId, credentialId).all();
@@ -1293,7 +1202,7 @@ async function approveIdentity(identityId, request, env, admin) {
         wrapped_key = excluded.wrapped_key, updated_at = CURRENT_TIMESTAMP`)
       .bind(crypto.randomUUID(), identityId, credential.credential_id, envelope.linkId, envelope.wrappedKey)),
     env.DB.prepare("UPDATE security_credentials SET status = 'active', approved_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND credential_id = ? AND status = 'pending'").bind(identityId, credentialId),
-    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service NOT IN ('cloud', 'health')").bind(identityId),
+    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service NOT IN ('cloud', 'health', 'ai', 'downloader', 'downloader2')").bind(identityId),
     env.DB.prepare("UPDATE security_identities SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identityId)
   ];
   if (cloudPasskeyReady) updates.push(env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service = 'cloud' AND service_account_id = 'folder-member'").bind(identityId));
@@ -1882,11 +1791,6 @@ async function validateServiceLinks(env, input, { identityId = null, admin = nul
       requireFreshSecurityAdmin(admin);
     }
     if (service !== "cloud" && rootFolderId !== null) throw new HttpError(400, "日記・請求書の連携にT-Cloudフォルダは指定できません。");
-    if (["downloader", "downloader2"].includes(service)) {
-      if (invitation) throw new HttpError(400, "Downloaderはユーザー作成後、利用者詳細のサービス連携から追加してください。");
-      if (admin?.identityId !== PRIMARY_ADMIN_ID) throw new HttpError(403, "Downloaderの連携はオーナーだけが追加できます。");
-      requireFreshSecurityAdmin(admin);
-    }
     const integration = serviceProvider(env, service);
     const description = await integration.describeAccount({ accountId, rootFolderId, selectableOnly: true });
     if (!description?.valid) throw new HttpError(400, `${service}の連携先を確認できません。`);
@@ -1985,33 +1889,18 @@ async function ensurePrimaryAdminRecords(env) {
     { service: "cloud", accountId: "admin", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME },
     { service: "diary", accountId: "main-admin", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME },
     { service: "diary", accountId: "main-user", rootFolderId: null, displayLabel: "田中宏知（一般ユーザー）" },
-    { service: "billing", accountId: "owner", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME },
-    { service: "ai", accountId: "owner", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME },
-    { service: "downloader", accountId: "owner", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME },
-    { service: "downloader2", accountId: "owner", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME }
+    { service: "billing", accountId: "owner", rootFolderId: null, displayLabel: OWNER_DISPLAY_NAME }
   ];
   for (const link of defaults) {
     const existing = await env.DB.prepare(`SELECT id FROM security_service_links
       WHERE identity_id = ? AND service = ? AND service_account_id = ?
         AND cloud_root_folder_id IS NULL AND status IN ('pending', 'active') LIMIT 1`).bind(PRIMARY_ADMIN_ID, link.service, link.accountId).first();
     if (existing) continue;
-    const defaultStatus = ["ai", "downloader", "downloader2"].includes(link.service) && await hasActiveCredential(env, PRIMARY_ADMIN_ID) ? "active" : "pending";
     await env.DB.prepare(`INSERT INTO security_service_links
       (id, identity_id, service, service_account_id, cloud_root_folder_id, display_label, status)
       VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .bind(crypto.randomUUID(), PRIMARY_ADMIN_ID, link.service, link.accountId, link.rootFolderId, link.displayLabel, defaultStatus).run();
+      .bind(crypto.randomUUID(), PRIMARY_ADMIN_ID, link.service, link.accountId, link.rootFolderId, link.displayLabel, "pending").run();
   }
-}
-
-async function hasActiveCredential(env, identityId) {
-  const row = await env.DB.prepare("SELECT 1 AS ok FROM security_credentials WHERE identity_id = ? AND status = 'active' LIMIT 1").bind(identityId).first();
-  return Boolean(row);
-}
-
-function insertDefaultAiBudgetPolicyStatement(env, identityId) {
-  return env.DB.prepare(`INSERT INTO security_ai_budget_policies
-    (identity_id, monthly_budget_jpy, soft_stop_jpy, hard_stop_jpy, reserve_enabled, reserve_period)
-    VALUES (?, 3000, 2700, 2850, 0, NULL) ON CONFLICT(identity_id) DO NOTHING`).bind(identityId);
 }
 
 async function hasSecurityAdmin(env) {
@@ -2474,8 +2363,6 @@ function validIso(value) { if (typeof value !== "string" || !value.trim()) retur
 function validSessionStart(value) { const iso = validIso(value); return iso && Date.parse(iso) > 0 ? iso : ""; }
 function nowSeconds() { return Math.floor(Date.now() / 1000); }
 function clampNumber(value, min, max, fallback) { const number = Number(value); return Number.isFinite(number) ? Math.min(max, Math.max(min, Math.trunc(number))) : fallback; }
-function integerRange(value, min, max) { const number = Number(value); return Number.isInteger(number) && number >= min && number <= max ? number : 0; }
-function currentJstMonth(now = Date.now()) { return new Date(now + 9 * 60 * 60 * 1000).toISOString().slice(0, 7); }
 function randomToken(bytes) { const value = crypto.getRandomValues(new Uint8Array(bytes)); return bytesToBase64Url(value); }
 function parseJson(value, fallback) { try { return JSON.parse(value); } catch { return fallback; } }
 function validatePublicJwk(value) { if (!value || value.kty !== "RSA" || value.alg !== "RSA-OAEP-256" || !value.n || !value.e || "d" in value) throw new HttpError(400, "公開鍵を確認してください。"); return { kty: "RSA", alg: "RSA-OAEP-256", key_ops: ["encrypt"], ext: true, n: value.n, e: value.e }; }

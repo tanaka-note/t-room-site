@@ -8,7 +8,7 @@ import {getBackupSnapshot} from '../src/browser.js';
 import {database,d1,Bucket} from './fixtures.mjs';
 import {dispatchServices,scheduledBackupServices} from '../src/dispatch.js';
 
-const ids=Object.keys(SERVICES).filter(id=>id!=='health');
+const ids=Object.keys(SERVICES).filter(id=>!['health','ai','downloader'].includes(id));
 const scheduledTime=Date.now();
 // Execute the actual entrypoint; only the Workers-only RPC base class and its
 // imports are supplied by the fixture. The scheduled handler is never replaced.

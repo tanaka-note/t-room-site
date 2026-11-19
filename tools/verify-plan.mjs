@@ -60,7 +60,7 @@ export function commands(target) {
     auth: [node('.', '--test', 'tools/test-session-secret.mjs', 'tools/test-password-auth.mjs', 'tools/test-passkey-rolling.mjs'),
       node('security-worker', '--test', 'test/service-passkey-session.test.js', 'test/security-contract.test.js', 'test/primary-admin-setup.test.js'),
       ...tests('cloud-worker', 'tests/passkey-session-resume.mjs', 'tests/password-session-lifetime.mjs', 'tests/permission-guards.mjs'),
-      node('diary-worker', 'tests/permissions.e2e.mjs'), { cwd: 'billing-worker', script: 'test' }, { cwd: 'ai-worker', script: 'test' }]
+      node('diary-worker', 'tests/permissions.e2e.mjs'), { cwd: 'billing-worker', script: 'test' }]
   };
   return [...checks, ...suites[target]];
 }
@@ -170,7 +170,7 @@ export function installDirectories(selected) {
     if (['site', 'diary', 'calendar'].includes(target)) dirs.add('security-worker');
     if (services.includes(target) || target === 'backup') dirs.add(`${target}-worker`);
     if (['tooling', 'site', 'cloud', 'security', 'diary', 'billing', 'health', 'payments', 'household', 'portfolio', 'auth'].includes(target)) dirs.add('diary-worker');
-    if (target === 'auth') for (const s of ['security', 'cloud', 'billing', 'ai']) dirs.add(`${s}-worker`);
+    if (target === 'auth') for (const s of ['security', 'cloud', 'billing']) dirs.add(`${s}-worker`);
   }
   return [...dirs];
 }

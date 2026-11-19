@@ -41,7 +41,7 @@ export default {
   fetch(request, env) {
     let path = new URL(request.url).pathname;
     try { path = decodeURIComponent(path); } catch { /* Let the asset handler reject malformed paths. */ }
-    if (isRetiredSitePath(path)) return retiredServiceResponse(request);
+    if (/^\/(?:downloader2?|ai)(?:\/|$)/.test(path) || isRetiredSitePath(path)) return retiredServiceResponse(request);
     return lineBrowserResponse(request) || legacyReportResponse(request) || env.ASSETS.fetch(request);
   }
 };

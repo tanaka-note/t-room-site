@@ -21,7 +21,7 @@ test('Diary cannot switch to D1 exports before the central Workflow and Secret a
 test('production selects changed services only, never PR/branch/docs/tooling or disabled runs', () => {
   const context = { event: 'push', ref: 'refs/heads/main', enabled: true };
   assert.deepEqual(productionPlan(['tooling', 'cloud', 'auth'], context), ['cloud']);
-  assert.deepEqual(productionPlan(['downloader', 'container-unit'], context), ['downloader']);
+  assert.deepEqual(productionPlan(['downloader', 'container-unit'], context), []);
   assert.deepEqual(productionPlan(['tooling'], context), []);
   assert.deepEqual(productionPlan(affected(['tcloud-windows/src/TCloud.Sync.Core/SyncPlanner.cs']), context), []);
   assert.deepEqual(affected(['tools/test-password-auth.mjs']), ['auth']);
@@ -35,6 +35,10 @@ test('production selects changed services only, never PR/branch/docs/tooling or 
   assert.deepEqual(productionPlan(['site','cloud'], {...context,event:'workflow_dispatch',requested:'diary'}), ['diary']);
   assert.deepEqual(productionPlan(['site'], {...context,event:'workflow_dispatch'}), []);
   assert.throws(() => productionPlan([], {...context,event:'workflow_dispatch',requested:'../../evil'}));
+  for (const target of ['downloader', 'downloader2', 'ai']) {
+    assert.deepEqual(productionPlan([target],context), []);
+    assert.throws(() => manualVerification(target), /Unknown production target/);
+  }
   assert.ok(manualVerification('security').includes('auth'));
   assert.deepEqual(manualVerification('site'), ['site']);
 });
@@ -99,15 +103,11 @@ test('code release refuses infrastructure changes instead of silently ignoring t
 });
 test('production gates explicitly handle skipped upstream service jobs', () => {
   const workflow=readFileSync(new URL('../.github/workflows/verify.yml',import.meta.url),'utf8');
-  for (const job of ['production','downloader-production']) {
-    const gate=workflow.split(`\n  ${job}:`)[1].split('\n    environment:')[0].split('\n    permissions:')[0];
-    assert.match(gate,/!cancelled\(\)/);
-    assert.match(gate,/needs\.verify\.result == 'success'/);
-    assert.match(gate,/github\.ref == 'refs\/heads\/main'/);
-  }
-  assert.match(workflow,/manual \|\| selected\.includes\('container-unit'\)/);
-  assert.match(workflow,/clamav-definition-update/);
-  assert.match(readFileSync(new URL('./release-actions.mjs',import.meta.url),'utf8'),/--containers-rollout=none/);
+  const gate=workflow.split('\n  production:')[1].split('\n    environment:')[0];
+  assert.match(gate,/!cancelled\(\)/);
+  assert.match(gate,/needs\.verify\.result == 'success'/);
+  assert.match(gate,/github\.ref == 'refs\/heads\/main'/);
+  assert.doesNotMatch(workflow,/clamav|downloader-production/i);
 });
 test('scope checks accept product-specific authorization denials, never success or a missing endpoint', () => {
   for (const status of [401,403]) assertDenied(status,{success:false,errors:[{code:10000}]});
@@ -130,8 +130,8 @@ test('token preflight requires account subdomain access and checks only read ope
   };
   await checkTokenScope(options);
   assert.match(calls[0], /\/workers\/subdomain$/);
-  assert.equal(calls.length, 16, 'account subdomain, 13 selected Workers, D1 and R2');
-  assert.equal(calls.filter(path => path.endsWith('/settings')).length, 13);
+  assert.equal(calls.length, 13, 'account subdomain, 10 selected Workers, D1 and R2');
+  assert.equal(calls.filter(path => path.endsWith('/settings')).length, 10);
   assert.equal(logs.some(message => message.includes('fixture-token')), false);
   const deniedCalls = [];
   await assert.rejects(checkTokenScope({...options, read: async path => {

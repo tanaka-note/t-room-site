@@ -15,7 +15,7 @@ function session(f, service = 'billing') {
     sessionEpoch: 1, startedAt: new Date().toISOString(), expiresAt: Math.floor(Date.now() / 1000) + 43200, ttlSeconds: 43200 };
 }
 
-for (const service of ['diary', 'billing', 'ai', 'downloader', 'downloader2', 'inventory', 'payments']) {
+for (const service of ['diary', 'billing', 'inventory', 'payments']) {
   test(`${service}: live read is one SQL, touch is two, and neither initializes runtime`, async () => {
     const f = fixture();
     try {

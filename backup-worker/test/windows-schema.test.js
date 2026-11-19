@@ -7,7 +7,7 @@ import { capture } from '../src/backup.js';
 import { Bucket } from './fixtures.mjs';
 import { compress,verifiedPut } from '../src/integrity.js';
 import { restoreIsolated } from '../tools/restore-isolated.mjs';
-for(const [service,migration] of [['security','0032_windows_device_authority.sql'],['cloud','0014_windows_device_grants.sql']])
+for(const [service,migration] of [['security','0033_windows_device_authority.sql'],['cloud','0014_windows_device_grants.sql']])
 test(`${service} backup accepts only the exact optional Windows authorization schema`,async()=>{
   const db=database(service);
   try {
@@ -51,7 +51,7 @@ test('catalog DDL remains exact alongside the reviewed trash backup and rebuilds
 test('isolated Security recovery seeds new Windows generations only after quarantining restored Identities',async()=>{
   const source=database('security');
   try {
-    source.exec(readFileSync(new URL('../../security-worker/migrations/0032_windows_device_authority.sql',import.meta.url),'utf8'));
+    source.exec(readFileSync(new URL('../../security-worker/migrations/0033_windows_device_authority.sql',import.meta.url),'utf8'));
     source.exec(`INSERT INTO security_identities(id,display_name,status) VALUES('windows-recovery','fixture','active');
       INSERT INTO security_credentials(credential_id,identity_id,public_key,prf_salt,status) VALUES('recovery-credential','windows-recovery','public','salt','active');
       INSERT INTO security_service_links(id,identity_id,service,service_account_id,cloud_root_folder_id,display_label,status)

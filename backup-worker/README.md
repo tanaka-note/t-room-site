@@ -4,7 +4,7 @@
 
 ## 対象と保持
 
-- 専用Worker `t-room-backup` の `D1BackupWorkflow` が本番11 D1を定期保存する。Portfolio / Cloud / Security / Billing / Payments / Inventory / AI / Calendar / HouseholdとDownloader利用集計は03:40 JSTのCron、日記D1は既存の03:25 JSTから、DBごとに独立したWorkflowを起動する。開始は30秒ずつずらす。Calendarのローカル利用は対象外。
+- 専用Worker `t-room-backup` の `D1BackupWorkflow` が本番9 D1を定期保存する。Portfolio / Cloud / Security / Billing / Payments / Inventory / Calendar / Householdは03:40 JSTのCron、日記D1は既存の03:25 JSTから、DBごとに独立したWorkflowを起動する。開始は30秒ずつずらす。Calendarのローカル利用は対象外。
 - Portfolio（資産運用報告）は他サービスD1と同じ `40 18 * * *`（毎日03:40 JST）のscheduled呼び出しで起動する。独立したCronは追加しない。`portfolio-db` のアカウント状態、報告設定とrevision、日付別評価額・更新時刻・銘柄内訳、訂正前後の履歴・保存IDを全て対象にする。保存先は既存の非公開R2の `d1/portfolio/v3/daily/` と `monthly/`、保持は日次30・月次12世代。手動JSON出力・旧静的ページとは独立し、動的ページの更新が対象になる。Backup-dataには「資産運用報告」として保存世代・成否を表示する。新規のSecretやパスキーは収集せず、新旧両形式の隔離復元では両アカウントを無効化しsession versionを進める。
 - Householdの端末側暗号化対応後は、家計の暗号文と `household_crypto_config/vaults/grants` の暗号化済み鍵情報を同じD1 snapshotへ保存する。復号鍵・PRFは取得しない。鍵IDと復旧用envelopeを保持し、Securityの別時点の保存に家計鍵の正本を依存させない。0006の旧平文v2/v3バックアップは旧schemaで隔離復元し、内容照合後に0007を適用する。暗号文の保存成功と、管理者の端末で復旧鍵を解除して実際に復号できることは別に検証する。移行中・過去世代の平文残存と公開手順は[家計簿README](../household-worker/README.md#移行公開手順)に従う。
 - Householdは専用D1のアカウント状態・現行世代/revision・家計record（保持中の旧世代を含む）・再送履歴を保存し、Backup-dataへ「家計簿」として表示する。手動JSON出力とは別の定期保存。Secret・Cookie・パスキーは収集せず、隔離復元ではアカウントを無効化してsession versionを進める。通常保存は公式exportをストリーム処理するため、旧方式の合計10,000行・行JSON 8MiB制約には依存しない。
@@ -12,6 +12,7 @@
 - 対象のテーブル・列・既知schemaは`src/registry.js`を正本とする。未知のテーブル、対象テーブルの列変更、取得失敗は保存を停止して要確認にする。schema変更と同じPRで許可リスト・復元fixture・src/schema-guard.jsのmigration由来fingerprintを更新する。列だけでなくindex・trigger・制約を含むDDL差分も停止対象とし、D1内部table/migration管理tableは除外する。本番の既存DDLがmigrationと異なる場合も停止するので、初回公開前に読取専用で差分を確認し、内容を精査してから基準を更新する。
 - JSON gzipに実際のschema SQL、想定migration、サービス・DB名、取得時刻、列・行・件数を含める。各DBの全対象行は一回の公式D1 exportの固定snapshotから取得する。export前後のschemaを検査し、途中のschema変更では公開しない。取得開始・完了・予定時刻を記録する。DB間、D1とR2写真の同時点の保証はない。
 - 「T-Cloud D1」は管理情報、暗号化済み鍵情報、ゴミ箱の操作・完全削除の記録を保存する。隔離復元では完全削除済みキーの再利用防止と処理中の復元禁止を保持する。ゴミ箱の切替承認・実行リースは復元せず、初期値で停止する。R2のファイル本体、動画、サムネイルは複製しない。共有リンクと一時解除状態も自動復元対象にしない。
+- AI ChatとDownloader利用集計は定期保存とBackup-dataの対象から除外する。既存2範囲の削除手順は[サービス終了手順](../docs/history/2026-11-19-downloader-ai-retirement.md#既存バックアップの削除)を参照。
 - 体調管理の定期保存とBackup-dataへの表示は終了する。旧世代と復元仕様の参照先は[サービス終了の記録](../docs/history/2026-11-18-service-retirement.md)に記載する。
 - Password hashやサービスの一時セッション、challenge、handoff、Downloaderの処理中ジョブ・一時ファイルは対象外。AIの利用実績と料金予約・再送状態は照合に必要なため保持するが、復旧時に処理を再実行しない。
 - Windows HDD同期の端末認可・nonce・access token hash・認可世代は認証状態として自動データ復元の対象外とする。Windowsの追加DDLは既存baselineと分離した厳密なfingerprintで検査し、部分適用・未知のtrigger変更は拒否する。認証状態を失うサーバー復旧後は端末の初回登録が必要だが、既にHDDへ保存した平文本体は認証なしで利用できる。

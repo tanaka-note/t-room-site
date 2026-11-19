@@ -9,7 +9,7 @@ on:
         description: 'Verify and release one main service (none = verification only)'
         type: choice
         default: none
-        options: [none, site, cloud, security, diary, billing, downloader, downloader2, ai, inventory, health, payments, household, calendar]
+        options: [none, site, cloud, security, diary, billing, inventory, health, payments, household, calendar]
 permissions:
   contents: read
 concurrency:
@@ -25,7 +25,6 @@ jobs:
       downloader2_native: ${{ steps.plan.outputs.downloader2_native }}
       tcloud_windows: ${{ steps.plan.outputs.tcloud_windows }}
       production: ${{ steps.plan.outputs.production }}
-      downloader_production: ${{ steps.plan.outputs.downloader_production }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -49,10 +48,9 @@ jobs:
           import {appendFileSync} from 'node:fs';
           const requested=process.env.PRODUCTION_TARGET;
           const manual=process.env.VERIFY_EVENT==='workflow_dispatch' && requested!=='none';
-          const {selected,native}=manual ? {selected:manualVerification(requested),native:requested==='downloader2'} : ciPlan({event:process.env.VERIFY_EVENT,ref:process.env.VERIFY_REF,base:process.env.BASE_SHA,head:process.env.HEAD_SHA});
+          const {selected,native}=manual ? {selected:manualVerification(requested),native:false} : ciPlan({event:process.env.VERIFY_EVENT,ref:process.env.VERIFY_REF,base:process.env.BASE_SHA,head:process.env.HEAD_SHA});
           const production=productionPlan(selected,{event:process.env.VERIFY_EVENT,ref:process.env.VERIFY_REF,requested,enabled:process.env.PRODUCTION_ENABLED==='true'});
-          const containerRelease=production.includes('downloader') && (manual || selected.includes('container-unit'));
-          appendFileSync(process.env.GITHUB_OUTPUT,`production=${JSON.stringify(production.filter(t=>t!=='downloader' || !containerRelease))}\ndownloader_production=${containerRelease}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT,`production=${JSON.stringify(production)}\n`);
           appendFileSync(process.env.GITHUB_OUTPUT,`node=${JSON.stringify(selected.filter(t=>!android.includes(t) && t!=='tcloud-windows'))}\nandroid=${JSON.stringify(selected.filter(t=>android.includes(t)))}\n`);
           appendFileSync(process.env.GITHUB_OUTPUT,`tcloud_windows=${selected.includes('tcloud-windows')}\n`);
           appendFileSync(process.env.GITHUB_OUTPUT,`downloader2_native=${native}\n`);
@@ -382,7 +380,7 @@ jobs:
       matrix:
         target: ${{ fromJSON(needs.plan.outputs.production) }}
     concurrency:
-      group: ${{ matrix.target == 'downloader' && 'clamav-definition-update' || format('production-{0}', matrix.target) }}
+      group: ${{ format('production-{0}', matrix.target) }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -416,20 +414,7 @@ jobs:
           RELEASE_TARGET: ${{ matrix.target }}
           TROOM_CI_RESULT: ${{ needs.verify.result }}
           TROOM_VERIFIED_SHA: ${{ github.sha }}
-          TROOM_DOWNLOADER_WORKER_ONLY: ${{ matrix.target == 'downloader' && 'true' || 'false' }}
-          CLOUDFLARE_API_TOKEN: ${{ matrix.target == 'downloader' && secrets.CLAMAV_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_SEND_METRICS: 'false'
         run: node tools/release-actions.mjs "$RELEASE_TARGET"
-  downloader-production:
-    needs: [plan, verify]
-    if: ${{ !cancelled() && github.repository == 'tanaka-note/t-room-site' && github.ref == 'refs/heads/main' && needs.verify.result == 'success' && needs.plan.outputs.downloader_production == 'true' }}
-    permissions:
-      contents: read
-      issues: write
-    uses: ./.github/workflows/clamav-definitions.yml
-    with:
-      release_code: true
-      verified_sha: ${{ github.sha }}
-    secrets:
-      CLAMAV_CLOUDFLARE_API_TOKEN: ${{ secrets.CLAMAV_CLOUDFLARE_API_TOKEN }}

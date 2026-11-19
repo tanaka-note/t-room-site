@@ -51,7 +51,6 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(root, 'tools/release
     writeFileSync(path, JSON.stringify({ ...config, main: resolve(root, config.main), assets: { ...config.assets, directory: resolve(root, config.assets.directory) }, preview_urls: true }, null, 2));
     run(root, ['node_modules/wrangler/bin/wrangler.js', 'versions', 'upload', '--config', path, '--preview-alias', `commit-${head.slice(0, 12)}`, '--message', `Preview ${head}`]);
   } else {
-    if (app.deployTarget === 't-room-downloader') throw new Error('Downloader requires its existing verified Container/ClamAV rollout procedure.');
     git(['fetch', 'origin', 'main']);
     if (head !== git(['rev-parse', 'origin/main'])) throw new Error('Production requires HEAD exactly matching latest origin/main.');
     const profile = prepareReleaseDependencies(app);

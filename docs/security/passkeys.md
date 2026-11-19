@@ -14,11 +14,11 @@
 
 Security Centerは「誰か」を表すIdentity、パスキー、招待、承認、サービス連携、共通監査を管理する。日記、T-Cloud、請求書管理のアカウントとroleは統合せず、認可の正本は常に各サービスとする。共通認証成功後は60秒・一回限りのhandoffを対象サービスが引き換え、サービス固有cookieを発行する。各サービスへ共通SESSION_SECRETを配布しない。
 
-サービス固有sessionは認証方式とサービスごとに分離する。PW sessionは現行の期限・Cookie属性を維持する（共通policyは固定12時間・非persistent・rollingなし）。既存サービスのパスキーsession（T-Cloud、日記、請求書、AI Chat、Downloader、Downloader 2、Security Centerの管理者／Identity）は、最後の正常利用から12時間のrolling期限とpersistent Cookie（Max-Age=43200、Secure、HttpOnly、SameSite=Strict）を使用する。各サービスの利用はそのサービスのsessionだけを延長する。Cookieには署名済みtokenだけを保存し、session ID・開始日時・Identity・credential・link・root scope・version・epochはrollingで変更しない。Securityの管理者／Identityは別session IDを持ち、重要操作の5分以内の再認証を判定するauthenticatedAtは延長しない。setup sessionとhandoffの60秒・一回限りという期限も変更しない。
+サービス固有sessionは認証方式とサービスごとに分離する。PW sessionは現行の期限・Cookie属性を維持する（共通policyは固定12時間・非persistent・rollingなし）。既存サービスのパスキーsession（T-Cloud、日記、請求書、Security Centerの管理者／Identity）は、最後の正常利用から12時間のrolling期限とpersistent Cookie（Max-Age=43200、Secure、HttpOnly、SameSite=Strict）を使用する。各サービスの利用はそのサービスのsessionだけを延長する。Cookieには署名済みtokenだけを保存し、session ID・開始日時・Identity・credential・link・root scope・version・epochはrollingで変更しない。Securityの管理者／Identityは別session IDを持ち、重要操作の5分以内の再認証を判定するauthenticatedAtは延長しない。setup sessionとhandoffの60秒・一回限りという期限も変更しない。
 
 カレンダーだけは、合意済みの最終正常利用から30日（Max-Age=2592000）の例外とする。`assets/passkey-calendar-policy.mjs`とSecurity ledgerで登録・延長・失効を揃え、既存サービスの12時間policyを変更しない。バックグラウンド・polling・session照会・オフライン操作では延長しない。サービス連携はSecurity Centerで明示的に設定し、自動付与しない。カレンダー追加のDB CHECK拡張は`0027_calendar_service.sql`で既存データを保存して行う。
 
-正常利用は、前面かつ起動／最後の信頼できるpointer・keyboard・touch・wheel操作から60秒以内に実行した成功した保護APIに限定する。Android AI ChatもActivityの前面状態と起動／実操作から60秒以内を判定し、更新Cookieを暗号化した端末ストアへ保存する。session／status／認証・設定準備／app-version、静的ファイル、公開API、エラー応答、非表示タブ・無操作で継続するpollingは延長しない。T-Cloudは従来のitems／favorites／folders／files／uploads／shares配下に限定する。操作窓の情報は通信の分類だけであり、認証・認可の根拠にはしない。各APIでSecurity側のcredential・Identity・link・root scope・epochと各サービスの署名・account role・versionを検証する。Securityの既存security_active_sessionsにHMAC済み識別子だけを保存し、内部Service Binding RPCで同じsessionの期限を更新する。ログアウト済みsessionはtokenの再送や遅延auditでも復活せず、Security側で終了されたsessionも拒否する。新規sessionを登録できない場合や照会に失敗した場合はfail-closedとする。
+正常利用は、前面かつ起動／最後の信頼できるpointer・keyboard・touch・wheel操作から60秒以内に実行した成功した保護APIに限定する。session／status／認証・設定準備／app-version、静的ファイル、公開API、エラー応答、非表示タブ・無操作で継続するpollingは延長しない。T-Cloudは従来のitems／favorites／folders／files／uploads／shares配下に限定する。操作窓の情報は通信の分類だけであり、認証・認可の根拠にはしない。各APIでSecurity側のcredential・Identity・link・root scope・epochと各サービスの署名・account role・versionを検証する。Securityの既存security_active_sessionsにHMAC済み識別子だけを保存し、内部Service Binding RPCで同じsessionの期限を更新する。ログアウト済みsessionはtokenの再送や遅延auditでも復活せず、Security側で終了されたsessionも拒否する。新規sessionを登録できない場合や照会に失敗した場合はfail-closedとする。
 
 移行時、T-Cloud以外の既存Cookieは元の絶対期限を維持し、延長を許可しない。次回のパスキー認証でrollingSessionVersion=1の新しいsessionへ移行する。期限切れCookieを新仕様で復活させない。DB migrationと署名鍵の変更は不要。
 
@@ -93,7 +93,7 @@ WebAuthn credential登録とT-Cloud鍵準備は別状態として扱う。PRF非
 
 Security Centerの一覧・詳細・ユーザー詳細は直近180日を表示する。日次scheduledと既存の毎時枠の追いつき処理は180日超の監査原本を非公開R2へ保存・読み戻し照合し、保存時と同一の行だけをD1から整理する。R2の監査原本は期限なしで保持し、日次30世代・月次12世代の通常バックアップとは削除規則を分ける。未保管・保存失敗・読み戻し不一致の行はD1に残し、画面では180日以内だけを表示する。詳細と初回公開条件は[バックアップ運用](../../backup-worker/README.md)を参照。
 
-日次scheduledはこの保管処理が成功した後、`src/identity-cleanup.js`の条件で最大20件を1件ずつ整理する。disabledで第一管理者IDでもsecurity adminでもなく、停止・最終利用から保持期間が経過し、監査イベントからの直接参照・対象ID・details内Identity ID・service link参照が一切ない場合だけ対象となる。active/pending credential、pending/active link、有効招待、招待作成者参照、setup／challenge／handoff、Client Vault／Key Envelope（credential・link経由も含む）、AI予算が1件でもあれば保持する。未終了・保持期間内・期限内・不正日時のsessionも削除を禁止する。外部DBにIdentity別履歴を持つAI／Downloaderは、disabled linkでも保持する。
+日次scheduledはこの保管処理が成功した後、`src/identity-cleanup.js`の条件で最大20件を1件ずつ整理する。disabledで第一管理者IDでもsecurity adminでもなく、停止・最終利用から保持期間が経過し、監査イベントからの直接参照・対象ID・details内Identity ID・service link参照が一切ない場合だけ対象となる。active/pending credential、pending/active link、有効招待、招待作成者参照、setup／challenge／handoff、Client Vault／Key Envelope（credential・link経由も含む）、AI予算が1件でもあれば保持する。未終了・保持期間内・期限内・不正日時のsessionも削除を禁止する。
 
 各候補の条件は削除時に再評価する。保持期限を過ぎた終了済みsession、Identity、削除件数だけの監査イベントをD1の同一batchで確定し、失敗時は全体をrollbackする。Identity削除のcascade対象は審査済みのrevoked credential・disabled link・終了済みinvitationだけであり、鍵データは存在そのものが削除禁止条件となる。他Identityからの参照も禁止し、未知のテーブル／triggerが増えた場合は自動整理を停止して依存関係の再審査を要求する。日別件数だけを持つ`security_audit_daily`とその3つの更新triggerは審査済みとして許可し、Identity・鍵・linkを保持する対象には含めない。新しいカラムやFKの追加時もこのguardとテストを見直す。
 
@@ -144,9 +144,9 @@ member vaultの登録はcredential単位のINSERTのみとし、競合時は保�
 
 家計簿の追加管理用と共有閲覧用は、第一管理者の明示的な設定で同じサービスアカウントを複数Identityへ連携できる。同じIdentityの複数credentialも有効な連携を利用できる。田中宏知の既定`owner`だけは`primary-admin`に限定する。既存の5分以内の再認証・招待・credential承認・Identity／credential／link単位の失効確認を維持する。`0029_household_shared_accounts.sql`は現在の連携をIdentity＋アカウント単位で一意にし、既存の無効なlinkを復活させず、自動で権限を付与しない。詳細は[家計簿README](../../household-worker/README.md)を参照する。
 
-## Downloaderの利用許可
+## 終了したサービスの連携
 
-初期連携はprimary-adminのみ。一般Identityへの許可は、オーナーが利用者詳細の「サービス連携を追加」でDownloaderを選び、既存の再認証を通したときだけ作成する。新規招待には含めず、パスキー登録・承認・再招待では新規付与しない。追加・解除は対象link IDと操作元を監査へ記録する。既存連携は追加経路を調査して扱いを決め、判断不能を一律解除しない。過去の本番データ調査は[2026-09-09調査記録](../history/security/downloader-grants-review-20260909.md)を参照。
+旧Downloader 1・2とAI Chatの連携およびセッションの整理は[サービス終了手順](../history/2026-11-19-downloader-ai-retirement.md)に従う。共通credentialと他サービスの連携は保持する。
 
 過去のmigration、固定データ対応、当時の公開範囲は[Identity・Passkey移行記録](../history/security/passkey-migrations.md)へ分離している。
 

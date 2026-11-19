@@ -40,7 +40,7 @@ node tools/verify.mjs --target android-ai-chat
 
 対象表は `tools/verify-plan.mjs` 一か所。サービス内の標準回帰を選び、認証共通変更は `auth`、暗号資産変更はSecurityにも広げる。`web-apps.json` のbuild依存も参照する。削除・rename元も差分に含め、不明refは失敗する。未知のWebファイルはsiteへ回す。機能固有の試験（検索・動画デコーダなど）が必要なら既存package.jsonの追加試験を実行し、恒常的に必要なものだけprofileへ追加する。
 
-Downloaderの通常verifyはNodeテスト・Python構文・Worker bundleまで。Container変更だけ `container-unit` を追加し、既存のローカルPython試験を実行する（ffmpeg/ClamAV等がない場合のskipは既存試験の表示に従う）。Docker image作成、定義rollout、R2実転送は行わない。ClamAVの既存3 Workflowは維持する。
+Downloaderの通常verifyはNodeテスト・Python構文・Worker bundleまで。Container変更だけ `container-unit` を追加し、既存のローカルPython試験を実行する（ffmpeg/ClamAV等がない場合のskipは既存試験の表示に従う）。Docker image作成、定義rollout、R2実転送は行わない。終了後のDownloaderの既存テストはローカル検証に利用できる。ClamAVの定期更新・独立監視Workflowは終了する。
 
 Android/TWAは該当ディレクトリの変更時だけJava 21でdebug buildとunit test。SDK 36が必要。署名鍵、release build、実機/emulatorをCIへ持ち込まない。Webだけの変更でAndroid buildは走らない。
 
@@ -171,11 +171,11 @@ gh run view <run-id> --repo tanaka-note/t-room-site --json jobs,url,headSha,conc
 
 既存のCloudflare Buildsによるsiteの独立した自動公開は停止し、CIを迂回する二重公開を避ける。他の10 WorkerにBuilds連携がないことも初期構築時に確認した。`Disable builds`を解除する場合はCIとの公開順序を再設計する。
 
-通常の12 Workerは`tools/release-actions.mjs`がCIとcheckoutのSHA、最新main、clean状態、対象configのWorker名を確認する。CIと同じ`installDirectories()`で依存を準備し、siteだけ公開用assetを生成する。検証済みの同一SHAの試験を繰り返さず、既存のtarget全体のbuild freshness preflight、HealthのSecret名preflight、公開後のWeb build照合を維持する。`versions upload`の構造化出力から対象Workerの一意なversion IDを取得し、そのIDだけを100%へ昇格してAPIで読み戻す。AIはWeb registryを持たないためversionの一致を確認する。手動公開時はアカウント共通サブドメインおよび対象13 Workerのmetadata読取成功と、D1一覧・R2一覧への認可拒否（製品により401/403、success=false）も確認する。これはreadによる権限範囲の確認であり、削除API等の実行試験はしない。
+通常の公開対象Workerは`tools/release-actions.mjs`がCIとcheckoutのSHA、最新main、clean状態、対象configのWorker名を確認する。CIと同じ`installDirectories()`で依存を準備し、siteだけ公開用assetを生成する。検証済みの同一SHAの試験を繰り返さず、既存のtarget全体のbuild freshness preflight、HealthのSecret名preflight、公開後のWeb build照合を維持する。`versions upload`の構造化出力から対象Workerの一意なversion IDを取得し、そのIDだけを100%へ昇格してAPIで読み戻す。手動公開時はアカウント共通サブドメインおよび対象Workerのmetadata読取成功と、D1一覧・R2一覧への認可拒否（製品により401/403、success=false）も確認する。これはreadによる権限範囲の確認であり、削除API等の実行試験はしない。
 
 この経路は既存のroutes、Custom Domains、Cron、Queue設定、Containerを変更しない。これらの非version設定やDB migrationを変更する作業は、通常コード公開と別に既存の専用手順で扱う。勝手に権限を増やしたり、未適用の設定変更を適用済みとして報告しない。ローカルの`npm run release`は従来どおり利用できる。
 
-Downloaderは通常のversion公開から除外する。Containerディレクトリの変更と手動のDownloader指定では、CI成功後に既存の`ClamAV daily definitions`をreusable workflowとして`release_code=true`で呼ぶ。Workerだけの差分では既存専用Secretを使い、`--containers-rollout=none`でWorkerだけを更新してversionとWeb buildを照合する。Container設定・非version設定の変更はこのWorker単独経路では拒否し、手動のDownloader指定で専用公開を実行する。両経路は日次更新と同じconcurrency groupを使う。専用の既存repository Secret `CLAMAV_CLOUDFLARE_API_TOKEN`、署名・鮮度・小容量fixture・lease・job/grace保護・digest照合・Worker build確認を維持する。日次更新・独立監視は変更しない。Containerコード公開を伴うため、初期構築の動作確認だけを目的にこの高コスト経路を実行しない。利用者の本番データは検証用に作成・変更・削除しない。
+旧Downloader 1・2とAI Chatのルート切替、ClamAV終了、バックアップ停止は[サービス終了手順](history/2026-11-19-downloader-ai-retirement.md)に従う。
 
 ## ローカルD1/R2・ログ
 
