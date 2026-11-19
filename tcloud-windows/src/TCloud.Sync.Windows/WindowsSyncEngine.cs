@@ -260,7 +260,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                         Directory.CreateDirectory(Path.GetDirectoryName(target)!);File.Move(full,target);path=desired;
                     }
                     var currentState=WindowsFileState.Read(LocalPaths.ResolveUnderRoot(root.Root,path));
-                    var updated=old with {Revision=entry.Revision,RelativePath=path,ContentVersion=Version(entry),LocalState=currentState==stamp?stamp:null,LocalFileId=currentState.Id,RemoteName=resolved.Metadata?.Name};
+                    var updated=old with {Complete=true,Revision=entry.Revision,RelativePath=path,ContentVersion=Version(entry),LocalState=currentState==stamp?stamp:null,LocalFileId=currentState.Id,RemoteName=resolved.Metadata?.Name};
                     // A stable body needs no checkpoint. In particular, do not
                     // reload and validate the entire catalog for every sibling.
                     if(updated!=old)await PutAsync(updated,token);
