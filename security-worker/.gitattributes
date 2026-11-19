@@ -1,5 +1,6 @@
 # Keep byte-hashed asset redirects identical on Windows and CI.
 public/_redirects text eol=lf
+public/.assetsignore text eol=lf
 
 # Keep the byte-hashed SQLite license identical on Windows and CI.
 public/vendor/sqlite-license.txt text eol=lf
