@@ -21,6 +21,31 @@ if(args.Contains("--provider-probe"))
 {
     await ProviderTests.Transfer();Console.WriteLine("PASS operational provider fixture");return 0;
 }
+if(args.Contains("--snapshot-probe"))
+{
+    try {await LocalSnapshotTests.Capture();Console.WriteLine("PASS local save snapshot and concurrent writer rejection");return 0;}
+    catch(Exception error){Console.Error.WriteLine(error);return 1;}
+}
+if(args.Contains("--root-probe"))
+{
+    try {await RootRegistrationTests.Persistence();Console.WriteLine("PASS persisted root ownership and registration recovery");return 0;}
+    catch(Exception error){Console.Error.WriteLine(error);return 1;}
+}
+if(args.Contains("--replacement-probe"))
+{
+    try {await NativeReplacementConversion();Console.WriteLine("PASS saved file replacement and managed conversion");return 0;}
+    catch(Exception error){Console.Error.WriteLine(error);return 1;}
+}
+if(args.Contains("--conversion-probe"))
+{
+    try {await NativeSavedBodyConversion();Console.WriteLine("PASS ordinary saved body conversion");return 0;}
+    catch(Exception error){Console.Error.WriteLine(error);return 1;}
+}
+if(args.Contains("--transfer-probe"))
+{
+    try {await OriginalTransferTests.Pipeline();Console.WriteLine("PASS device authorization to retained CFAPI original");return 0;}
+    catch(Exception error){Console.Error.WriteLine(error);return 1;}
+}
 
 if (args.Contains("--key-probe"))
 {
@@ -58,6 +83,7 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("changed versions and damaged chunks never expose mixed plaintext", EncryptedReadTests.ChangedOrDamaged),
     ("Cloud ciphertext requests enforce origin, session, range, version and body length", EncryptedReadTests.HttpRanges),
     ("ending a reader cancels pending transfers and prevents further decryption", EncryptedReadTests.Cancellation),
+    ("whole-original staging never publishes late corruption or canceled transfers", ProviderTests.FailedStage),
     ("ciphertext integrity and chunk identity are authenticated", Integrity),
     ("random reads cross encrypted chunks and stop at EOF", Ranges),
     ("Cloud Files transfer ranges satisfy native alignment and EOF requirements", NativeTransferRanges),
@@ -66,6 +92,7 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("remote deletion cannot resurrect an offline edit", RemoteDeletion),
     ("authentication expiry and incomplete writes pause transfers", Authentication),
     ("transfer journal survives restart and isolates account and disk", Journal),
+    ("catalog checkpoints preserve originals across interruption, scope changes and remote reset", CatalogTests.Restart),
     ("paths cannot escape sync root or address alternate streams", Paths),
     ("destination inspection is read-only and rejects overlapping roots", Destination),
     ("native passkey requests preserve RP, required verification and credential PRF inputs", PasskeyRequests),
@@ -77,12 +104,15 @@ if (args.Contains("--native"))
     tests.Add(("retained plaintext originals resist dehydration and remain editable without the provider", NativeOfflineOriginal));
     tests.Add(("real Windows deletion requests can be rejected without losing the file", NativeDeleteVeto));
     tests.Add(("application file replacement retains its saved body after Cloud Files conversion", NativeReplacementConversion));
+    tests.Add(("complete namespace registration allows a fresh local save to enter sync management", NativeSavedBodyConversion));
     tests.Add(("persisted Windows RSA keys decrypt but cannot export private material or sign", NativePrivateKey));
     tests.Add(("DPAPI session protection rejects modified cookies and another session binding", NativeAccountProtection));
     tests.Add(("persistent device signatures interoperate without exporting private keys or reusing cookie protection", NativeDeviceKey));
     tests.Add(("PC-protected registration resumes and renews without a Web cookie or another passkey", DeviceClientTests.PersistentDevice));
+    tests.Add(("local upload snapshots reject saves made during the copy and isolate later edits", LocalSnapshotTests.Capture));
     tests.Add(("persistent sync roots resume only their owner and unlink without deleting originals", RootRegistrationTests.Persistence));
     tests.Add(("operational CFAPI transport keeps verified originals and permits only in-root rename", ProviderTests.Transfer));
+    tests.Add(("device renewal, catalog, vault decryption, disk staging and CFAPI retain one verified original", OriginalTransferTests.Pipeline));
     tests.Add(("browser PRF envelopes unlock existing member and administrator keys in Windows", NativePasskeyEnvelope));
 }
 var failed = 0;
@@ -172,6 +202,21 @@ static async Task BrowserFilePackage()
         var administratorFolderKey = CloudFileCrypto.UnlockFolder(rsa, rsaEnvelope);
         try { Check(administratorFolderKey.AsSpan().SequenceEqual(folderKey), "existing RSA folder key format decrypted"); }
         finally { CryptographicOperations.ZeroMemory(administratorFolderKey); }
+        var folderRecord=new WindowsCatalogEntry("folder",7,1,"present",JsonSerializer.SerializeToElement(new {
+            id=7,parentId=(long?)null,name="[encrypted]",cryptoVersion=1,
+            encryptedName=root.GetProperty("name").GetProperty("encryptedName").GetString(),
+            nameIv=root.GetProperty("name").GetProperty("nameIv").GetString(),adminWrappedKey=rsaEnvelope}),null,null);
+        var fileRecord=new WindowsCatalogEntry("file",42,2,"present",JsonSerializer.SerializeToElement(new {
+            id=42,folderId=7,name="[encrypted]",cryptoVersion=1,sizeBytes=1,chunkSizeBytes=8*1024*1024,chunkCount=1,encryptedSizeBytes=33,
+            encryptedMetadata=encrypted.Ciphertext,metadataIv=encrypted.Iv,wrappedFileKey=wrapped.Ciphertext,fileKeyIv=wrapped.Iv}),null,null);
+        foreach(var admin in new[]{false,true})
+        {
+            var keys=JsonSerializer.SerializeToElement(new {folderKeys=admin?Array.Empty<object>():[new {rootFolderId=7,wrappedKey=rsaEnvelope}]});
+            using var resolver=new CloudOriginalResolver(rsa,[folderRecord,fileRecord],keys);
+            using var resolved=resolver.Resolve(fileRecord);
+            Check(resolved.RelativePath==Path.Combine("同期用写真",LocalPaths.EncodeName(metadata.Name)),"catalog resolves the Web-encrypted original name and folder locally");
+            Check(resolved.FileKey!.AsSpan().SequenceEqual(fileKey),"member and administrator catalogs use existing vault keys");
+        }
     }
     finally { CryptographicOperations.ZeroMemory(folderKey); CryptographicOperations.ZeroMemory(fileKey); }
 }
@@ -423,6 +468,16 @@ static async Task NativeDeleteVeto()
     Check(fixture.Errors.IsEmpty, "provider callback errors");
 }
 
+static Task NativeSavedBodyConversion()
+{
+    using var fixture=CloudFilesFixture.Create(denyDeletes:true);
+    var path=Path.Combine(fixture.Root,"new.txt");File.WriteAllText(path,"new saved body");
+    fixture.ConvertExisting("new.txt");
+    Check(File.ReadAllText(path)=="new saved body","conversion retains a fresh local save without fetching a remote body");
+    Check((CloudFilesLocalStorage.PlaceholderState(path)&1)!=0,"saved file is a managed placeholder");
+    return Task.CompletedTask;
+}
+
 static async Task NativeReplacementConversion()
 {
     using var fixture = CloudFilesFixture.Create(denyDeletes: true);
@@ -434,7 +489,8 @@ static async Task NativeReplacementConversion()
     var backup = Path.Combine(fixture.Root, "temporary-backup.txt");
     var replace = FixtureClient.Run($"[System.IO.File]::Replace({FixtureClient.PathArgument(replacement)}, {FixtureClient.PathArgument(path)}, {FixtureClient.PathArgument(backup)})");
     Check(replace.Succeeded && await File.ReadAllTextAsync(path) == "saved revision", "replacement completed");
-    fixture.ConvertExisting("document.txt");
+    try {fixture.ConvertExisting("document.txt");}
+    catch(Exception error){throw new IOException($"Conversion state 0x{CloudFilesLocalStorage.PlaceholderState(path):X}; original error 0x{error.HResult:X8}",error);}
     Check(await File.ReadAllTextAsync(path) == "saved revision", "conversion retained complete saved body");
     var deletion = FixtureClient.Run($"[System.IO.File]::Delete({FixtureClient.PathArgument(path)})");
     Check(!deletion.Succeeded && await File.ReadAllTextAsync(path) == "saved revision", "converted saved file rejects deletion");

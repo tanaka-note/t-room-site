@@ -1,3 +1,4 @@
+import { handleWindowsCatalog } from './windows-catalog.js';
 const ORIGIN = 'https://tanaka-note.com';
 const PURPOSE = 'T-ROOM Cloud Storage Windows device authorization v1';
 const encoder = new TextEncoder();
@@ -151,7 +152,7 @@ async function access(request, env, deps) {
   return { row, ...await checkDevice(env, row, deps) };
 }
 export function windowsDataRoute(path, method) {
-  return method === 'GET' && (/^\/api\/(items|crypto-config)$/.test(path) || /^\/api\/files\/[1-9]\d*(\/download)?$/.test(path))
+  return method === 'GET' && (/^\/api\/(items|crypto-config)$/.test(path) || /^\/api\/files\/[1-9]\d*$/.test(path))
     || method === 'POST' && (/^\/api\/(uploads|folders)$/.test(path) || /^\/api\/uploads\/[1-9]\d*\/complete$/.test(path))
     || method === 'PUT' && /^\/api\/uploads\/[1-9]\d*\/parts\/[1-9]\d*$/.test(path)
     || method === 'PATCH' && /^\/api\/(files|folders)\/[1-9]\d*$/.test(path)
@@ -191,6 +192,8 @@ export async function handleWindowsSync(request, env, url, path, deps) {
     }
     if (route === '/token' && request.method === 'POST') return await proof(request, env, deps, 'renew');
     const auth = await access(request, env, deps);
+    if(route.startsWith('/catalog/')||route.startsWith('/content/'))
+      return await handleWindowsCatalog(request,env,url,route,auth.binding);
     if (route === '/keys' && request.method === 'GET') return json({ scopeHash: auth.row.scope_hash,
       folderKeys: auth.authority.folderKeys, rootFolderId: auth.binding.rootFolderId, folderScopes: auth.binding.folderScopes || null });
     if (route === '/revoke' && request.method === 'POST') {

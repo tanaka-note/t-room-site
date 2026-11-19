@@ -19,3 +19,18 @@ test(`${service} backup accepts only the exact optional Windows authorization sc
     await assert.rejects(assertSchema(service,schema()),/SchemaReviewRequired/);
   } finally {db.close();}
 });
+test('catalog DDL is pinned separately and cannot silently approve the pre-existing trash cutover schema',async()=>{
+  const db=database('cloud');
+  try {
+    const query="SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY type,name";
+    const baseline=db.prepare(query).all();
+    for(const migration of ['0013_safe_trash_retention.sql','0014_windows_device_grants.sql','0015_windows_sync_catalog.sql'])
+      db.exec(readFileSync(new URL('../../cloud-worker/migrations/'+migration,import.meta.url),'utf8'));
+    const windows=db.prepare(query).all().filter(row=>row.name.startsWith('cloud_windows_'));
+    const combined=[...baseline,...windows].sort((a,b)=>a.type.localeCompare(b.type)||a.name.localeCompare(b.name));
+    await assertSchema('cloud',combined);
+    await assert.rejects(assertSchema('cloud',combined.filter(row=>row.name!=='cloud_windows_file_delete')),/SchemaReviewRequired/);
+    await assert.rejects(assertSchema('cloud',db.prepare(query).all()),/SchemaReviewRequired/,
+      'the independent 0013 backup/restore cutover still needs its own reviewed durable-data specification');
+  } finally {db.close();}
+});

@@ -112,7 +112,7 @@ export function affected(paths) {
       || /^tools\/password-auth/.test(path)) add('auth');
     if (/^cloud-worker\/public\/(crypto-vault|vendor\/argon2)/.test(path)) add('security', 'auth');
     if (path === 'cloud-worker/public/crypto-vault.js') add('tcloud-windows');
-    if (['cloud-worker/src/windows-sync.js', 'security-worker/src/windows-device-context.js'].includes(path)) add('tcloud-windows');
+    if (['cloud-worker/src/windows-sync.js', 'cloud-worker/src/windows-catalog.js', 'security-worker/src/windows-device-context.js'].includes(path)) add('tcloud-windows');
     // Registry build dependencies are the authoritative cross-service asset map.
     for (const app of registry.apps) {
       if ((app.buildFiles || []).includes(path) || (app.buildRoots || []).some(d => path.startsWith(`${d}/`))) {

@@ -30,7 +30,11 @@ public sealed class WindowsDeviceClient : IDisposable
     public static HttpClient CreateTransport() => new(new HttpClientHandler { AllowAutoRedirect=false, UseCookies=false })
     { Timeout=TimeSpan.FromMinutes(10) };
 
-    public async Task<HttpResponseMessage> SendDataAsync(string route, HttpMethod method,
+    public Task<HttpResponseMessage> SendDataAsync(string route, HttpMethod method,
+        Func<HttpContent>? content = null, Action<HttpRequestMessage>? configure = null, CancellationToken token = default)
+        => SendAsync("data/"+route,method,content,configure,token);
+
+    public async Task<HttpResponseMessage> SendAsync(string route, HttpMethod method,
         Func<HttpContent>? content = null, Action<HttpRequestMessage>? configure = null, CancellationToken token = default)
     {
         ObjectDisposedException.ThrowIf(disposed,this);
@@ -38,9 +42,9 @@ public sealed class WindowsDeviceClient : IDisposable
         for (var attempt=0; attempt<2; attempt++)
         {
             await EnsureAccessAsync(attempt!=0, token);
-            using var request = new HttpRequestMessage(method, BaseUrl + "data/" + route) { Content=content?.Invoke() };
+            using var request = new HttpRequestMessage(method, BaseUrl + route) { Content=content?.Invoke() };
             configure?.Invoke(request);
-            ValidateDestination(request.RequestUri, "data/");
+            ValidateDestination(request.RequestUri, route.Split('/')[0]+(route.Contains('/')?"/":""));
             request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",accessToken);
             var response = await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,token);
             if (response.StatusCode!=HttpStatusCode.Unauthorized) return response;
@@ -56,10 +60,7 @@ public sealed class WindowsDeviceClient : IDisposable
     {
         ObjectDisposedException.ThrowIf(disposed,this);
         using var linked=CancellationTokenSource.CreateLinkedTokenSource(token,lifetime.Token);token=linked.Token;
-        await EnsureAccessAsync(false, token);
-        using var request=new HttpRequestMessage(HttpMethod.Get,BaseUrl+"keys");
-        request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",accessToken);
-        using var response=await client.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,token);
+        using var response=await SendAsync("keys",HttpMethod.Get,token:token);
         var value=await ReadJsonAsync(response,token);
         RequireSuccess(response,value);
         if (value.GetProperty("scopeHash").GetString()!=registration.ScopeHash) throw new CryptographicException("同期範囲が登録と一致しません。");
@@ -110,9 +111,9 @@ public sealed class WindowsDeviceClient : IDisposable
             throw new WindowsDeviceRevokedException();
         throw new HttpRequestException("同期APIで確認を完了できませんでした。",null,response.StatusCode);
     }
-    internal static async Task<JsonElement> ReadJsonAsync(HttpResponseMessage response,CancellationToken token)
+    internal static async Task<JsonElement> ReadJsonAsync(HttpResponseMessage response,CancellationToken token,int maxBytes=65536)
     {
-        await response.Content.LoadIntoBufferAsync(65536,token);
+        await response.Content.LoadIntoBufferAsync(maxBytes,token);
         using var document=JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(token));return document.RootElement.Clone();
     }
     private static void ValidateDestination(Uri? destination,string suffix)

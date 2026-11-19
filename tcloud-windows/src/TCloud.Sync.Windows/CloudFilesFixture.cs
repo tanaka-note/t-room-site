@@ -57,7 +57,7 @@ public sealed class CloudFilesFixture : IDisposable
                 Hydration = new() { Primary = (ushort)(requireFullHydration ? 2 : 1) }, // FULL / PROGRESSIVE
                 Population = new() { Primary = 3 } // ALWAYS_FULL namespace
             };
-            CloudFilesNative.Check(CloudFilesNative.CfRegisterSyncRoot(root, registration, policies, 0));
+            CloudFilesNative.Check(CloudFilesNative.CfRegisterSyncRoot(root, registration, policies, 2 /* complete namespace */));
             registered = true;
             var callbacks = new List<CloudFilesNative.CallbackRegistration>
             {
@@ -137,11 +137,8 @@ public sealed class CloudFilesFixture : IDisposable
         data[identity] = bytes;
         try
         {
-            using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete);
-            var identityBytes = Encoding.UTF8.GetBytes(identity);
             // Preserve the complete local body; never mark a new edit uploaded or dehydrate it.
-            CloudFilesNative.Check(CloudFilesNative.CfConvertToPlaceholder(handle, identityBytes, (uint)identityBytes.Length,
-                8 /* ALWAYS_FULL */, out _, 0));
+            CloudFilesLocalStorage.ConvertSavedBody(path,identity);
         }
         catch { data.TryRemove(identity, out _); CryptographicOperations.ZeroMemory(bytes); throw; }
     }

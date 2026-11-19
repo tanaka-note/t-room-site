@@ -6,7 +6,7 @@ using TCloud.Sync.Core;
 namespace TCloud.Sync.Windows;
 
 public sealed record WindowsDeviceRegistration(int Version, string DeviceId, string ScopeHash,
-    string SigningKeyId, string DataKeyId, string Destination, VolumeBinding Volume);
+    string SigningKeyId, string DataKeyId, string Destination, VolumeBinding Volume, long? RootFileId = null);
 
 /// <summary>PC-only DPAPI record. Contains no bearer token, Cookie or exported private key.</summary>
 public sealed class WindowsDeviceRegistrationFile
@@ -63,7 +63,7 @@ public sealed class WindowsDeviceRegistrationFile
         static bool Hex(string text, int length) => text.Length == length && text.All(char.IsAsciiHexDigit);
         if (value.Version != 1 || !Guid.TryParseExact(value.DeviceId, "N", out _) || !Hex(value.ScopeHash,64)
             || !Hex(value.SigningKeyId,64) || !Hex(value.DataKeyId,64) || value.SigningKeyId == value.DataKeyId
-            || !Path.IsPathFullyQualified(value.Destination) || string.IsNullOrWhiteSpace(value.Volume.GuidPath)
+            || value.RootFileId==0 || !Path.IsPathFullyQualified(value.Destination) || string.IsNullOrWhiteSpace(value.Volume.GuidPath)
             || Path.IsPathRooted(value.Volume.RelativeRoot) || value.Volume.RelativeRoot.Split('\\','/').Any(part => part is "" or "." or ".."))
             throw new InvalidDataException("端末登録情報の形式が不正です。");
     }

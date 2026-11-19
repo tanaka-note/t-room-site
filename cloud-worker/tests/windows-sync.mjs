@@ -108,6 +108,76 @@ test('transient failures keep the grant, but authority changes or RSA key change
   assert.equal((await call('/revoke','POST',{},third.authorization)).status,200);
   assert.equal((await call('/challenge','POST',{deviceId:third.token.deviceId})).status,401);
 });
+test('catalog snapshots catch concurrent changes and preserve scope after parent moves; absence is not a tombstone',async()=>{
+  const device=await register();
+  const start=(await call('/catalog/start','GET',undefined,device.authorization)).body;
+  const query=`?epoch=${start.epoch}&until=${start.cursor}`;
+  const snapshot=await call('/catalog/snapshot'+query,'GET',undefined,device.authorization);
+  assert.equal(snapshot.status,200,JSON.stringify(snapshot.body));
+  assert.deepEqual(snapshot.body.items.filter(i=>i.kind==='file').map(i=>i.id),[1]);
+  assert.deepEqual(snapshot.body.items.filter(i=>i.kind==='folder').map(i=>i.id).sort(),[7,8]);
+  assert.equal(JSON.stringify(snapshot.body).includes('objectKey'),false);
+  db.exec("UPDATE cloud_files SET original_name='concurrent name' WHERE id=1");
+  const changes=await call(`/catalog/changes?epoch=${start.epoch}&after=${start.cursor}`,'GET',undefined,device.authorization);
+  assert.equal(changes.body.items.find(i=>i.id===1&&i.kind==='file').value.name,'concurrent name');
+  db.exec('UPDATE cloud_files SET folder_id=8 WHERE id=1; UPDATE cloud_folders SET parent_id=9 WHERE id=8');
+  const moved=await call(`/catalog/snapshot?epoch=${start.epoch}`,'GET',undefined,device.authorization);
+  assert.equal(moved.body.items.some(i=>i.id===1&&i.kind==='file'),false,'current ancestor scope wins over the stored old chain');
+  assert.equal(moved.body.items.some(i=>i.state==='trashed'),false,'leaving a scope is never an instruction to delete local plaintext');
+  db.exec("UPDATE cloud_folders SET parent_id=7 WHERE id=8; UPDATE cloud_files SET folder_id=7,original_name='own.txt' WHERE id=1");
+  assert.equal((await call('/catalog/snapshot?epoch=wrong','GET',undefined,device.authorization)).body.code,'catalog_reset');
+});
+
+test('Windows content pins the first range to metadata and the captured object, and verified Web trash emits explicit tombstones',async()=>{
+  const device=await register();
+  const originalGet=env.FILES.get;
+  db.exec('UPDATE cloud_files SET encrypted_size_bytes=65 WHERE id=1');
+  let revision=db.prepare("SELECT seq FROM cloud_windows_heads WHERE kind='file' AND entity_id=1").get().seq;
+  const content=async expected=>context.worker.fetch(new Request('https://tanaka-note.com/cloud/api/windows-sync/content/1',{
+    headers:{...device.authorization,Range:'bytes=0-32','X-TCloud-Revision':String(expected)}}),env,{waitUntil(){}});
+  env.FILES.get=async(key,options)=>{
+    assert.equal(key,'own','the checked immutable body pointer is captured before fetching');
+    assert.deepEqual(options.range,{offset:0,length:33});
+    db.exec("UPDATE cloud_files SET object_key='new-version' WHERE id=1");
+    return {size:65,range:{offset:0,length:33},httpEtag:'"original"',body:new Uint8Array(33)};
+  };
+  try {
+    const response=await content(revision);assert.equal(response.status,206);assert.equal((await response.arrayBuffer()).byteLength,33);
+    const stale=await content(revision);assert.equal(stale.status,409);assert.equal((await stale.json()).code,'revision_changed');
+    assert.equal((await call('/data/files/1/download','GET',undefined,device.authorization)).status,403,'no unpinned native body path');
+  } finally {env.FILES.get=originalGet;db.exec("UPDATE cloud_files SET object_key='own',encrypted_size_bytes=NULL WHERE id=1");}
+  const admin=await handoff('admin');
+  const before=(await call('/catalog/start','GET',undefined,device.authorization)).body;
+  assert.equal((await api(admin.cookie,'/files/1','DELETE',undefined,{'X-TCloud-Session':admin.body.sessionCacheId})).status,200);
+  const deleted=await call(`/catalog/changes?epoch=${before.epoch}&after=${before.cursor}`,'GET',undefined,device.authorization);
+  const tombstone=deleted.body.items.find(i=>i.kind==='file'&&i.id===1);
+  assert.equal(tombstone.state,'trashed');assert.ok(tombstone.trashOperationId);assert.ok(tombstone.deletedAt);
+  assert.equal(tombstone.value,undefined,'trash feed discloses no old key or encrypted metadata');
+  assert.throws(()=>db.exec('DELETE FROM cloud_files WHERE id=1'),/trash_purge_not_confirmed/);
+  assert.equal(db.prepare("SELECT seq FROM cloud_windows_heads WHERE kind='file' AND entity_id=1").get().seq,tombstone.revision,
+    'an aborted physical deletion rolls back its proposed tombstone');
+  assert.equal((await content(tombstone.revision)).status,404,'trash cannot be downloaded through an old device body reference');
+  assert.equal((await api(admin.cookie,'/files/1/restore','POST',{}, {'X-TCloud-Session':admin.body.sessionCacheId})).status,200);
+  const restored=await call(`/catalog/changes?epoch=${before.epoch}&after=${tombstone.revision}`,'GET',undefined,device.authorization);
+  assert.equal(restored.body.items.find(i=>i.kind==='file'&&i.id===1).state,'present');
+});
+
+test('catalog pagination advances over hidden rows without losing allowed originals',async()=>{
+  const device=await register();
+  const insert=db.prepare("INSERT INTO cloud_files(id,folder_id,object_key,original_name,mime_type,media_kind,size_bytes,status,created_by) VALUES(?,7,?,'fixture.txt','text/plain','document',1,'ready','member')");
+  try {
+    for(let i=0;i<205;i++)insert.run(10000+i,'catalog-fixture-'+i);
+    const start=(await call('/catalog/start','GET',undefined,device.authorization)).body;
+    let next=0,complete=false;const files=[];
+    while(!complete) {
+      const result=await call(`/catalog/snapshot?epoch=${start.epoch}&until=${start.cursor}&after=${next}`,'GET',undefined,device.authorization);
+      assert.equal(result.status,200);assert.ok(result.body.next>next);next=result.body.next;complete=result.body.complete;
+      files.push(...result.body.items.filter(i=>i.kind==='file').map(i=>i.id));
+    }
+    assert.equal(files.length,206);assert.equal(new Set(files).size,206);assert.ok(!files.includes(2)&&!files.includes(3)&&!files.includes(4));
+  } finally {db.exec('DELETE FROM cloud_files WHERE id BETWEEN 10000 AND 10204');}
+});
+
 test('feature-off is closed and native routes never authorize passkey, crypto setup, sharing or trash changes',async()=>{
   env.WINDOWS_SYNC_ENABLED='false';
   assert.equal((await call('/challenge','POST',{})).status,503);env.WINDOWS_SYNC_ENABLED='true';

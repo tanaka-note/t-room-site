@@ -20,15 +20,14 @@ internal static class ProviderTests
             var registration=new WindowsDeviceRegistration(1,Guid.NewGuid().ToString("N"),Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
                 Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),directory,
                 VolumeInspector.ValidateDestination(directory,[]));
-            mounted=CloudFilesRootRegistration.Attach(registration,[]);
+            mounted=CloudFilesRootRegistration.Attach(registration,[],initialize:true);
             var identity=Convert.ToHexString(SHA256.HashData(ciphertext));var fetches=0;
             using(var provider=new CloudFilesProvider(mounted,async(id,progress,token)=>
             {
                 Check(id==identity,"callback uses the registered version identity");Interlocked.Increment(ref fetches);
-                await using var reader=new EncryptedFileReader(layout,key,new CipherSource(ciphertext));
-                var complete=new byte[plain.Length];
-                Check(await reader.ReadAsync(0,complete,token)==plain.Length,"all encrypted chunks are authenticated before exposure");
-                progress.Report(plain.Length);return new MemoryStream(complete,writable:false);
+                var complete=await OriginalStager.DownloadAsync(Path.Combine(outer,"staging"),layout,key,new CipherSource(ciphertext),progress,token);
+                Check(complete.Sha256==Convert.ToHexString(SHA256.HashData(plain)),"the complete staged original matches the baseline hash");
+                return complete.Body;
             }))
             {
                 provider.Add("fixture.bin",plain.Length,identity);
@@ -46,6 +45,7 @@ internal static class ProviderTests
                 Check(provider.Errors.IsEmpty,string.Join(",",provider.Errors.Select(e=>e.GetType().Name+":"+e.Message)));
             }
             Check((await HydrationProbe.ReadAsync(Path.Combine(directory,"fixture.bin"),plain)).Succeeded,"saved body needs neither the provider nor authentication");
+            Check(!Directory.EnumerateFiles(Path.Combine(outer,"staging")).Any(),"the verified staging copy is released after installation; the original remains");
             mounted.UnregisterPreservingOriginals();mounted=null;
             Check(File.ReadAllBytes(Path.Combine(directory,"fixture.bin")).AsSpan().SequenceEqual(plain),"unlink leaves the original plaintext intact");
         }
@@ -54,6 +54,26 @@ internal static class ProviderTests
             mounted?.UnregisterPreservingOriginals();CryptographicOperations.ZeroMemory(plain);CryptographicOperations.ZeroMemory(key);
             Directory.Delete(outer,true);
         }
+    }
+    public static async Task FailedStage()
+    {
+        var outer=Path.Combine(Path.GetTempPath(),"tcloud-stage-test-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(outer);
+        var key=RandomNumberGenerator.GetBytes(32);var plain=RandomNumberGenerator.GetBytes(8195);
+        try
+        {
+            var cipher=EncryptedChunks.Encrypt(key,plain.AsSpan(0,4096),0)
+                .Concat(EncryptedChunks.Encrypt(key,plain.AsSpan(4096,4096),1))
+                .Concat(EncryptedChunks.Encrypt(key,plain.AsSpan(8192),2)).ToArray();
+            cipher[^1]^=1;
+            try {await using var unexpected=await OriginalStager.DownloadAsync(outer,new(plain.Length,4096,3,cipher.Length),key,new CipherSource(cipher));throw new InvalidOperationException("Corrupt original was exposed");}
+            catch(CryptographicException) { }
+            Check(!Directory.EnumerateFiles(outer).Any(),"a late authentication failure exposes no partial original and releases its staging file");
+            using var cancel=new CancellationTokenSource();cancel.Cancel();
+            try {await using var unexpected=await OriginalStager.DownloadLegacyAsync(outer,cipher.Length,new CipherSource(cipher),token:cancel.Token);throw new InvalidOperationException("Canceled original was exposed");}
+            catch(OperationCanceledException) { }
+            Check(!Directory.EnumerateFiles(outer).Any(),"cancellation never publishes a partial file");
+        }
+        finally {CryptographicOperations.ZeroMemory(key);CryptographicOperations.ZeroMemory(plain);Directory.Delete(outer,true);}
     }
     private sealed class CipherSource(byte[] value):IEncryptedRangeSource
     {

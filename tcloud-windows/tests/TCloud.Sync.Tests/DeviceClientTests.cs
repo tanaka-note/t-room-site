@@ -30,12 +30,22 @@ internal static class DeviceClientTests
             {
                 await Task.WhenAll(Enumerable.Range(0,6).Select(async _=>{using var response=await client.SendDataAsync("items",HttpMethod.Get);Check(response.IsSuccessStatusCode,"authorized data access");}));
                 Check(handler.Proofs==1,"concurrent first requests share one device proof");
-                var source=new CloudContentSource(client,17,128);
+                var source=new CloudContentSource(client,17,128,91);
                 var ciphertext=await source.ReadAsync(16,64,"\"fixture-version\"",CancellationToken.None);
                 Check(ciphertext.Ciphertext.Length==64 && ciphertext.Ciphertext.All(value=>value==42),"ciphertext ranges use automatic device authorization");
                 handler.ExpireNext=true;
                 using var retried=await client.SendDataAsync("items",HttpMethod.Get);
                 Check(retried.IsSuccessStatusCode && handler.Proofs==2,"server expiry renews once without passkey input");
+                var catalog=new WindowsCatalogClient(client);
+                var start=await catalog.StartAsync();
+                var page=await catalog.PageAsync(start,0,true);
+                Check(page.Complete&&page.Items.Single().Id==17,"snapshot requests share the independently renewed device transport");
+                handler.BadCursor=true;
+                await ThrowsAsync<InvalidDataException>(async()=>{await catalog.PageAsync(start,0,true);});
+                handler.BadCursor=false;handler.ResetCatalog=true;
+                await ThrowsAsync<WindowsCatalogResetException>(async()=>{await catalog.PageAsync(start,0,true);});
+                handler.ResetCatalog=false;
+                Check((await client.ReadKeysAsync()).GetProperty("scopeHash").GetString()==registration.ScopeHash,"key envelopes stay bound to the enrolled scope");
                 await ThrowsAsync<ArgumentException>(async()=>{using var response=await client.SendDataAsync("https://attacker.test",HttpMethod.Get,
                     configure:request=>request.RequestUri=new Uri("https://attacker.test/"));});
             }
@@ -62,10 +72,11 @@ internal static class DeviceClientTests
         }
         finally {WindowsDeviceKey.Delete(key);Directory.Delete(directory,true);}
     }
-    private sealed class DeviceHandler(WindowsDeviceRegistration registration):HttpMessageHandler
+    internal sealed class DeviceHandler(WindowsDeviceRegistration registration):HttpMessageHandler
     {
-        public int Proofs; public bool ExpireNext;public bool Unavailable;public bool Revoked;public bool WrongScope;
+        public int Proofs; public bool ExpireNext;public bool Unavailable;public bool Revoked;public bool WrongScope;public bool BadCursor;public bool ResetCatalog;
         private WindowsDeviceChallenge? challenge;
+        public Func<HttpRequestMessage,HttpResponseMessage?>? Data;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token)
         {
             Check(request.RequestUri!.AbsoluteUri.StartsWith(WindowsDeviceClient.BaseUrl,StringComparison.Ordinal),"fixed destination");
@@ -96,14 +107,23 @@ internal static class DeviceClientTests
                     accessToken=Encode(RandomNumberGenerator.GetBytes(32)),expiresAt=DateTimeOffset.UtcNow.AddMinutes(15).ToUnixTimeSeconds()});
             }
             Check(request.Headers.Authorization?.Scheme=="Bearer","data request uses Windows access token");
-            if(route=="data/files/17/download")
+            if(ExpireNext){ExpireNext=false;return Response(HttpStatusCode.Unauthorized,new {code="access_expired"});}
+            if(Data?.Invoke(request) is {} data)return data;
+            if(route=="content/17")
             {
+                Check(request.Headers.GetValues("X-TCloud-Revision").Single()=="91","the first body is pinned to its metadata revision");
                 Check(request.Headers.Range?.ToString()=="bytes=16-79" && request.Headers.IfMatch.Single().Tag=="\"fixture-version\"","range and version survive authorization");
                 var ranged=new HttpResponseMessage(HttpStatusCode.PartialContent){Content=new ByteArrayContent(Enumerable.Repeat((byte)42,64).ToArray())};
                 ranged.Content.Headers.ContentRange=new System.Net.Http.Headers.ContentRangeHeaderValue(16,79,128);
                 ranged.Headers.ETag=new System.Net.Http.Headers.EntityTagHeaderValue("\"fixture-version\"");return ranged;
             }
-            if(ExpireNext){ExpireNext=false;return Response(HttpStatusCode.Unauthorized,new {code="access_expired"});}
+            if(route=="catalog/start")return Response(HttpStatusCode.OK,new {epoch=new string('a',32),cursor=91});
+            if(route.StartsWith("catalog/snapshot?",StringComparison.Ordinal))
+            {
+                if(ResetCatalog)return Response(HttpStatusCode.Conflict,new {code="catalog_reset"});
+                return Response(HttpStatusCode.OK,new {epoch=new string('a',32),until=91,next=91,complete=!BadCursor,
+                    items=new[]{new {kind="file",id=17,revision=91,state="present",value=new {name="fixture"}}}});
+            }
             return Response(HttpStatusCode.OK,new {scopeHash=registration.ScopeHash});
         }
         private static HttpResponseMessage Response(HttpStatusCode status,object body)=>new(status){Content=JsonContent.Create(body)};

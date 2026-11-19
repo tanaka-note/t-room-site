@@ -8,7 +8,7 @@ import { handleYouTubeSearchRequest } from "./youtube-search.js";
 import { handleWindowsSync, cleanupWindowsSync } from "./windows-sync.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-f91d02bf629e";
+const APP_BUILD_ID = "cloud-1b30459f5c46";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";

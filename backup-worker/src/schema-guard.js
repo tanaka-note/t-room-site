@@ -37,10 +37,10 @@ export async function assertSchema(service, rows) {
     : service==='cloud' ? row=>row.name.startsWith('cloud_windows_') : ()=>false;
   const windowsRows=rows.filter(windows);
   if(windowsRows.length) {
-    const expected=service==='security'?'953eaa6945a4f7dd167e467de9d500ff32c5ac304dce6d829683ccfcad088a8d'
-      :'1daa6b05da32595f44478904b056c787f3c0cd6ac6cbb1551840f79d495d90e9';
+    const expected=service==='security'?['953eaa6945a4f7dd167e467de9d500ff32c5ac304dce6d829683ccfcad088a8d']
+      :['1daa6b05da32595f44478904b056c787f3c0cd6ac6cbb1551840f79d495d90e9','7ff775cfcf278592dc53ed51bbca522ec6731468ce57f5de17f1bd354606c0e4'];
     const shape=windowsRows.map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
-    if(await digest(new TextEncoder().encode(JSON.stringify(shape)))!==expected)throw new Error('SchemaReviewRequired');
+    if(!expected.includes(await digest(new TextEncoder().encode(JSON.stringify(shape)))))throw new Error('SchemaReviewRequired');
     rows=rows.filter(row=>!windows(row));
   }
   const extension = service==='billing' ? name => /^billing_(encryption|candidate|freeze)_/.test(name)

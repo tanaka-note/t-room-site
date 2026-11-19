@@ -146,6 +146,13 @@ try {
 // Audit every tracked/new text file, not just selected HTML pages. Keep narrow
 // exceptions for compatibility, migration history, and internal test diagnostics.
 const allowed = {
+  // These fixed protocol transcripts/AAD must interoperate with existing ciphertext.
+  "cloud-worker/src/windows-sync.js": /^const PURPOSE = 'T-ROOM Cloud Storage Windows device authorization v1';$/,
+  "tcloud-windows/src/TCloud.Sync.Core/CloudFileCrypto.cs": /private const string \w+Context = "T-ROOM Cloud Storage [^"]+";/,
+  "tcloud-windows/src/TCloud.Sync.Core/EncryptedChunks.cs": /Encoding.UTF8.GetBytes\(\$"T-ROOM Cloud Storage file chunk v1\|\{index\}"\)/,
+  "tcloud-windows/src/TCloud.Sync.Windows/PasskeyEnvelope.cs": /"T-ROOM Cloud Storage passkey (admin|client) private key v1"/,
+  "tcloud-windows/src/TCloud.Sync.Windows/WindowsDeviceKey.cs": /Encoding.UTF8.GetBytes\("T-ROOM Cloud Storage Windows device authorization v1\\n"/,
+  "tcloud-windows/tests/webcrypto-interop.mjs": /const message = \['T-ROOM Cloud Storage Windows device authorization v1',/,
   "diary-worker/e2ee/tcloud-recovery.mjs": /context='T-ROOM Cloud Storage passkey admin private key v1'/,
   "diary-worker/public/crypto/e2ee/tcloud-recovery.mjs": /context='T-ROOM Cloud Storage passkey admin private key v1'/,
   "diary-worker/tests/e2ee/passkey-trust.test.mjs": /context='T-ROOM Cloud Storage admin private key v1'/,

@@ -15,11 +15,12 @@ public sealed class CloudFilesRootRegistration
     private readonly byte[] identity;
     private readonly VolumeBinding volume;
     public string Root { get; }
+    public long FileId => DirectoryFileId(Root);
 
     private CloudFilesRootRegistration(string root,VolumeBinding volume,byte[] identity)
     {Root=root;this.volume=volume;this.identity=identity;}
 
-    public static CloudFilesRootRegistration Attach(WindowsDeviceRegistration registration,IEnumerable<string> otherSyncRoots)
+    public static CloudFilesRootRegistration Attach(WindowsDeviceRegistration registration,IEnumerable<string> otherSyncRoots,bool initialize=false)
     {
         var root=ResolveDestination(registration);
         var actual=VolumeInspector.ValidateDestination(root,otherSyncRoots);
@@ -27,13 +28,17 @@ public sealed class CloudFilesRootRegistration
         var identity=SHA256.HashData(Encoding.UTF8.GetBytes("TCloud.Windows.Root.v1\n"+registration.ScopeHash+"\n"
             +actual.GuidPath.ToUpperInvariant()+"\n"+actual.SerialNumber.ToString(CultureInfo.InvariantCulture)+"\n"+actual.RelativeRoot.ToUpperInvariant()));
         var result=new CloudFilesRootRegistration(root,actual,identity);
+        if(registration.RootFileId is null && !initialize)throw new IOException("保存先の初期登録が必要です。");
+        if(registration.RootFileId is { } expected && (!Directory.Exists(root)||DirectoryFileId(root)!=expected))
+            throw new IOException("保存先フォルダが移動または置換されています。自動で作り直しません。");
         Directory.CreateDirectory(root);
         var existing=ReadInfo(root);
         if(existing is not null)
         {
-            result.ValidateOwner(existing);return result;
+            result.ValidateOwner(existing);
         }
-        if(Directory.EnumerateFileSystemEntries(root).Any())throw new IOException("初回は空のT-Cloud専用フォルダを選択してください。既存ファイルは変更しません。");
+        else if(registration.RootFileId is null && Directory.EnumerateFileSystemEntries(root).Any())
+            throw new IOException("初回は空のT-Cloud専用フォルダを選択してください。既存ファイルは変更しません。");
         var memory=Marshal.AllocHGlobal(identity.Length);
         try
         {
@@ -43,7 +48,9 @@ public sealed class CloudFilesRootRegistration
                 SyncRootIdentity=memory,SyncRootIdentityLength=(uint)identity.Length};
             var policies=new CloudFilesNative.Policies {StructSize=(uint)Marshal.SizeOf<CloudFilesNative.Policies>(),
                 Hydration=new(){Primary=2},Population=new(){Primary=3}};
-            CloudFilesNative.Check(CloudFilesNative.CfRegisterSyncRoot(root,native,policies,0));
+            // Reapply only to this exact owned registration. Older development
+            // roots may have omitted the explicit complete-namespace flag.
+            CloudFilesNative.Check(CloudFilesNative.CfRegisterSyncRoot(root,native,policies,2u|(existing is null?0u:1u)));
         }
         finally {Marshal.FreeHGlobal(memory);}
         result.ValidateOwner(ReadInfo(root)??throw new IOException("同期フォルダの登録を確認できません。"));return result;
@@ -51,8 +58,9 @@ public sealed class CloudFilesRootRegistration
 
     public void VerifyPresent()
     {
-        if(!VolumeInspector.IsExpectedVolumePresent(Root,volume))throw new IOException("登録した保存先が接続されていません。");
+        if(!Directory.Exists(Root)||!VolumeInspector.IsExpectedVolumePresent(Root,volume))throw new IOException("登録した保存先が接続されていません。");
         VolumeInspector.ValidateDestination(Root,[]);
+        ValidateOwner(ReadInfo(Root)??throw new IOException("同期登録が変更されています。"));
     }
     // Only an explicit local unlink/uninstall uses this. It leaves every body in place.
     public void UnregisterPreservingOriginals()
@@ -62,13 +70,15 @@ public sealed class CloudFilesRootRegistration
     }
     public static string ResolveDestination(WindowsDeviceRegistration registration)
     {
-        if(VolumeInspector.IsExpectedVolumePresent(registration.Destination,registration.Volume))return Path.GetFullPath(registration.Destination);
+        bool Matches(string path)=>VolumeInspector.IsExpectedVolumePresent(path,registration.Volume)
+            && (registration.RootFileId is null || Directory.Exists(path)&&DirectoryFileId(path)==registration.RootFileId);
+        if(Matches(registration.Destination))return Path.GetFullPath(registration.Destination);
         foreach(var drive in DriveInfo.GetDrives().Where(d=>d.DriveType==DriveType.Fixed))
         {
             try
             {
                 var candidate=Path.Combine(drive.RootDirectory.FullName,registration.Volume.RelativeRoot);
-                if(VolumeInspector.IsExpectedVolumePresent(candidate,registration.Volume))return candidate;
+                if(Matches(candidate))return candidate;
             }
             catch(Exception error)when(error is IOException or Win32Exception or UnauthorizedAccessException) { }
         }
