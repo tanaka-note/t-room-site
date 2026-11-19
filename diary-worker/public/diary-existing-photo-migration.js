@@ -12,6 +12,9 @@ const equal = (a,b) => b64(encode(a))===b64(encode(b));
 const hash = async blob => b64(await crypto.subtle.digest('SHA-256',await blob.arrayBuffer()));
 const partBinding = (row,run,kind) => ({...mediaBinding(row),sourceId:run,kind:`photo-migration-${kind}`});
 const phase = (status,message) => Object.assign(new Error(message),{status});
+const retryDelays=[1000,2000,4000,8000,16000,32000,60000];
+const retryableConflicts=new Set(['PhotoMigrationBusy','PhotoMigrationLeaseLost','PhotoMigrationEntriesChanged']);
+const requiresAuthentication=error=>[401,403,428].includes(error.status);
 
 export function migrationTransport(nativeFetch,token) {
   return async (path,{method='GET',body,signal,binary=false,optional=false,keepalive=false}={}) => {
@@ -27,6 +30,47 @@ export function migrationTransport(nativeFetch,token) {
     }
     return binary?reply:reply.json();
   };
+}
+
+function waitForRetry(delay,signal) {
+  signal.throwIfAborted();
+  return new Promise((resolve,reject)=>{
+    const abort=()=>{clearTimeout(timer);reject(signal.reason);};
+    const timer=setTimeout(()=>{signal.removeEventListener('abort',abort);resolve();},delay);
+    signal.addEventListener('abort',abort,{once:true});
+  });
+}
+
+async function withMigrationLease(send,signal,operation) {
+  signal.throwIfAborted();
+  const controller=new AbortController(),attemptSignal=controller.signal;
+  const abort=()=>controller.abort(signal.reason);
+  signal.addEventListener('abort',abort,{once:true});
+  const api=(path,{signal:requestSignal=attemptSignal,...options}={})=>{
+    attemptSignal.throwIfAborted();requestSignal.throwIfAborted();
+    return send(root+path,{...options,signal:requestSignal});
+  };
+  const acquire=()=>api('/acquire',{method:'POST',body:{}});
+  let timer,renewal;
+  const scheduleRenewal=()=>{
+    timer=setTimeout(()=>{
+      if(attemptSignal.aborted)return;
+      renewal=acquire().catch(error=>{
+        if(requiresAuthentication(error)||error.status===409)controller.abort(error);
+      }).finally(()=>{if(!attemptSignal.aborted)scheduleRenewal();});
+    },20_000);
+  };
+  try {
+    const job=await acquire();
+    scheduleRenewal();
+    return await operation(job,api,attemptSignal);
+  } catch(error) {
+    attemptSignal.throwIfAborted();
+    throw error;
+  } finally {
+    clearTimeout(timer);controller.abort();signal.removeEventListener('abort',abort);
+    await renewal;
+  }
 }
 
 function scopeKey(kit,row) {
@@ -248,7 +292,7 @@ export function mountPhotoMigration({authenticate=()=>globalThis.TRoomPasskeys.a
       const vault=await unlockVault(auth.prfOutput,own.recipientId,own.vault);
       const kit=await openRecoveryEnvelope({packet:admin.config.recoveryEnvelope,recoveryPrivateKey:privateKey,anchor:trust.anchor,minimumGeneration:directory.generation});
       kit.authority=null;
-      unlocked={kit,privateKey,signingKey:vault.sign,trust,directory,recipientId:own.recipientId};
+      unlocked={kit,privateKey,signingKey:vault.sign,trust,directory,recipientId:own.recipientId,sessionId:session.keySession.id};
       login.hidden=true;box.hidden=false;render(current);
     }catch(error){loginMessage.textContent=error.status===403?'第一管理者の日記アカウントを選択してください。':messages[error.message]||'写真移行用の鍵を解除できませんでした。もう一度ログインしてください。';}
     finally {auth?.prfOutput?.fill(0);loginButton.disabled=false;}
@@ -257,23 +301,18 @@ export function mountPhotoMigration({authenticate=()=>globalThis.TRoomPasskeys.a
   start.addEventListener('click',async()=>{
     if(active||!unlocked)return;
     const controller=new AbortController(),signal=controller.signal;active=controller;
-    const epoch=unlocked, api=(path,{signal:requestSignal=signal,...options}={})=>{
-      signal.throwIfAborted();requestSignal.throwIfAborted();
-      return send(root+path,{...options,signal:requestSignal});
-    };
-    let heartbeat, expired=false;
+    const epoch=unlocked,canApply=last.phase==='ready',canCheck=canApply||last.phase==='checking';
+    let run=last.run,retry=0,retryUntil=0,checkingCutover=false;
     start.disabled=true;stop.hidden=false;
-    try {
-      let job=await api('/acquire',{method:'POST',body:{}});
-      heartbeat=setInterval(()=>{void api('/acquire',{method:'POST',body:{}}).catch(error=>{
-        if(error.status===401||error.status===403||error.status===428){expired=true;controller.abort();}
-        else if(error.status===409)controller.abort(new Error(error.message));
-      });},20_000);
+    const runAttempt=async (job,api,attemptSignal)=>{
+      if(run&&job.run!==run)throw phase(409,'PhotoMigrationGenerationChanged');
+      run=job.run;
       if(job.phase==='photos') {
         render(await api('/status'));
         while(true) {
           const work=await api('/next');if(!work.row)break;
-          await migratePhoto({...work,...epoch,run:job.run,send:api,signal});
+          await migratePhoto({...work,...epoch,run:job.run,send:api,signal:attemptSignal});
+          retry=0;
           const household=last.house.find(h=>h.id===work.row.household);
           household.verified++;
           household.total=Math.max(household.total,household.verified);
@@ -292,15 +331,19 @@ export function mountPhotoMigration({authenticate=()=>globalThis.TRoomPasskeys.a
           render(await api('/status'));
           return;
         }
+        if(!canApply) {render(await api('/status'));return;}
+        checkingCutover=true;
         job=await api('/apply',{method:'POST',body:{}});
       }
       if(job.phase==='checking') {
+        if(!canCheck) {render(await api('/status'));return;}
+        checkingCutover=true;
         render({...last,...job});
         const checkpoint=await api('/backup',{method:'POST',body:{}}),query='/backup?'+new URLSearchParams({checkpoint:checkpoint.checkpoint});
         let manifest;
         for(let attempt=0;attempt<200;attempt++) {
           manifest=await api(query);if(manifest.ready)break;
-          await new Promise(resolve=>setTimeout(resolve,2000));
+          await waitForRetry(2000,attemptSignal);
         }
         if(!manifest?.ready)throw new Error('PhotoMigrationBackupPending');
         const object=value=>({body:new Blob([unb64(value.bytes,24_000_000)]).stream(),customMetadata:{sha256:value.sha256}});
@@ -317,17 +360,36 @@ export function mountPhotoMigration({authenticate=()=>globalThis.TRoomPasskeys.a
         const recovered=await openRecoveryEnvelope({packet:report.recoveryEnvelope,recoveryPrivateKey:epoch.privateKey,
           anchor:epoch.trust.anchor,minimumGeneration:epoch.directory.generation});
         recovered.authority=null;
-        try {await checkPhotoMigrationRestore({report,...epoch,kit:recovered,run:job.run,sequence:job.sequence,send:api,signal});}
+        try {await checkPhotoMigrationRestore({report,...epoch,kit:recovered,run:job.run,sequence:job.sequence,send:api,signal:attemptSignal});}
         finally {recovered.scopeKeys.clear();}
         await api('/finish',{method:'POST',body:await signed({run:job.run,sequence:report.sequence,checkpoint:checkpoint.checkpoint,sha256:report.archiveSha256},epoch.signingKey)});
       }
       render(await api('/status'));
+    };
+    try {
+      while(true) {
+        try {await withMigrationLease(send,signal,runAttempt);break;}
+        catch(error) {
+          signal.throwIfAborted();
+          if(checkingCutover||error.status!==409||!retryableConflicts.has(error.message))throw error;
+          if(!retry)retryUntil=Date.now()+130_000;
+          const delay=retryDelays[retry++];
+          if(delay===undefined||Date.now()+delay>=retryUntil)throw error;
+          status.textContent='一時的な競合を検出しました。保存済みの進捗から自動で再試行します。';
+          await waitForRetry(delay,signal);
+          if(Date.now()>=retryUntil)throw error;
+          const session=await send('/session',{signal});
+          if(!session.authenticated||!session.canMigratePhotos||session.keySession?.id!==epoch.sessionId)
+            throw phase(401,'PhotoMigrationSessionChanged');
+          if(Date.now()>=retryUntil)throw error;
+        }
+      }
     }catch(error) {
-      if(expired||[401,403,428].includes(error.status)){lock();box.hidden=true;login.hidden=false;loginMessage.textContent='パスキーでログインすると、保存済みの進捗から再開できます。';}
+      if(requiresAuthentication(error)){lock();box.hidden=true;login.hidden=false;loginMessage.textContent='パスキーでログインすると、保存済みの進捗から再開できます。';}
       else status.textContent=error.name==='AbortError'?'中断しました。保存済みの進捗から再開できます。':
         messages[error.message]||(error.message==='PhotoMigrationBackupPending'?'復元用バックアップを準備中です。再開して確認してください。':'移行を中断しました。保存済みの進捗を確認して再開してください。');
     }finally {
-      clearInterval(heartbeat);await release();active=null;stop.hidden=true;start.disabled=false;
+      await release();active=null;stop.hidden=true;start.disabled=false;
     }
   });
 }
