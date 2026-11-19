@@ -1,4 +1,5 @@
 import {DIARY_READER_PROTOCOL} from '../e2ee/crypto.mjs';
+import {PHOTO_CONTEXT_HEADER, photoSessionClaims} from '../e2ee/session.mjs';
 import {createEncryptionCheckpoint,readEncryptionCheckpoint} from '../e2ee/checkpoint.mjs';
 import {investmentHousehold} from '../e2ee/investment.mjs';
 import {investmentScope,canRead as canReadEncryptedRecord} from '../e2ee/policy.mjs';
@@ -535,6 +536,7 @@ async function handleApi(request, env, url, path, context, getSession, timing) {
 
   const photoAssetMatch = path.match(/^\/api\/photos\/([0-9a-f-]{36})\/(thumbnail|display|original)$/i);
   if (photoAssetMatch && request.method === "GET") {
+    if (request.headers.has(PHOTO_CONTEXT_HEADER)) throw new HttpError(401, "写真のログイン状態を確認できません。");
     return servePhoto(photoAssetMatch[1], photoAssetMatch[2], request, env, session, url);
   }
 
@@ -615,7 +617,7 @@ function sessionSummary(session) {
     canPermanentlyDelete: Boolean(session?.canPermanentlyDelete),
     canViewInvestment: Boolean(session?.canViewInvestment),
     authMethod: session?.authMethod || null
-    ,keySession:session?.authMethod==='passkey'?{id:session.sessionId,identityId:session.identityId,credentialId:session.credentialId,serviceLinkId:session.serviceLinkId,accountId:session.accountId,version:session.accountVersion,epoch:session.passkeySessionEpoch}:null
+    ,keySession:session?.authMethod==='passkey'?photoSessionClaims(session):null
   };
 }
 

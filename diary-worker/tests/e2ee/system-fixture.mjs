@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync,readdirSync } from 'node:fs';
 import { registerHooks } from 'node:module';
-import { randomBytes,createHmac } from 'node:crypto';
+import { randomBytes,createHash,createHmac } from 'node:crypto';
 import { createVault } from '../../e2ee/crypto.mjs';
 import { prepareKeyConfiguration } from '../../e2ee/setup.mjs';
 import { diaryRecipientId,handleDiaryKeys,diaryKeyBundle,diaryAutomaticVault,diaryAutomaticManagement } from '../../../security-worker/src/diary-keys.js';
@@ -44,12 +44,15 @@ export async function systemFixture({recoveryBits=3072,recoveryExtractable=false
   const configuration=await prepareKeyConfiguration({status:{members,households:await integration.encryptionHouseholds(),config:null,recoveryPublicKey},recoveryPrivateKey:recovery.privateKey});
   await handleDiaryKeys('/api/diary/config',new Request('https://fixture.test/security/api/diary/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(configuration)}),centralEnv,{identityId:'primary-admin',credentialId:people[0].credentialId,authenticatedAt:Date.now()/1000},helpers);
   db.sqlite.prepare("UPDATE diary_e2ee_control SET phase=?,generation=?,ever_encrypted=?").run(phase,phase==="encrypted"?1:0,phase==="encrypted"?1:0);
-  env.MEDIA={put:async(key,body,metadata)=>{r2.set(key,{bytes:new Uint8Array(await new Response(body).arrayBuffer()),metadata});},get:async key=>{const value=r2.get(key);return value?{body:new Blob([value.bytes]).stream()}:null;},delete:async key=>{r2.delete(key);}};
+  env.MEDIA={put:async(key,body,metadata)=>{r2.set(key,{bytes:new Uint8Array(await new Response(body).arrayBuffer()),metadata});},get:async(key,options)=>{const value=r2.get(key);if(!value)return null;
+    const httpEtag='"'+createHash('sha256').update(value.bytes).digest('hex')+'"';
+    return options?.onlyIf?.get('If-None-Match')===httpEtag?{httpEtag}:{httpEtag,body:new Blob([value.bytes]).stream()};
+  },delete:async key=>{r2.delete(key);}};
   env.SECURITY={getDiaryKeyBundle:input=>diaryKeyBundle(centralEnv,input),validatePasskeySession:async input=>({valid:users[input.serviceAccountId]?.active===true}),passkeyRollingSession:async input=>({valid:users[input.serviceAccountId]?.active!==false,expiresAt:Math.floor(Date.now()/1000)+43200}),recordAuditEvent:async()=>({stored:true}),redeemHandoff:async token=>{const user=users[token];return user?{identityId:user.identityId,credentialId:user.credentialId,serviceLinkId:user.serviceLinkId,serviceAccountId:user.serviceAccountId,sessionEpoch:1}:null;}};
   env.SECURITY.prepareDiaryVault=input=>diaryAutomaticVault(centralEnv,input,async(_env,claims)=>({valid:users[claims.serviceAccountId]?.active===true&&claims.sessionEpoch===1&&claims.identityId===users[claims.serviceAccountId]?.identityId&&claims.credentialId===users[claims.serviceAccountId]?.credentialId}));
   env.SECURITY.manageDiaryKeys=input=>diaryAutomaticManagement(centralEnv,input,async(_env,claims)=>({valid:users[claims.serviceAccountId]?.active===true&&claims.sessionEpoch===1&&claims.identityId===users[claims.serviceAccountId]?.identityId&&claims.credentialId===users[claims.serviceAccountId]?.credentialId}));
   function cookie(accountId='main-admin',user=users[accountId]) {
-    const payload={accountId,role:user.claims.isGlobalOwner||accountId!=='main-user'?'admin':'user',version:'3',accountVersion:db.sqlite.prepare('SELECT session_version FROM diary_accounts WHERE id=?').get(accountId)?.session_version||1,authMethod:'passkey',exp:Math.floor(Date.now()/1000)+3600,startedAt:new Date().toISOString(),identityId:user.identityId,credentialId:user.credentialId,serviceLinkId:user.serviceLinkId,serviceAccountId:accountId,passkeySessionEpoch:1};
+    const payload={accountId,role:user.claims.isGlobalOwner||accountId!=='main-user'?'admin':'user',version:'3',accountVersion:db.sqlite.prepare('SELECT session_version FROM diary_accounts WHERE id=?').get(accountId)?.session_version||1,authMethod:'passkey',sessionId:user.sessionId,exp:Math.floor(Date.now()/1000)+3600,startedAt:new Date().toISOString(),identityId:user.identityId,credentialId:user.credentialId,serviceLinkId:user.serviceLinkId,serviceAccountId:accountId,passkeySessionEpoch:1};
     const encoded=Buffer.from(JSON.stringify(payload)).toString('base64url');return `troom_diary_session=${encoded}.${createHmac('sha256',env.SESSION_SECRET).update(encoded).digest('base64url')}`;
   }
   return {worker,env,db,central,centralEnv,integration,configuration,recovery,people,users,r2,wire,helpers,cookie,ctx:{waitUntil:value=>pending.push(value)},async close(){await Promise.allSettled(pending);for(const person of Object.values(users))person.prf.fill(0);db.close();central.close();}};

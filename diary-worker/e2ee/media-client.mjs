@@ -1,7 +1,13 @@
 import { open,seal } from './crypto.mjs';
 import { preferencesScope } from './policy.mjs';
 import {encryptPhotoParts,decryptPhotoPart} from './photo-crypto.mjs';
-export function createEncryptedMediaClient(client,request,nativeFetch) {
+import {PHOTO_CONTEXT_HEADER, PHOTO_FORMAT_HEADER, PHOTO_EXPIRY_HEADER, validPhotoEtag} from './session.mjs';
+
+const abortPhoto = () => new DOMException('Aborted', 'AbortError');
+const failPhoto = (status,message) => Object.assign(new Error(message),{status});
+const MAX_PHOTO_CACHE_BYTES = 24 * 1024 * 1024;
+
+export function createEncryptedMediaClient(client,request,nativeFetch,{photoContext,onPhotoExpiry=()=>{}}) {
   const pending=new Map(),cache=new Map(),loads=new Map(),controllers=new Set();
   let bytes=0,closed=false;
   const binding=(session,id,epoch)=>({household:client.household,scope:preferencesScope(client.household,client.actor.accountId),id,revision:1,epoch,kind:'photo-staging',sourceId:session});
@@ -32,40 +38,123 @@ export function createEncryptedMediaClient(client,request,nativeFetch) {
     }
     throw Object.assign(new Error('PhotoNotFound'),{status:404});
   }
+  function assertPhotoRead(generation, signal) {
+    if(signal?.aborted||generation!==client.generation||client.switching)throw abortPhoto();
+    assertCurrent(generation,signal);
+  }
+
+  function assertReferenced(id) {
+    for(const record of client.records.values())if(record.row.photoIds.includes(id))return;
+    throw failPhoto(404,'PhotoNotFound');
+  }
+
+  function rememberPhoto(identity, etag, blob) {
+    if(cache.has(identity))bytes-=cache.get(identity).blob.size;
+    cache.delete(identity);
+    if(!validPhotoEtag(etag)||blob.size>MAX_PHOTO_CACHE_BYTES)return;
+    cache.set(identity,{etag,blob});
+    bytes+=blob.size;
+    while(cache.size>64||bytes>MAX_PHOTO_CACHE_BYTES) {
+      const oldest=cache.keys().next().value;
+      bytes-=cache.get(oldest).blob.size;
+      cache.delete(oldest);
+    }
+  }
+
+  async function requestPhoto(photo,kind,generation,household,identity,signal) {
+    const context=await photoContext();
+    assertPhotoRead(generation,signal);
+    if(!context)throw failPhoto(401,'PhotoSessionChanged');
+    assertReferenced(photo.id);
+    const snapshot=client.records,sequence=client.sequence;
+    const cached=cache.get(identity);
+    const format=photo.crypto?'encrypted':'legacy';
+    const headers=new Headers({[PHOTO_CONTEXT_HEADER]:context,[PHOTO_FORMAT_HEADER]:format});
+    if(cached)headers.set('If-None-Match',cached.etag);
+    const response=await nativeFetch(`/diary/api/photos/${photo.id}/${kind}`,{credentials:'same-origin',cache:'no-store',headers,signal});
+    try {
+      assertPhotoRead(generation,signal);
+      if(!response.ok&&response.status!==304)throw failPhoto(response.status,'PhotoReadFailed');
+      const expiresAt=Number(response.headers.get(PHOTO_EXPIRY_HEADER));
+      if(response.headers.get(PHOTO_CONTEXT_HEADER)!==context||response.headers.get(PHOTO_FORMAT_HEADER)!==format
+        ||!Number.isSafeInteger(expiresAt)||expiresAt<=0)throw failPhoto(409,'PhotoResponseMismatch');
+      if(Date.now()>=expiresAt*1000)throw abortPhoto();
+      onPhotoExpiry(expiresAt);
+      const etag=response.headers.get('ETag');
+      let blob;
+      if(response.status===304) {
+        if(!cached||etag!==cached.etag)throw failPhoto(409,'PhotoResponseMismatch');
+        blob=cached.blob;
+      } else if(photo.crypto) {
+        const raw=await response.arrayBuffer();
+        assertPhotoRead(generation,signal);
+        blob=await decryptPhotoPart(raw,photo.crypto,household,photo.id,kind);
+      } else {
+        const raw=await response.blob();
+        blob=raw.slice(0,raw.size,kind==='original'?photo.contentType:'image/webp');
+      }
+      assertPhotoRead(generation,signal);
+      if(Date.now()>=expiresAt*1000)throw abortPhoto();
+      if(client.records!==snapshot||client.sequence!==sequence)assertReferenced(photo.id);
+      if(kind==='original'&&blob.size!==photo.originalSize)throw new Error('PhotoSizeMismatch');
+      if(kind!=='original')rememberPhoto(identity,etag,blob);
+      return blob;
+    } catch(error) {
+      if(response.body&&!response.bodyUsed)void response.body.cancel().catch(()=>{});
+      throw error;
+    }
+  }
+
   async function read(photo,kind,{signal}={}) {
     const generation=client.generation,household=client.household;
-    await client.check();assertCurrent(generation,signal);
-    // A removed reference must not keep serving a cached plaintext image.
-    if(![...client.records.values()].some(record=>record.row.photoIds.includes(photo.id)))throw Object.assign(new Error('PhotoNotFound'),{status:404});
+    assertPhotoRead(generation,signal);
     const identity=JSON.stringify([generation,household,photo.id,kind,photo.crypto||null]);
-    if(cache.has(identity)){const blob=cache.get(identity);cache.delete(identity);cache.set(identity,blob);return blob;}
-    let promise=kind==='original'?null:loads.get(identity);
-    if(!promise) {
-      const controller=new AbortController();controllers.add(controller);
-      const combined=kind==='original'&&signal?AbortSignal.any([signal,controller.signal]):controller.signal;
-      promise=(async()=>{
-        const response=await nativeFetch(`/diary/api/photos/${photo.id}/${kind}`,{credentials:'same-origin',cache:'no-store',signal:combined});
-        if(!response.ok){await response.body?.cancel();throw Object.assign(new Error('PhotoReadFailed'),{status:response.status});}
-        const raw=await response.arrayBuffer();assertCurrent(generation,combined);
-        const blob=photo.crypto?await decryptPhotoPart(raw,photo.crypto,household,photo.id,kind):new Blob([raw],{type:kind==='original'?photo.contentType:'image/webp'});
-        assertCurrent(generation,combined);
-        if(kind==='original'&&blob.size!==photo.originalSize)throw new Error('PhotoSizeMismatch');
-        if(kind!=='original'&&blob.size<=24*1024*1024){
-          cache.set(identity,blob);bytes+=blob.size;
-          while(cache.size>64||bytes>24*1024*1024){const oldest=cache.keys().next().value;bytes-=cache.get(oldest).size;cache.delete(oldest);}
-        }
-        return blob;
-      })().finally(()=>{controllers.delete(controller);if(loads.get(identity)===promise)loads.delete(identity);});
-      if(kind!=='original')loads.set(identity,promise);
+    let load=loads.get(identity);
+    if(!load) {
+      const controller=new AbortController();
+      load={controller,readers:0,finished:false};
+      controllers.add(controller);
+      load.promise=requestPhoto(photo,kind,generation,household,identity,controller.signal).finally(()=>{
+        load.finished=true;
+        controllers.delete(controller);
+        if(loads.get(identity)===load)loads.delete(identity);
+      });
+      if(kind!=='original')loads.set(identity,load);
     }
-    const blob=await promise;assertCurrent(generation,signal);return blob;
+    load.readers++;
+    let abort;
+    try {
+      const pending=signal?Promise.race([load.promise,new Promise((_,reject)=>{
+        abort=()=>reject(abortPhoto());
+        signal.addEventListener('abort',abort,{once:true});
+        if(signal.aborted)abort();
+      })]):load.promise;
+      const blob=await pending;
+      assertPhotoRead(generation,load.controller.signal);
+      assertPhotoRead(generation,signal);
+      return blob;
+    } catch(error) {
+      // A late 401 from the prior household must not lock the active view.
+      assertPhotoRead(generation,load.controller.signal);
+      assertPhotoRead(generation,signal);
+      throw error;
+    } finally {
+      if(abort)signal.removeEventListener('abort',abort);
+      if(--load.readers===0&&!load.finished) {
+        if(loads.get(identity)===load)loads.delete(identity);
+        load.controller.abort();
+      }
+    }
   }
   const fetchMedia=async(input,init={})=>{
     const url=new URL(input,location.href);
     if(url.origin!==location.origin)return nativeFetch(input,init);
     const asset=url.pathname.match(/^\/diary\/api\/photos\/([0-9a-f-]{36})\/(original|display|thumbnail)$/);
     if(asset&&(!init.method||init.method==='GET')) {
-      const photo=await findPhoto(asset[1]),blob=await read(photo,asset[2],init);
+      const generation=client.generation;
+      const photo=await findPhoto(asset[1]);
+      assertPhotoRead(generation,init.signal);
+      const blob=await read(photo,asset[2],init);
       return new Response(blob,{headers:{'Content-Type':blob.type,'Cache-Control':'no-store'}});
     }
     const match=url.pathname.match(/^\/diary\/api\/photo-upload-sessions\/([0-9a-f-]{36})(?:\/photos(?:\/([0-9a-f-]{36}))?)?$/);

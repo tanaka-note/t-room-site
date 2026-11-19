@@ -1,9 +1,11 @@
-// T-Cloud's viewport priority, bounded parallelism and generation cancellation,
-// with plaintext blobs kept in memory only. No photo bytes enter browser storage.
+// Keep decoding and image memory bounded even when the connection is fast.
+// Separate slots let a tapped or visible photo start while prefetch is busy.
 export function createPhotoImages(runtime) {
   const tasks=new Map(),urls=new Map(),downloads=new Set();
   const observers = new Map();
-  let active=0,frame=0,generation=0;
+  const limits={selected:2,visible:6,nearby:2};
+  const running={selected:new Set(),visible:new Set(),nearby:new Set()};
+  let frame=0,generation=0;
   function observerFor(root) {
     if (typeof IntersectionObserver !== 'function') return null;
     if (observers.has(root)) return observers.get(root);
@@ -47,6 +49,9 @@ export function createPhotoImages(runtime) {
     const bottom = Math.min(root?.bottom ?? innerHeight, innerHeight);
     return Math.max(top - rect.bottom, rect.top - bottom, 0);
   }
+  function laneFor(task,distance) {
+    return task.eager?'selected':distance===0?'visible':'nearby';
+  }
   function pump(){
     if(document.hidden)return;
     const candidates=[...tasks.values()]
@@ -57,18 +62,30 @@ export function createPhotoImages(runtime) {
       || Number(a.distance > 0) - Number(b.distance > 0)
       || Number(Boolean(a.task.visibleOnly)) - Number(Boolean(b.task.visibleOnly))
       || a.distance - b.distance);
-    while(active<4&&candidates.length){
-      const { task } = candidates.shift();
-      const version=generation;task.started=true;active++;
-      task.controller=new AbortController();
-      runtime.readPhoto(task.photo,task.kind,{signal:task.controller.signal}).then(blob=>{
-        if(version!==generation||task.controller.signal.aborted||task.image&&!task.image.isConnected)return;
+    if(running.visible.size>=limits.visible&&candidates.some(({task,distance})=>laneFor(task,distance)==='visible')) {
+      for(const task of running.visible) {
+        if(distanceFromViewport(task)>0) {
+          task.preempted=true;
+          task.controller.abort();
+        }
+      }
+    }
+    for(const {task,distance} of candidates) {
+      const lane=laneFor(task,distance);
+      if(running[lane].size>=limits[lane])continue;
+      const version=generation;
+      const controller=new AbortController();
+      task.started=true;
+      task.controller=controller;
+      running[lane].add(task);
+      runtime.readPhoto(task.photo,task.kind,{signal:controller.signal}).then(blob=>{
+        if(version!==generation||controller.signal.aborted||task.image&&!task.image.isConnected)return;
         if(task.image){
           const url=URL.createObjectURL(blob),old=urls.get(task.image);if(old)URL.revokeObjectURL(old);
           urls.set(task.image,url);task.image.src=url;task.loaded=true;
         }
       }).catch(error=>{
-        if(error.name==='AbortError'||version!==generation)return;
+        if(error.name==='AbortError'||controller.signal.aborted||version!==generation)return;
         if(task.attempts++<2&&(!error.status||error.status===408||error.status===429||error.status>=500)&&!/Cipher|OperationError|Key|Session|Grant/.test(error.name+' '+error.message)){
           task.started=false;task.readyAt=performance.now()+500*task.attempts;setTimeout(schedule,500*task.attempts);
         }else{
@@ -76,8 +93,11 @@ export function createPhotoImages(runtime) {
           task.image?.dispatchEvent(new Event('error'));
         }
       }).finally(()=>{
-        active--;
-        if(version===generation&&task.started&&!task.loaded&&tasks.get(task.image||task)===task){tasks.delete(task.image||task);task.observer?.unobserve(task.image);}
+        running[lane].delete(task);
+        if(version===generation&&tasks.get(task.image||task)===task) {
+          if(task.preempted){task.started=false;task.preempted=false;}
+          else if(task.started&&!task.loaded){tasks.delete(task.image||task);task.observer?.unobserve(task.image);}
+        }
         schedule();
       });
     }

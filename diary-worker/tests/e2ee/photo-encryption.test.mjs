@@ -3,6 +3,7 @@ import {test} from 'node:test';
 import {createHash} from 'node:crypto';
 import {encryptPhotoParts,decryptPhotoPart,photoHeader,PHOTO_PREFIX} from '../../e2ee/photo-crypto.mjs';
 import {createEncryptedMediaClient} from '../../e2ee/media-client.mjs';
+import {PHOTO_CONTEXT_HEADER, PHOTO_FORMAT_HEADER, photoReadContext} from '../../e2ee/session.mjs';
 import {EncryptedDiaryClient} from '../../e2ee/client.mjs';
 import {createStore} from '../../e2ee/store.mjs';
 import {readSnapshotPages} from '../../e2ee/snapshot.mjs';
@@ -24,16 +25,23 @@ test('binary encryption authenticates every variant, ID, household and byte, inc
 
 test('real upload adapter: mixed photos, immutable legacy objects, retries, old staging fences, settings and cache isolation',async()=>{
   const f=await systemFixture();globalThis.location=new URL(f.env.DIARY_ENCRYPTION_ORIGIN);
-  let account='main-admin',puts=0,reads=0,loseReply=false;
-  const put=f.env.MEDIA.put,get=f.env.MEDIA.get;f.env.MEDIA.put=async(...args)=>{puts++;return put(...args);};f.env.MEDIA.get=async(...args)=>{reads++;return get(...args);};
+  let account='main-admin',cookieOverride,puts=0,reads=0,bodies=0,loseReply=false,holdReply,badContext=false;
+  const requests=[];
+  const sessionId=crypto.randomUUID();
+  const put=f.env.MEDIA.put,get=f.env.MEDIA.get;
+  f.env.MEDIA.put=async(...args)=>{puts++;return put(...args);};
+  f.env.MEDIA.get=async(...args)=>{reads++;const object=await get(...args);if(object?.body)bodies++;return object;};
   const call=async(path,init={})=>{
-    const headers=new Headers(init.headers);headers.set('Cookie',f.cookie(account));
+    const headers=new Headers(init.headers);headers.set('Cookie',cookieOverride||f.cookie(account,{...f.users[account],sessionId}));
+    requests.push({path,headers});
     if(init.method&&init.method!=='GET'){headers.set('Origin',location.origin);headers.set('X-Diary-Request','1');}
     let body=init.body;if(body&&!(body instanceof FormData)&&typeof body!=='string'){headers.set('Content-Type','application/json');body=JSON.stringify(body);}
     return f.worker.fetch(new Request(new URL(path,location),{...init,headers,body}),f.env,f.ctx);
   };
   const request=async(path,init={})=>{const r=await call('/diary/api/encryption'+path,init),v=await r.json();if(!r.ok)throw Object.assign(new Error(v.error),{status:r.status});return v;};
-  const {profile}=await request('/profile');
+  const {profile,rollout}=await request('/profile');
+  const signedSession=await (await call('/diary/api/session')).json();
+  const context=await photoReadContext(signedSession.keySession,household,rollout.generation,profile.directory.value.generation);
   const client=new EncryptedDiaryClient({profile,anchor:f.configuration.anchor,transport:{valid:async()=>account==='main-admin'&&f.users[account].active,timestamp:async()=>new Date().toISOString(),snapshot:(h,s)=>readSnapshotPages(o=>request('/snapshot?'+new URLSearchParams(Object.entries(o).filter(([,v])=>v!=null))),h,s),mutation:(proposal,operation)=>request('/mutation',{method:'POST',body:{proposal,operation}})}});
   let media;
   // Exercise Workers' streaming-hash branch with Node's independent SHA-256.
@@ -50,7 +58,13 @@ test('real upload adapter: mixed photos, immutable legacy objects, retries, old 
     client.transport.mutation=(proposal,operation)=>oldStore.mutation(client.actor,proposal,operation);
     const saved=await client.commitAction('seed-legacy',{entryDate:'2026-11-18',title:'mixed',content:`[[写真:${legacyId}]]`,tags:[],photos:[old]}, {state:'published'});
     client.transport.mutation=liveMutation;await client.sync();
-    media=createEncryptedMediaClient(client,request,async(...args)=>{const r=await call(...args);if(loseReply&&r.ok&&args[1]?.method==='POST'){loseReply=false;throw new TypeError('Synthetic lost upload reply');}return r;});
+    media=createEncryptedMediaClient(client,request,async(...args)=>{
+      if(holdReply&&args[0].includes('/api/photos/'))return holdReply(args[1]?.signal);
+      const r=await call(...args);
+      if(loseReply&&r.ok&&args[1]?.method==='POST'){loseReply=false;throw new TypeError('Synthetic lost upload reply');}
+      if(badContext&&r.ok&&args[0].includes('/api/photos/'))r.headers.set(PHOTO_CONTEXT_HEADER,'mismatch');
+      return r;
+    },{photoContext:()=>context});
     const session=(await media.api('/photo-upload-sessions','POST',{})).uploadSession.id,id=crypto.randomUUID(),form=new FormData();form.set('id',id);
     const plain=parts();for(const kind of kinds)form.set(kind,plain[kind]);
     const route=`/diary/api/photo-upload-sessions/${session}/photos`;
@@ -63,11 +77,34 @@ test('real upload adapter: mixed photos, immutable legacy objects, retries, old 
     assert.equal(puts,3);
     const result=await media.api(`/photo-upload-sessions/${session}/commit`,'POST',{entryId:saved.id,photoIds:[id]});
     const photo=result.photos[0];assert.ok(photo.crypto);assert.equal(client.entry(saved.id).photos.length,2);
+    const firstRead=requests.length;
     for(const kind of kinds){
       const blob=await media.read(photo,kind);assert.equal(await blob.text(),`PRIVATE_${kind}`);
       const legacy=await media.read(old,kind);assert.equal(await legacy.text(),'LEGACY_UNCHANGED!');
     }
-    const before=reads;await Promise.all([media.read(photo,'thumbnail'),media.read(photo,'thumbnail')]);assert.equal(reads,before,'a warm thumbnail uses memory cache');
+    assert.equal(requests.length-firstRead,6,'one HTTP request per cold photo variant');
+    assert.ok(requests.slice(firstRead).every(({path,headers})=>path.startsWith('/diary/api/photos/')&&headers.get(PHOTO_CONTEXT_HEADER)===context));
+    for(const candidate of [photo,old]){
+      const before={reads,bodies,requests:requests.length};
+      const [one,two]=await Promise.all([media.read(candidate,'thumbnail'),media.read(candidate,'thumbnail')]);
+      assert.equal(one,two,'simultaneous readers share the revalidated result');
+      assert.equal(requests.length,before.requests+1);
+      assert.equal(reads,before.reads+1);
+      assert.equal(bodies,before.bodies,'a matching validator uses the memory blob after authorizing it');
+      assert.ok(requests.at(-1).headers.has('If-None-Match'));
+    }
+    const oldThumb=f.r2.get(oldKeys[2]);
+    f.r2.set(oldKeys[2],{bytes:new TextEncoder().encode('Updated legacy thumbnail')});
+    assert.equal(await (await media.read(old,'thumbnail')).text(),'Updated legacy thumbnail');
+    f.r2.set(oldKeys[2],oldThumb);
+
+    const beforeWrongFormat=reads;
+    const formatMismatch=await call(photo.thumbnailUrl,{headers:{[PHOTO_CONTEXT_HEADER]:context,[PHOTO_FORMAT_HEADER]:'legacy'}});
+    assert.equal(formatMismatch.status,409);
+    assert.equal(reads,beforeWrongFormat,'a stale photo format cannot fetch the other representation');
+    badContext=true;
+    await assert.rejects(media.read(photo,'original'),{message:'PhotoResponseMismatch',status:409});
+    badContext=false;
     const original=await media.fetch(photo.originalUrl+'?download=1');assert.equal(await original.text(),'PRIVATE_original');assert.equal(original.headers.get('Content-Type'),'image/jpeg');
     const keys=f.db.sqlite.prepare('SELECT original_key,display_key,thumbnail_key FROM diary_e2ee_media WHERE id=?').get(id);
     for(const key of Object.values(keys)){assert.ok(key.startsWith(PHOTO_PREFIX));assert.ok(photoHeader(f.r2.get(key).bytes));}
@@ -89,8 +126,51 @@ test('real upload adapter: mixed photos, immutable legacy objects, retries, old 
     assert.equal((await call(`/diary/api/encryption/uploads/${newSession}/photos`,{method:'POST',body:retry})).status,409,'photo setting cannot turn mandatory encryption off');
     assert.equal((await media.fetch(`/diary/api/photo-upload-sessions/${newSession}`,{method:'DELETE'})).status,200);
     account='chiharu-admin';assert.equal((await call(photo.thumbnailUrl)).status,404);account='main-admin';
-    f.users[account].active=false;await assert.rejects(media.read(photo,'thumbnail'),e=>e.status===401);
+    const switched=await call('/diary/api/households/select',{method:'POST',body:{householdId:'chiharu-household'}});
+    assert.equal(switched.status,200);
+    cookieOverride=switched.headers.get('Set-Cookie').split(';',1)[0];
+    const beforeDenied=reads;
+    for(const candidate of [photo,old])await assert.rejects(media.read(candidate,'thumbnail'),{status:401});
+    assert.equal(reads,beforeDenied,'a new household cookie does not authorize an old view or memory blob');
+
+    cookieOverride=f.cookie(account,{...f.users[account],sessionId:crypto.randomUUID()});
+    await assert.rejects(media.read(photo,'thumbnail'),{status:401});
+    assert.equal(reads,beforeDenied,'another login with the same account and household is denied');
+    cookieOverride=null;
+    f.users[account].active=false;
+    for(const candidate of [photo,old])await assert.rejects(media.read(candidate,'thumbnail'),{status:401});
+    assert.equal(reads,beforeDenied,'revocation denies warm and cold image data before reading storage');
     f.users[account].active=true;
+
+    const validReply=await call(photo.thumbnailUrl,{headers:{[PHOTO_CONTEXT_HEADER]:context,[PHOTO_FORMAT_HEADER]:'encrypted'}});
+    let release,started,networkSignal;
+    const pausePhoto=()=>{
+      const entered=new Promise(resolve=>{started=resolve;});
+      holdReply=signal=>{networkSignal=signal;started();return new Promise(resolve=>{release=resolve;});};
+      return entered;
+    };
+    let entered=pausePhoto();
+    const firstReader=new AbortController();
+    const deferred=media.read(photo,'thumbnail',{signal:firstReader.signal});
+    const otherReader=media.read(photo,'thumbnail');
+    await entered;
+    firstReader.abort();
+    await assert.rejects(deferred,{name:'AbortError'});
+    assert.equal(networkSignal.aborted,false,'another reader still needs the shared request');
+    release(validReply);
+    assert.equal(await (await otherReader).text(),'PRIVATE_thumbnail');
+
+    const lateReply=await call(photo.thumbnailUrl,{headers:{[PHOTO_CONTEXT_HEADER]:context,[PHOTO_FORMAT_HEADER]:'encrypted'}});
+    for(const response of [lateReply,new Response(null,{status:401})]) {
+      entered=pausePhoto();
+      const late=media.read(photo,'thumbnail');
+      await entered;
+      client.generation++;
+      release(response);
+      await assert.rejects(late,{name:'AbortError'});
+      assert.equal(client.closed,false,'an old household response cannot expire the current session');
+    }
+    holdReply=null;
     f.env.DIARY_ENCRYPTION_ENABLED='false';
     assert.equal((await call('/diary/api/photo-upload-sessions',{method:'POST',body:{}})).status,423);
     assert.equal((await call(`/diary/api/photo-upload-sessions/${newSession}/photos`,{method:'POST',body:retry})).status,423);
