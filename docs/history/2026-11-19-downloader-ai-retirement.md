@@ -10,7 +10,7 @@ Windowsの「X動画ダウンローダー」0.4.0（`XDownloader.exe`）はPCか
 
 ## PR承認後の本番反映
 
-1. PRのCI成功を確認してからmainへ統合する。通常Actionsで `t-room-site` と `t-room-security` を反映し、公開バージョンを照合する。日記は共用backup dispatchを参照するため、既存の定期保存・公開buildを回帰確認する。Securityは対象サービスの新規パスキー認証、連携候補、handoff、既存セッションを拒否する。第一管理者の共通credentialと日記・T-Cloud等の連携は維持する。
+1. PRのCI成功を確認してからmainへ統合する。通常Actionsで `t-room-site` と `t-room-security` を反映し、公開バージョンを照合する。日記は共用backup dispatchを参照するため、既存の定期保存・公開buildを回帰確認する。Securityは対象サービスの新規パスキー認証、連携候補、handoff、既存セッションを拒否する。第一管理者の共通credentialと日記・T-Cloud等の連携は維持する。AndroidのDigital Asset LinksからAI Chatのパッケージだけを除外し、カレンダーと共有するAndroid署名originは維持する。
 2. Cloudflareの `tanaka-note.com` Custom Domainが `t-room-site` を指すことを確認し、`tanaka-note.com/downloader*`、`tanaka-note.com/downloader2*`、`tanaka-note.com/ai*` の3ルートを、旧Worker名を照合して解除する。旧URLがCustom Domain経由で `410 Gone`、`Cache-Control: no-store` を返すことを確認する。旧3 Workerの `workers.dev` とPreview URLは無効の状態を確認する。`/downloader/` と `/downloader2/` のWeb画面・認証API・ペアリングAPI、`/ai/` と `/ai/api/` の代表URLを照合する。
 3. Downloader 1の実行中ジョブとClamAVの既存Actions実行が終端したことを確認する。`t-room-downloader` の10分間隔のCronと `t-room-downloader-jobs` の当該WorkerへのQueue consumerを解除し、設定を読み戻す。処理中のジョブやキューに残ったデータは削除対象外。Cloudflareの旧Worker・D1・Queue・DLQ・Container・一時R2は保持する。旧Workerのコードと構成を参照する場合は終了前の[履歴](https://github.com/tanaka-note/t-room-site/tree/abee933e)を使う。
 4. `security-db` の対象3サービスの連携・handoff・challenge・セッション件数を読み取る。保留中migrationが `0032_retire_downloader_ai_links.sql` だけであることを `wrangler d1 migrations list security-db --remote` で確認し、承認後に `wrangler d1 migrations apply security-db --remote` で適用する。対象件数が0で、他サービスの連携と共通credentialが維持されていることを確認する。対象連携を含んでいた未使用の有効な招待は失効する。必要な場合は残存サービスで再発行する。監査原本と過去のSecurityバックアップは保持する。
