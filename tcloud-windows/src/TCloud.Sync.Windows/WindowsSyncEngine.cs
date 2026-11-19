@@ -180,6 +180,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
         var claimed=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var records=snapshot.Originals.ToDictionary(e=>e.Id);
         var files=snapshot.Remote.Where(e=>e.Kind=="file").ToArray();int done=0,total=files.Count(e=>e.State=="present");
+        var bodiesNeeded=new List<(WindowsCatalogEntry Entry,string Path,bool Hydrate)>();
         // Tombstones are handled before new local files, so an autosave cannot resurrect a Web deletion.
         foreach(var entry in files.Where(e=>e.State!="present")) {
             if(!records.TryGetValue(entry.Id,out var old))continue;
@@ -269,22 +270,8 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                 await PutAsync(replacement,token);downloads[replacement.PlaceholderIdentity]=(entry,snapshot.Remote,path);
                 provider.Add(path,resolved.SizeBytes,replacement.PlaceholderIdentity);remoteBodyChanged=false;
             }
-            if((state&0x30)!=0&&!remoteBodyChanged) {
-                downloads[Identity(entry)]=(entry,snapshot.Remote,path);
-                await provider.HydrateAsync(path,token);
-                var retained=(await catalog.LoadAsync(token)).Originals.Single(e=>e.Id==entry.Id);
-                await PutAsync(retained with {Complete=true,ContentVersion=Version(entry),LocalState=null,LocalFileId=WindowsFileState.Read(full).Id},token);
-            }else {
-                // Recheck the current catalog before exchanging any body downloaded from an older view.
-                var source=new CloudContentSource(device,resolved.Id,resolved.StoredBytes,resolved.Revision);
-                await using var staged=resolved.Layout is {} layout
-                    ?await OriginalStager.DownloadAsync(staging,layout,resolved.FileKey!,source,token:token,retain:true)
-                    :await OriginalStager.DownloadLegacyAsync(staging,resolved.SizeBytes,source,token:token,retain:true);
-                var current=(await catalog.LoadAsync(token)).Remote.SingleOrDefault(e=>e.Kind=="file"&&e.Id==entry.Id);
-                if(current?.Revision!=entry.Revision){await staged.DisposeAsync();root.VerifyPresent();File.Delete(staged.PersistedPath!);return;}
-                await exchange.InstallAsync(staged,new(entry.Id,entry.Revision,path,Identity(entry),resolved.SizeBytes,staged.Sha256,true,Version(entry),RemoteName:resolved.Metadata?.Name),token);
-            }
-            done++;progress?.Report(new("原本をHDDへ保存しています。",done,total));
+            // Finish local saves, names and tombstones before waiting on a remote body.
+            bodiesNeeded.Add((entry,path,(state&0x30)!=0&&!remoteBodyChanged));
         }
         snapshot=await catalog.LoadAsync(token);tree=ScanTree();
         foreach(var deletedFolder in snapshot.Remote.Where(e=>e.Kind=="folder"&&e.State!="present")) {
@@ -316,11 +303,35 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
             await FinishUploadAsync(await uploader.TransferAsync(prepared.Record,resolver,prepared.Snapshot.Body,token:token),token);return;
         }
         var waiting=tree.Files.Where(e=>!blocked.Contains(e.Path)&&!claimed.Contains(e.Path)&&!ownedIds.Contains(e.State.Id)).ToArray();
+        needsWork=waiting.Any(e=>folders.ContainsKey(Path.GetDirectoryName(e.Path)??""));
+        if(waiting.Any(e=>e.State.Size>0&&folders.ContainsKey(Path.GetDirectoryName(e.Path)??""))) {
+            progress?.Report(new("保存の完了を待ってアップロードします。",done,total));return;
+        }
+        foreach(var neededBody in bodiesNeeded) {
+            var (entry,path,hydrate)=neededBody;token.ThrowIfCancellationRequested();root.VerifyPresent();
+            var full=LocalPaths.ResolveUnderRoot(root.Root,path);
+            using var resolved=resolver.Resolve(entry);
+            if(hydrate) {
+                downloads[Identity(entry)]=(entry,snapshot.Remote,path);
+                await provider.HydrateAsync(path,token);
+                var retained=(await catalog.LoadAsync(token)).Originals.Single(e=>e.Id==entry.Id);
+                await PutAsync(retained with {Complete=true,ContentVersion=Version(entry),LocalState=null,LocalFileId=WindowsFileState.Read(full).Id},token);
+            }else {
+                // Recheck the current catalog before exchanging any body downloaded from an older view.
+                var source=new CloudContentSource(device,resolved.Id,resolved.StoredBytes,resolved.Revision);
+                await using var staged=resolved.Layout is {} layout
+                    ?await OriginalStager.DownloadAsync(staging,layout,resolved.FileKey!,source,token:token,retain:true)
+                    :await OriginalStager.DownloadLegacyAsync(staging,resolved.SizeBytes,source,token:token,retain:true);
+                var current=(await catalog.LoadAsync(token)).Remote.SingleOrDefault(e=>e.Kind=="file"&&e.Id==entry.Id);
+                if(current?.Revision!=entry.Revision){await staged.DisposeAsync();root.VerifyPresent();File.Delete(staged.PersistedPath!);return;}
+                await exchange.InstallAsync(staged,new(entry.Id,entry.Revision,path,Identity(entry),resolved.SizeBytes,staged.Sha256,true,Version(entry),RemoteName:resolved.Metadata?.Name),token);
+            }
+            done++;progress?.Report(new("原本をHDDへ保存しています。",done,total));
+        }
         if(waiting.Any(e=>string.IsNullOrEmpty(Path.GetDirectoryName(e.Path)))||tree.Folders.Any(f=>string.IsNullOrEmpty(Path.GetDirectoryName(f.Path))
             &&!(snapshot.Folders??[]).Any(known=>known.FileId==f.State.Id)))
             progress?.Report(new("新しいデータは既存のT-Cloudフォルダ内へ保存してください。最上位フォルダの作成はWebから行えます。",done,total));
         else progress?.Report(new(waiting.Length>0?"保存の完了を待ってアップロードします。":"同期済み。原本はHDDに保存されています。",done,total));
-        needsWork=waiting.Any(e=>folders.ContainsKey(Path.GetDirectoryName(e.Path)??""));
     }
     private async Task PutAsync(RetainedOriginalRecord record,CancellationToken token)=>
         _=await catalog.UpdateAsync(value=>value.Originals.SingleOrDefault(e=>e.Id==record.Id)==record?value
