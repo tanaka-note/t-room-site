@@ -119,12 +119,12 @@ test('schema drift fails closed instead of silently omitting new durable data', 
   } finally { db.close(); }
 });
 
-test('a checked-in Worker-first migration remains unreviewed until the backup baseline advances', async () => {
-  const db = database('cloud');
+test('T-Cloud capture requires the reviewed trash migration', async () => {
+  const db = database('cloud', '0012_favorites.sql');
   try {
-    assert.equal((await capture(d1(db), 'cloud')).expectedMigration, '0012_favorites.sql');
+    await assert.rejects(capture(d1(db), 'cloud'));
     db.exec(readFileSync(new URL('../../cloud-worker/migrations/0013_safe_trash_retention.sql', import.meta.url), 'utf8'));
-    await assert.rejects(capture(d1(db), 'cloud'), /SchemaReviewRequired/);
+    assert.equal((await capture(d1(db), 'cloud')).expectedMigration, '0013_safe_trash_retention.sql');
   } finally { db.close(); }
 });
 
@@ -137,11 +137,16 @@ test('storage listings are cached while failures and recoveries remain fresh', a
     const first = await getBackupSnapshot(env, {}, cache);
     assert.equal(first.services.length, Object.keys(SERVICES).length);
     assert.equal(first.services.some(service => service.id === 'health'), false);
+    assert.equal(first.services.find(s => s.id === 'cloud').label, 'T-Cloud D1');
+    const cached = await stored.json();
+    cached.services.find(s => s.id === 'cloud').label = 'T-Cloud';
+    stored = Response.json(cached);
     const count = lists;
     db.prepare("INSERT INTO security_audit_events(event_id,occurred_at,service,event_type,outcome,target_type,target_id,details_json) VALUES (?,?,?,?,?,?,?,?)")
       .run('failed-run', new Date().toISOString(), 'inventory', 'backup_failed', 'failure', 'backup', 'inventory', '{"reason":"operation_failed"}');
     const second = await getBackupSnapshot(env, {}, cache);
     assert.equal(lists, count);
+    assert.equal(second.services.find(s => s.id === 'cloud').label, 'T-Cloud D1');
     assert.equal(second.services.find(s => s.id === 'inventory').state, 'failed');
     const plan = db.prepare("EXPLAIN QUERY PLAN SELECT event_id FROM security_audit_events WHERE target_type='backup' AND target_id='inventory' ORDER BY occurred_at DESC,event_id DESC LIMIT 40").all();
     assert.match(JSON.stringify(plan), /idx_security_backup_status/);

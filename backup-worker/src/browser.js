@@ -74,7 +74,7 @@ export async function getBackupSnapshot(env, options = {}, cache = globalThis.ca
   for (const item of snapshot.services) {
     let health;
     try { health = await serviceStatus(env, item.id); } catch { health = { state: 'unavailable' }; }
-    services.push({ ...item, ...health, available: item.storageAvailable && health.state !== 'unavailable',
+    services.push({ ...item, ...health, label: SERVICES[item.id]?.label ?? item.label, available: item.storageAvailable && health.state !== 'unavailable',
       state: !item.storageAvailable && !['failed', 'partial', 'prune_failed'].includes(health.state) ? 'unavailable' : health.state });
   }
   return { ...snapshot, services, backupBytes: services.reduce((n, s) => n + (s.bytes || 0), 0) };

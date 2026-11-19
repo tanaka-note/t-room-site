@@ -30,7 +30,7 @@ export function exportSpec(service,migration) {
   if (service === 'diary') return { database: 'diary-db', binding: 'DIARY_DB', migration: '0022_photo_backup_identity.sql',
     tables: BACKUP_TABLES.map(t => ({ ...t, sourceColumns: t.columns.join(',') })) };
   if (!Object.hasOwn(SERVICES, service)) throw new Error('SourceUnavailable');
-  return SERVICES[service];
+  return service === 'cloud' ? archiveSpec(service, migration) : SERVICES[service];
 }
 export const exportBucket = (env, service) => service === 'diary' ? env.DIARY_BACKUP : env.BACKUP;
 export const exportPrefix = (service,migration) => service === 'diary' ? (migration===DIARY_ENCRYPTED_MIGRATION?'v10/':'v9/')
