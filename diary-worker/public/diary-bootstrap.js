@@ -1,5 +1,14 @@
 (() => {
   const scriptUrl = new URL(document.currentScript.src);
+  if(/^\/diary\/photo-encryption-migration\/?$/.test(location.pathname)) {
+    import(new URL(`diary-existing-photo-migration.js${scriptUrl.search}`,scriptUrl).href).then(module=>module.mountPhotoMigration()).catch(()=>{
+      document.querySelector('#boot-view').hidden=true;
+      document.querySelector('#login-view').hidden=false;
+      document.querySelector('#passkey-login').disabled=true;
+      document.querySelector('#login-message').textContent='写真移行画面を開けませんでした。ページを開き直してください。';
+    });
+    return;
+  }
   const navigationType = window.performance.getEntriesByType("navigation")[0]?.type;
   // Establish a fresh page's origin before any authentication/data wait or input.
   // Reload and history navigation keep their existing restoration semantics.

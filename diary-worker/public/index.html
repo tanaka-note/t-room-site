@@ -61,8 +61,8 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#50647d">
-  <meta name="troom-app-build" content="diary-ca9cc1d91ad7">
-  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-ca9cc1d91ad7">
+  <meta name="troom-app-build" content="diary-7626b0b5afed">
+  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-7626b0b5afed">
   <meta name="troom-auto-update" content="enabled">
   <meta name="application-name" content="日記">
   <meta name="mobile-web-app-capable" content="yes">
@@ -70,13 +70,13 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="日記">
   <title>日記</title>
-  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-ca9cc1d91ad7">
+  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-7626b0b5afed">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64-v4.png?v=5">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon-v3.png?v=4">
-  <link rel="stylesheet" href="/diary/diary.css?v=diary-ca9cc1d91ad7">
-  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-ca9cc1d91ad7">
-  <link rel="stylesheet" href="/diary/tlain-login.css?v=diary-ca9cc1d91ad7">
-  <script src="/diary/tlain-login.js?v=diary-ca9cc1d91ad7" defer></script>
+  <link rel="stylesheet" href="/diary/diary.css?v=diary-7626b0b5afed">
+  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-7626b0b5afed">
+  <link rel="stylesheet" href="/diary/tlain-login.css?v=diary-7626b0b5afed">
+  <script src="/diary/tlain-login.js?v=diary-7626b0b5afed" defer></script>
 </head>
 <body>
   <main id="boot-view" class="login-shell tlain-login-view" aria-label="日記を準備中" aria-busy="true">
@@ -95,6 +95,20 @@
       <div class="login-actions">
         <button id="passkey-login" class="primary-button full-button login-button passkey-login-button" type="button"><svg class="passkey-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3"/></svg><span id="passkey-login-label" class="passkey-login-label">パスキーでログイン</span></button>
         <p id="login-message" class="form-message" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+  </main>
+
+  <main id="existing-photo-migration-view" class="tlain-login-view" aria-labelledby="existing-photo-migration-title" hidden>
+    <section class="tlain-login-card">
+      <h1 id="existing-photo-migration-title">既存写真の暗号化</h1>
+      <p>メイン世帯と田中千晴の日記を移行します。画面を閉じても、保存済みの進捗から再開できます。</p>
+      <ul id="existing-photo-migration-summary" aria-label="世帯別の確認済み写真"></ul>
+      <p role="status" aria-live="polite"></p>
+      <div class="login-actions">
+        <button id="existing-photo-migration-start" class="primary-button full-button" type="button">両世帯の移行を開始</button>
+        <button id="existing-photo-migration-stop" class="secondary-button full-button" type="button" hidden>中断</button>
+        <a class="text-button" href="/diary/">日記に戻る</a>
       </div>
     </section>
   </main>
@@ -453,6 +467,7 @@
           <h2>アルバム</h2>
         </div>
         <div class="camera-roll-actions">
+          <a id="existing-photo-migration-link" class="text-button" href="/diary/photo-encryption-migration/" hidden>既存写真を暗号化</a>
           <button id="photo-sort-button" class="header-icon-button" type="button" aria-label="新しい順で表示中。古い順に並べ替え" title="新しい順で表示中。古い順に並べ替え" aria-pressed="false" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16m-4-4 4 4 4-4M13 5h8M13 10h6M13 15h4"></path></svg>
           </button>
@@ -572,8 +587,8 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/assets/pwa-auto-update.js?v=diary-ca9cc1d91ad7" defer></script>
-  <script src="/security/passkey-client.js?v=diary-ca9cc1d91ad7" defer></script>
-  <script src="/diary/diary-bootstrap.js?v=diary-ca9cc1d91ad7" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=diary-7626b0b5afed" defer></script>
+  <script src="/security/passkey-client.js?v=diary-7626b0b5afed" defer></script>
+  <script src="/diary/diary-bootstrap.js?v=diary-7626b0b5afed" defer></script>
 </body>
 </html>

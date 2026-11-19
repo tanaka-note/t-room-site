@@ -10,7 +10,7 @@ const equal=(a,b)=>b64(encode(a))===b64(encode(b));
 const exact=(v,keys)=>v&&Object.keys(v).sort().join(',')===[...keys].sort().join(',');
 async function frozen(db) {
   const control=await readRollout(db);
-  if(control.phase!=='paused'||!control.everEncrypted)fail('RotationRequiresPausedDatabase');
+  if(control.phase!=='paused'||!control.everEncrypted||control.evidence?.photoMigration)fail('RotationRequiresPausedDatabase');
   const {sequence}=await db.prepare('SELECT COALESCE(MAX(seq),0) sequence FROM diary_e2ee_changes').first();
   return {...control,sequence};
 }
