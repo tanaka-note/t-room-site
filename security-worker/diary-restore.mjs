@@ -12,7 +12,7 @@ const rows=(db,sql)=>{const statement=db.prepare(sql),result=[];try{while(statem
 
 // Restore the real checkpoint into a NEW in-memory SQLite database on the
 // trusted device. Archive SQL is never executed; DDL is bundled from Git.
-export async function restoreDiaryCheckpoint({bucket,key,trust,onProgress=()=>{},wasmUrl='/security/vendor/sql-wasm.wasm'}) {
+export async function restoreDiaryCheckpoint({bucket,key,trust,onProgress=()=>{},includeRecovery=false,wasmUrl='/security/vendor/sql-wasm.wasm'}) {
   const verified=await verifiedGeneration(bucket,key,p=>validateExportManifest(p,'diary'));
   if(!verified||verified.payload.expectedMigration!=='diary-e2ee-v1')throw new Error('EncryptedCheckpointRequired');
   const manifest=verified.payload;
@@ -49,6 +49,7 @@ export async function restoreDiaryCheckpoint({bucket,key,trust,onProgress=()=>{}
     db.exec('COMMIT');
     return {protocol:'T-lain diary isolated restore',version:1,archiveSha256:verified.sha256,directoryGeneration:directory.generation,
       sequence:rows(db,'SELECT COALESCE(MAX(seq),0) sequence FROM diary_e2ee_changes')[0].sequence,
-      records:rows(db,'SELECT * FROM diary_e2ee_records ORDER BY id').map(parseRecord),media:rows(db,'SELECT * FROM diary_e2ee_media ORDER BY id')};
+      records:rows(db,'SELECT * FROM diary_e2ee_records ORDER BY id').map(parseRecord),media:rows(db,'SELECT * FROM diary_e2ee_media ORDER BY id'),
+      ...(includeRecovery?{recoveryEnvelope:manifest.keyMetadata.recoveryEnvelope}:{})};
   }finally{db.close();}
 }

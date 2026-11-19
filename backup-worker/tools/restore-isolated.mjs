@@ -132,7 +132,7 @@ export async function restoreIsolated(bucket, key, service, {anchor,minimumGener
     if(['billing','payments','inventory','calendar','portfolio'].includes(service)) db.exec(`UPDATE ${service}_accounts SET is_active=0,session_version=session_version+1`);
     if(service==='diary') db.exec('UPDATE diary_accounts SET active=0,session_version=session_version+1,must_change_password=1');
     if(service==='ai') db.exec("UPDATE ai_accounts SET status='disabled'; UPDATE ai_request_claims SET status='failed',error_code='isolated_restore' WHERE status='processing'");
-    if(encryptedDiary)db.exec("UPDATE diary_e2ee_control SET phase='paused',ever_encrypted=1");
+    if(encryptedDiary)db.exec("UPDATE diary_e2ee_control SET phase='paused',ever_encrypted=1,evidence=json_remove(evidence,'$.photoMigration')");
     for(const t of triggers) db.exec(t.sql);
     if(legacyHousehold)for(const file of migrations.filter(f=>f>verified.payload.expectedMigration))db.exec(readFileSync(new URL(file,dir),'utf8'));
     // 0006 creates an additional Household account. Quarantine after all

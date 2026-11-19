@@ -181,6 +181,8 @@
         "diary-worker/e2ee/store.mjs",
         "diary-worker/e2ee/rollout.mjs",
         "diary-worker/e2ee/media.mjs",
+        "diary-worker/e2ee/checkpoint.mjs",
+        "diary-worker/e2ee/photo-migration-store.mjs",
         "diary-worker/e2ee/origin.mjs",
         "diary-worker/e2ee/schema.sql",
         "diary-worker/e2ee/legacy-fences.sql",

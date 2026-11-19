@@ -1,0 +1,3 @@
+# Keep byte-hashed assets and the generated restore bundle identical in CI.
+public/vendor/sqlite-license.txt text eol=lf
+public/diary-restore.mjs text eol=lf
