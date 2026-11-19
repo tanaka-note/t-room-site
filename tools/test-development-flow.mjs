@@ -19,6 +19,21 @@ test('shared backup schema changes verify every generated browser restore consum
     for(const consumer of ['backup','security','diary','billing'])assert.ok(affected([path]).includes(consumer),`${path}: ${consumer}`);
   assert.ok(affected(['security-worker/tools/build-billing-restore.mjs']).includes('billing'));
 });
+test('Ubuntu browser setup normalizes regional mirrors while preserving suites, signatures and other repositories',()=>{
+  const workflow=readFileSync(resolve(root,'.github/workflows/verify.yml'),'utf8');
+  const command=workflow.match(/sudo sed -i -E 's#([^#]+)#([^#]+)#g'/);
+  assert.ok(command,'the configured APT source transformation must be tested');
+  const transform=text=>text.replace(new RegExp(command[1],'g'),command[2]);
+  for(const host of ['azure.archive.ubuntu.com','us-east-2.ec2.archive.ubuntu.com','eu-west-1.ec2.archive.ubuntu.com','us.archive.ubuntu.com','archive.ubuntu.com']) {
+    const source=`deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://${host}/ubuntu noble main restricted\n`;
+    assert.equal(transform(source),'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main restricted\n');
+  }
+  const deb822='Types: deb\nURIs: http://us-east-2.ec2.archive.ubuntu.com/ubuntu/\nSuites: noble noble-updates\nComponents: main universe\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n';
+  assert.equal(transform(deb822),deb822.replace('http://us-east-2.ec2.archive.ubuntu.com','https://archive.ubuntu.com'));
+  const other='deb http://security.ubuntu.com/ubuntu noble-security main\ndeb https://packages.microsoft.com/ubuntu/24.04/prod noble main\ndeb https://archive.ubuntu.com.example.test/ubuntu stable main\n';
+  assert.equal(transform(other),other);
+  assert.equal(transform(transform(deb822)),transform(deb822));
+});
 
 test('the retired Health Worker has a route and no data or shared-service bindings', () => {
   const config = JSON.parse(readFileSync(resolve(root, 'health-worker/wrangler.jsonc'), 'utf8'));
