@@ -102,7 +102,9 @@ async function proof(request, env, deps, purpose) {
   const input = await body(request);
   if (!id(input.deviceId) || !id(input.challengeId)) throw new DeviceError(400, 'invalid_proof');
   const row = await env.DB.prepare('SELECT * FROM cloud_windows_devices WHERE id=?').bind(input.deviceId).first();
-  if (!row || row.status !== (purpose === 'enroll' ? 'pending' : 'active')) throw new DeviceError(401, 'device_revoked');
+  if (!row || row.status === 'revoked' || purpose === 'enroll' && row.status !== 'pending') throw new DeviceError(401, 'device_revoked');
+  const activating=row.status==='pending';
+  if(activating&&row.enrollment_expires_at<=now())throw new DeviceError(401,'initial_auth_incomplete');
   if (purpose === 'enroll') {
     const session = await webSession(request, deps);
     if (await digest(session.sessionId) !== row.enrollment_session_hash || row.enrollment_expires_at <= now()) throw new DeviceError(401, 'initial_auth_required');
@@ -125,7 +127,7 @@ async function proof(request, env, deps, purpose) {
   const attempt = crypto.randomUUID(); const accessToken = token(); const expiresAt = now() + 900;
   const statements = [env.DB.prepare(`UPDATE cloud_windows_challenges SET consumed_at=?,proof_id=?
     WHERE id=? AND consumed_at IS NULL AND expires_at>?`).bind(now(), attempt, challenge.id, now())];
-  if (purpose === 'enroll') statements.push(env.DB.prepare(`UPDATE cloud_windows_devices SET status='active',activated_at=?
+  if (activating) statements.push(env.DB.prepare(`UPDATE cloud_windows_devices SET status='active',activated_at=?
     WHERE id=? AND status='pending' AND enrollment_expires_at>? AND EXISTS
     (SELECT 1 FROM cloud_windows_challenges WHERE id=? AND proof_id=?)`).bind(now(), row.id, now(), challenge.id, attempt));
   statements.push(env.DB.prepare(`INSERT INTO cloud_windows_access(token_hash,device_id,expires_at)
@@ -135,7 +137,7 @@ async function proof(request, env, deps, purpose) {
     AND EXISTS(SELECT 1 FROM cloud_windows_challenges WHERE id=? AND proof_id=?)`).bind(now(), row.id, challenge.id, attempt));
   const results = await env.DB.batch(statements);
   if (results.at(-2)?.meta?.changes !== 1) throw new DeviceError(401, 'proof_expired_or_used');
-  await deps.audit(purpose === 'enroll' ? 'windows_device_registered' : 'windows_device_renewed', JSON.parse(row.binding_json), row.id);
+  await deps.audit(activating&&results[1]?.meta?.changes===1 ? 'windows_device_registered' : 'windows_device_renewed', JSON.parse(row.binding_json), row.id);
   return json({ deviceId: row.id, scopeHash: row.scope_hash, accessToken, expiresAt });
   } catch(error) {
     await deps.audit('windows_device_proof_failure',JSON.parse(row.binding_json),row.id,'failure',{
@@ -186,8 +188,12 @@ export async function handleWindowsSync(request, env, url, path, deps) {
     if (route === '/challenge' && request.method === 'POST') {
       const input = await body(request);
       if (!id(input.deviceId)) throw new DeviceError(400, 'invalid_request');
-      const row = await env.DB.prepare("SELECT * FROM cloud_windows_devices WHERE id=? AND status='active'").bind(input.deviceId).first();
-      if (!row) throw new DeviceError(401, 'device_revoked');
+      const row = await env.DB.prepare('SELECT * FROM cloud_windows_devices WHERE id=?').bind(input.deviceId).first();
+      if (!row || row.status==='revoked') throw new DeviceError(401, 'device_revoked');
+      // The initial Web-verified registration already binds this exact public
+      // key. Recover a lost activation request with its proof within the same
+      // five-minute window, without retaining/replaying the initial Web cookie.
+      if(row.status==='pending'&&row.enrollment_expires_at<=now())throw new DeviceError(401,'initial_auth_incomplete');
       return await issueChallenge(env, row, 'renew');
     }
     if (route === '/token' && request.method === 'POST') return await proof(request, env, deps, 'renew');

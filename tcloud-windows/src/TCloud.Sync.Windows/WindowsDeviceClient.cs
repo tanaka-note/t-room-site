@@ -7,6 +7,7 @@ using System.Text.Json;
 namespace TCloud.Sync.Windows;
 
 public sealed class WindowsDeviceRevokedException() : UnauthorizedAccessException("端末の同期認可が失効しています。保存済みの原本は引き続き利用できます。");
+public sealed class WindowsDeviceRegistrationIncompleteException() : InvalidOperationException("端末の初回登録が完了していません。最初の登録を再開してください。保存済み原本は保持されます。");
 
 /// <summary>Windows-only automatic proof renewal; never renews a Web passkey session.</summary>
 public sealed class WindowsDeviceClient : IDisposable
@@ -107,8 +108,11 @@ public sealed class WindowsDeviceClient : IDisposable
     private static void RequireSuccess(HttpResponseMessage response,JsonElement value)
     {
         if(response.IsSuccessStatusCode)return;
-        if(response.StatusCode==HttpStatusCode.Unauthorized && value.TryGetProperty("code",out var code) && code.GetString()=="device_revoked")
-            throw new WindowsDeviceRevokedException();
+        if(response.StatusCode==HttpStatusCode.Unauthorized && value.TryGetProperty("code",out var code))
+        {
+            if(code.GetString()=="device_revoked")throw new WindowsDeviceRevokedException();
+            if(code.GetString()=="initial_auth_incomplete")throw new WindowsDeviceRegistrationIncompleteException();
+        }
         throw new HttpRequestException("同期APIで確認を完了できませんでした。",null,response.StatusCode);
     }
     internal static async Task<JsonElement> ReadJsonAsync(HttpResponseMessage response,CancellationToken token,int maxBytes=65536)

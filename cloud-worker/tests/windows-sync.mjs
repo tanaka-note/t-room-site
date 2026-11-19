@@ -26,7 +26,7 @@ async function call(path,method='GET',data,headers={}) {
     headers:{'Content-Type':'application/json',...headers},body:data===undefined?undefined:JSON.stringify(data)}),env,{waitUntil(){}});
   return {status:response.status,body:await response.json(),cookie:response.headers.get('Set-Cookie')};
 }
-async function register() {
+async function register(activate=true) {
   const session=await handoff('folder-member');
   const headers={Cookie:session.cookie,'X-TCloud-Session':session.body.sessionCacheId};
   const key=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},false,['sign','verify']);
@@ -37,6 +37,7 @@ async function register() {
   const sign=async value=>({deviceId:value.deviceId,challengeId:value.challengeId,nonce:value.nonce,
     signature:Buffer.from(await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},key.privateKey,deviceChallengeMessage(value))).toString('base64url')});
   const initialProof=await sign(challenge.body);
+  if(!activate)return {session,headers,key,sign,initialProof,challenge:challenge.body};
   const complete=await call('/enroll/complete','POST',initialProof,headers);
   assert.equal(complete.status,200,JSON.stringify(complete.body));
   return {session,headers,key,sign,initialProof,challenge:challenge.body,authorization:{Authorization:'Bearer '+complete.body.accessToken},token:complete.body};
@@ -69,6 +70,34 @@ test('Web logout and a year without a Web session do not require another passkey
     assert.equal(result.cookie,null);assert.equal(result.body.scopeHash,device.challenge.scopeHash);
     assert.equal((await call('/keys','GET',undefined,{Authorization:'Bearer '+result.body.accessToken})).status,200);
   } finally {Date.now=realNow;}
+});
+
+test('saved device keys recover a lost activation within the original window, never an expired or revoked registration',async()=>{
+  const pending=await register(false),deviceId=pending.challenge.deviceId;
+  assert.equal((await api(pending.session.cookie,'/logout','POST',{}, {'X-TCloud-Session':pending.session.body.sessionCacheId})).status,200);
+  const challenge=await call('/challenge','POST',{deviceId});assert.equal(challenge.status,200);
+  const wrong=await pending.sign({...challenge.body,scopeHash:'f'.repeat(64)});
+  assert.equal((await call('/token','POST',wrong)).status,401);
+  assert.equal(db.prepare('SELECT status FROM cloud_windows_devices WHERE id=?').get(deviceId).status,'pending');
+  const recovered=await call('/token','POST',await pending.sign(challenge.body));
+  assert.equal(recovered.status,200,JSON.stringify(recovered.body));assert.equal(recovered.cookie,null);
+  assert.equal(db.prepare('SELECT status FROM cloud_windows_devices WHERE id=?').get(deviceId).status,'active');
+  assert.equal((await call('/keys','GET',undefined,{Authorization:'Bearer '+recovered.body.accessToken})).status,200);
+  const racing=await register(false),racingId=racing.challenge.deviceId;
+  const first=(await call('/challenge','POST',{deviceId:racingId})).body,second=(await call('/challenge','POST',{deviceId:racingId})).body;
+  const auditStart=audits.length;
+  const raced=await Promise.all([call('/token','POST',await racing.sign(first)),call('/token','POST',await racing.sign(second))]);
+  assert.deepEqual(raced.map(value=>value.status),[200,200]);
+  assert.equal(audits.slice(auditStart).filter(event=>event.eventType==='windows_device_registered').length,1,'parallel recovery activates the existing grant only once');
+  const expired=await register(false),expiredId=expired.challenge.deviceId;
+  const expiring=(await call('/challenge','POST',{deviceId:expiredId})).body;
+  db.prepare('UPDATE cloud_windows_devices SET enrollment_expires_at=0 WHERE id=?').run(expiredId);
+  assert.equal((await call('/challenge','POST',{deviceId:expiredId})).body.code,'initial_auth_incomplete');
+  assert.equal((await call('/token','POST',await expired.sign(expiring))).body.code,'initial_auth_incomplete');
+  assert.equal(db.prepare('SELECT status FROM cloud_windows_devices WHERE id=?').get(expiredId).status,'pending');
+  const revoked=await register(false),revokedId=revoked.challenge.deviceId;
+  db.prepare("UPDATE cloud_windows_devices SET status='revoked' WHERE id=?").run(revokedId);
+  assert.equal((await call('/challenge','POST',{deviceId:revokedId})).body.code,'device_revoked');
 });
 test('concurrent proofs consume exactly once; tampering cannot enlarge scope or change the device',async()=>{
   const device=await register();

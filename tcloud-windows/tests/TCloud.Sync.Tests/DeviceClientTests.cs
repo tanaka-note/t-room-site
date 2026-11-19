@@ -63,6 +63,13 @@ internal static class DeviceClientTests
                 await ThrowsAsync<CryptographicException>(async()=>{using var response=await changed.SendDataAsync("items",HttpMethod.Get);});
                 handler.WrongScope=false;
             }
+            using(var incomplete=new WindowsDeviceClient(transport,file.Load()))
+            {
+                handler.InitialIncomplete=true;
+                await ThrowsAsync<WindowsDeviceRegistrationIncompleteException>(async()=>{using var response=await incomplete.SendDataAsync("items",HttpMethod.Get);});
+                handler.InitialIncomplete=false;
+                Check(file.Exists,"an incomplete first activation is distinct from revocation and never erases the saved device record");
+            }
             using(var revoked=new WindowsDeviceClient(transport,file.Load()))
             {
                 handler.Revoked=true;
@@ -74,7 +81,7 @@ internal static class DeviceClientTests
     }
     internal sealed class DeviceHandler(WindowsDeviceRegistration registration):HttpMessageHandler
     {
-        public int Proofs; public bool ExpireNext;public bool Unavailable;public bool Revoked;public bool WrongScope;public bool BadCursor;public bool ResetCatalog;
+        public int Proofs; public bool ExpireNext;public bool Unavailable;public bool Revoked;public bool WrongScope;public bool BadCursor;public bool ResetCatalog;public bool InitialIncomplete;
         private WindowsDeviceChallenge? challenge;
         public Func<HttpRequestMessage,HttpResponseMessage?>? Data;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken token)
@@ -87,6 +94,7 @@ internal static class DeviceClientTests
                 Check(request.Headers.Authorization is null,"proof request has no old access token");
                 if(Unavailable)return Response(HttpStatusCode.ServiceUnavailable,new {code="authorization_unavailable"});
                 if(Revoked)return Response(HttpStatusCode.Unauthorized,new {code="device_revoked"});
+                if(InitialIncomplete)return Response(HttpStatusCode.Unauthorized,new {code="initial_auth_incomplete"});
                 challenge=new(registration.DeviceId,Guid.NewGuid().ToString("N"),Encode(RandomNumberGenerator.GetBytes(32)),
                     WrongScope?new string('0',64):registration.ScopeHash,DateTimeOffset.UtcNow.AddMinutes(2).ToUnixTimeSeconds());
                 return Response(HttpStatusCode.OK,challenge);
