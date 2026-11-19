@@ -308,6 +308,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
             progress?.Report(new("保存の完了を待ってアップロードします。",done,total));return;
         }
         foreach(var neededBody in bodiesNeeded) {
+            progress?.Report(new("原本をHDDへ保存しています。",done,total));
             var (entry,path,hydrate)=neededBody;token.ThrowIfCancellationRequested();root.VerifyPresent();
             var full=LocalPaths.ResolveUnderRoot(root.Root,path);
             using var resolved=resolver.Resolve(entry);
