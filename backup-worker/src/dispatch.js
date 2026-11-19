@@ -1,7 +1,9 @@
 import { SERVICES } from './registry.js';
 
+export const DISABLED_BACKUP_EXPORTS = Object.freeze(['ai', 'downloader']);
+
 export function scheduledBackupServices() {
-  return Object.keys(SERVICES).filter(service => service !== 'health');
+  return Object.keys(SERVICES).filter(service => service !== 'health' && !DISABLED_BACKUP_EXPORTS.includes(service));
 }
 
 export async function dispatchBackup(env, service, scheduledTime) {

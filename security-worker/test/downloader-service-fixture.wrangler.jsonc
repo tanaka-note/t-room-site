@@ -1,6 +1,0 @@
-{
-  "$schema": "../node_modules/wrangler/config-schema.json",
-  "name": "t-room-downloader",
-  "main": "downloader-service-fixture.mjs",
-  "compatibility_date": "2026-08-06"
-}

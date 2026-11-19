@@ -42,16 +42,6 @@
       "database_id": "e47d0a7f-7c1b-44b4-98ea-e5db030acd86"
     },
     {
-      "binding": "AI_DB",
-      "database_name": "ai-db",
-      "database_id": "94d336e3-66c9-4e45-ae23-6ee34a602b05"
-    },
-    {
-      "binding": "DOWNLOADER_DB",
-      "database_name": "downloader-db",
-      "database_id": "1e047091-e838-4ec3-899d-62014b283660"
-    },
-    {
       "binding": "CALENDAR_DB",
       "database_name": "calendar-db",
       "database_id": "f9ad73f1-92df-40ef-a363-cf328123589d"

@@ -603,8 +603,7 @@ async function verifyBrowser(browserType, name, origin) {
     setupStatusBody = { ...setupStatusBody, credentialStatus: "active" };
     await unsupported.reload({ waitUntil: "load" });
     await unsupported.locator("#dashboard-panel .stats").waitFor({ timeout: 30000 });
-    assert.match(await unsupported.locator("#clamav-definitions").textContent(), /状態を取得できません/);
-    assert.doesNotMatch(await unsupported.locator("#clamav-definitions").textContent(), /定義は有効/);
+    assert.equal(await unsupported.locator("#clamav-definitions, #ai-panel, [data-panel=ai-panel]").count(), 0);
     assert.equal(await unsupported.locator("#admin-view").isVisible(), true, `${name}: PRF unsupported must not block Security Center`);
     assert.match(await unsupported.locator("#dashboard-panel .active-users").textContent(), /田中宏知（オーナー）.*T-Cloud.*日記/s,
       `${name}: dashboard summarizes the services with currently valid sessions`);
@@ -612,15 +611,6 @@ async function verifyBrowser(browserType, name, origin) {
     assert.match(await unsupported.locator("#tcloud-setup-status").textContent(), /修復できます/);
     assert.equal(await unsupported.locator("#tcloud-setup-resume").isVisible(), true, `${name}: legacy PRF=0 can be remeasured on a supported authenticator`);
     assert.equal(registeredCredentialCount, 1);
-    await unsupported.route('**/security/api/dashboard*', async route => {
-      const response = await route.fetch(); const body = await response.json();
-      body.clamavDefinitions = { issues: ['expiring'], generatedAt: 1788503145, expiresAt: 1789107945, verifiedAt: 1788693970, result: 'failed', failures: 2 };
-      await route.fulfill({ response, json: body });
-    });
-    await unsupported.reload({ waitUntil: "load" });
-    await unsupported.locator("#dashboard-panel .stats").waitFor();
-    assert.match(await unsupported.locator("#clamav-definitions").textContent(), /5日以上.*2026.*更新失敗.*連続失敗 2回/s);
-    await unsupported.unroute("**/security/api/dashboard*");
     assert.equal(await unsupported.locator("#tcloud-setup-notice").isVisible(), true, `${name}: warning survives reload without blocking admin UI`);
     assert.equal(registeredCredentialCount, 1, `${name}: reload must not create a second credential`);
     await unsupported.getByRole("button", { name: "履歴", exact: true }).click();

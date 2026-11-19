@@ -135,8 +135,10 @@ test('storage listings are cached while failures and recoveries remain fresh', a
   const cache = { async match() { return stored?.clone(); }, async put(_key, value) { stored = value; } };
   try {
     const first = await getBackupSnapshot(env, {}, cache);
-    assert.equal(first.services.length, Object.keys(SERVICES).length);
-    assert.equal(first.services.some(service => service.id === 'health'), false);
+    assert.equal(first.services.length, Object.keys(SERVICES).filter(id => !['health', 'ai', 'downloader'].includes(id)).length + 1);
+    for (const id of ['health', 'ai', 'downloader', 'downloader2']) {
+      assert.equal(first.services.some(service => service.id === id), false);
+    }
     const count = lists;
     db.prepare("INSERT INTO security_audit_events(event_id,occurred_at,service,event_type,outcome,target_type,target_id,details_json) VALUES (?,?,?,?,?,?,?,?)")
       .run('failed-run', new Date().toISOString(), 'inventory', 'backup_failed', 'failure', 'backup', 'inventory', '{"reason":"operation_failed"}');

@@ -1,5 +1,7 @@
 # Downloader 2 architecture
 
+> サービス終了の対象です。現行の公開・停止手順は [サービス終了手順](history/2026-11-19-downloader-ai-retirement.md) に記載しています。以下は終了前の仕様です。
+
 Downloader 2 is a separate owner-only service. Downloader 1 remains the Cloudflare/Container/R2 product at `/downloader/`; none of its Worker, Queue, Container, R2, D1, URL, or migrations are reused by Downloader 2.
 
 ## Data boundary

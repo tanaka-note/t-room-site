@@ -114,7 +114,7 @@ test("AI and Downloader session responses resolve stale stored names without cha
   assert.equal(down({ identityId: "primary-admin", serviceAccountId: "owner", displayName: "第一管理者" }, accountDisplayName), owner);
   assert.equal(down({ identityId: "wife", serviceAccountId: "owner", displayName: "田中暢美" }, accountDisplayName), "田中暢美");
   const registry = JSON.parse(source("web-apps.json"));
-  for (const id of ["security", "cloud", "diary", "billing", "downloader"]) assert.ok(registry.apps.find((app) => app.id === id).buildFiles.includes("assets/account-display.mjs"));
+  for (const id of ["security", "cloud", "diary", "billing"]) assert.ok(registry.apps.find((app) => app.id === id).buildFiles.includes("assets/account-display.mjs"));
   assert.match(source("android-ai-chat/app/src/main/java/jp/tanaka/troom/ai/ui/AiChatApp.kt"), /Text\(session\.user\.displayName,/);
 });
 

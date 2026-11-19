@@ -1,5 +1,7 @@
 # ClamAV定義の自動更新・監視
 
+> サービス終了の対象です。現行の公開・停止手順は [サービス終了手順](../docs/history/2026-11-19-downloader-ai-retirement.md) に記載しています。以下は終了前の仕様です。
+
 ## 処理と安全条件
 
 GitHub Actions `ClamAV daily definitions` を毎日04:37 JSTに実行する（scheduleは遅延し得る）。本番applicationのdigestを取得し、同じコードを継承する候補imageの定義だけをfreshclamで取得し直す。日々の定義layerを積み重ねないよう、通常のコード公開時のimageをbaseとして保持する。Workerコード・認証・ネットワーク制限・資源上限・保存期限・scan設定は変更しない。

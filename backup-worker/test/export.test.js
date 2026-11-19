@@ -53,7 +53,10 @@ test('SQL tokenizer preserves quote/comment delimiters, UTF8, NUL and rows acros
 test('every scheduled service plus Diary has a Workflow DB ID and correctly scoped bindings, retaining the original schedules',()=>{
   const backup=JSON.parse(readFileSync(new URL('../wrangler.jsonc',import.meta.url)));
   assert.deepEqual(Object.keys(DATABASES).sort(),[...Object.keys(SERVICES),'diary'].sort());
-  for(const [service,id] of Object.entries(DATABASES))assert.equal(backup.d1_databases.find(d=>d.binding===exportSpec(service).binding)?.database_id,id);
+  for (const [service, id] of Object.entries(DATABASES)) {
+    const actual = backup.d1_databases.find(d => d.binding === exportSpec(service).binding)?.database_id;
+    assert.equal(actual, ['ai', 'downloader'].includes(service) ? undefined : id);
+  }
   assert.ok(!backup.r2_buckets.some(b=>b.bucket_name==='t-room-cloud-private'));
   const diary=JSON.parse(readFileSync(new URL('../../diary-worker/wrangler.jsonc',import.meta.url)));
   // Photo backup retirement left only the independent 03:25 JST D1 schedule.
@@ -158,7 +161,7 @@ test('global R2 lease excludes overlapping jobs and a stale owner cannot release
 test('Cron dispatches every DB despite one queue failure; repeated dispatch never reports a failed instance as queued',async t=>{
   t.mock.method(console,'error',()=>{});const calls=[];
   await assert.rejects(dispatchServices({D1_BACKUPS:{async create({params}){calls.push(params.service);if(params.service==='cloud')throw new Error('hidden');},get(){return{async status(){return{status:'errored'};}};}}},now),/BackupDispatchFailed/);
-  assert.deepEqual(calls.sort(),Object.keys(SERVICES).filter(id=>id!=='health').sort());
+  assert.deepEqual(calls.sort(),Object.keys(SERVICES).filter(id=>!['health','ai','downloader'].includes(id)).sort());
   const env={D1_BACKUPS:{async create(){throw new Error('duplicate');},get(){return{async status(){return{status:'complete'};}};}}};
   assert.equal((await dispatchBackup(env,'diary',now)).scheduled,true);
   const audit=recorder();assert.deepEqual(await runScheduledDiaryBackup({...env,...audit},now),{complete:true,scheduled:true});assert.equal(audit.events.length,0,'dispatch is never recorded as backup success');
@@ -190,4 +193,12 @@ for(const mode of ['success','success-audit-unavailable','retention-failed'])tes
     assert.equal(audit.events.at(-1).eventType,mode==='success'?'backup_succeeded':mode==='retention-failed'?'backup_prune_failed':'backup_failed');
     assert.doesNotMatch(JSON.stringify({values,errors,events:audit.events}),/fixture-credential|signature=|ciphertext|health_records/);
   }finally{source.close();}
+});
+
+test('queued AI and Downloader exports stop before opening any Workflow step', async () => {
+  const step = { do() { assert.fail('retired job reached an export or audit step'); },
+    sleep() { assert.fail('retired job was deferred'); } };
+  for (const service of ['ai', 'downloader']) {
+    await assert.rejects(executeExportWorkflow({}, { service, scheduledTime: Date.now() }, step), /InvalidBackupJob/);
+  }
 });

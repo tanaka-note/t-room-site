@@ -60,7 +60,7 @@ for(const workflow of [false,true])test(`Portfolio ${workflow?'Workflow v3':'leg
   const h=scheduledWorker();await h.worker.scheduled({scheduledTime},env);
   if(workflow){
    assert.equal(h.calls.length,0,'Workflow binding must bypass legacy capture');
-   assert.deepEqual(jobs.map(j=>j.params.service).sort(),Object.keys(SERVICES).filter(id=>id!=='health').sort());
+   assert.deepEqual(jobs.map(j=>j.params.service).sort(),Object.keys(SERVICES).filter(id=>!['health','ai','downloader'].includes(id)).sort());
    assert.ok(jobs.every(j=>j.params.scheduledTime===scheduledTime&&Object.hasOwn(DATABASES,j.params.service)));
    const job=jobs.find(j=>j.params.service==='portfolio');assert.equal(job.id,`portfolio-${scheduledTime}`);
    const step={async sleep(){},async do(name,options,fn){return (fn||options)();}};
