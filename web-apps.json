@@ -780,6 +780,8 @@
     { "path": "columns/music/001.html", "reason": "終了済みサービスの再構築用ソース" },
     { "path": "columns/music/002.html", "reason": "終了済みサービスの再構築用ソース" },
     { "path": "columns/music/index.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "downloader-worker/public/index.html", "reason": "終了済みサービスの再構築用ソース" },
+    { "path": "downloader2-worker/public/index.html", "reason": "終了済みサービスの再構築用ソース" },
     { "path": "health-worker/public/index.html", "reason": "終了済みサービスの再構築用ソース" },
     { "path": "investment-bitcoin-decline.html", "reason": "終了済みサービスの再構築用ソース" },
     { "path": "investment-boj-rate-hike.html", "reason": "終了済みサービスの再構築用ソース" },
