@@ -46,6 +46,21 @@ async function photoDescriptor(kit,row,metadata) {
   return photo;
 }
 
+async function runPhotoParts(signal,operation) {
+  signal.throwIfAborted();
+  const controller=new AbortController();
+  const abort=()=>controller.abort(signal.reason);
+  signal.addEventListener('abort',abort,{once:true});
+  try {
+    // Let every part settle after cancellation before the caller releases the lease.
+    await Promise.all(kinds.map(async kind=>{
+      try {await operation(kind,controller.signal);}
+      catch(error) {controller.abort(error);}
+    }));
+    controller.signal.throwIfAborted();
+  } finally {signal.removeEventListener('abort',abort);}
+}
+
 export async function migratePhoto({row,item,run,kit,signingKey,send,signal}) {
   const photo=await photoDescriptor(kit,row,item?JSON.stringify(item.metadata):row.metadata);
   const binding=mediaBinding(row), wrappingKey=scopeKey(kit,binding), freshlyEncrypted=new Map();
@@ -55,43 +70,41 @@ export async function migratePhoto({row,item,run,kit,signingKey,send,signal}) {
     photo.crypto={version:1,key:b64(raw),types:{original:photo.contentType||'application/octet-stream',display:'image/webp',thumbnail:'image/webp'}};
     raw.fill(0);
     const parts={};
-    for(const kind of kinds) {
-      signal.throwIfAborted();
-      const source=await send(`/source/${row.id}/${kind}`,{binary:true}),blob=await source.blob();
+    await runPhotoParts(signal,async (kind,partSignal)=>{
+      const source=await send(`/source/${row.id}/${kind}`,{binary:true,signal:partSignal}),blob=await source.blob();
       const etag=source.headers.get('ETag')?.replace(/^"|"$/g,''), sourceDigest=await hash(blob);
       const nonce=crypto.getRandomValues(new Uint8Array(12));
       const cipher=await encryptPhotoMigrationPart(blob,photo.crypto,row.household,row.id,kind,nonce,sourceDigest);
       parts[kind]={etag,bytes:cipher.size,sha256:await hash(cipher),check:await seal(wrappingKey,{sourceDigest,nonce:b64(nonce)},partBinding(row,run,kind))};
       freshlyEncrypted.set(kind,cipher);
-    }
+    });
     const metadata=await seal(wrappingKey,photo,binding);
     // Reserve the exact bytes and the sealed input proof before performing PUT.
     await send('/reserve',{method:'POST',body:{id:row.id,parts,metadata}});
     item={metadata,parts};
   }
   if(photo.crypto?.version!==1)throw new Error('PhotoMigrationRecordMismatch');
-  for(const kind of kinds) {
-    signal.throwIfAborted();
+  await runPhotoParts(signal,async (kind,partSignal)=>{
     const path=`/target/${row.id}/${kind}`,part=item.parts[kind];
     const check=await open(wrappingKey,part.check,partBinding(row,run,kind));
-    let stored=freshlyEncrypted.has(kind)?null:await send(path,{binary:true,optional:true});
+    let stored=freshlyEncrypted.has(kind)?null:await send(path,{binary:true,optional:true,signal:partSignal});
     if(!stored) {
       let cipher=freshlyEncrypted.get(kind);
       if(!cipher) {
-        const source=await send(`/source/${row.id}/${kind}`,{binary:true});
+        const source=await send(`/source/${row.id}/${kind}`,{binary:true,signal:partSignal});
         if(source.headers.get('ETag')?.replace(/^"|"$/g,'')!==part.etag)throw new Error('PhotoSourceChanged');
         cipher=await encryptPhotoMigrationPart(await source.blob(),photo.crypto,row.household,row.id,kind,unb64(check.nonce,16),check.sourceDigest);
         if(await hash(cipher)!==part.sha256)throw new Error('PhotoMigrationTargetConflict');
       }
-      await send(path,{method:'PUT',body:cipher});
+      await send(path,{method:'PUT',body:cipher,signal:partSignal});
       freshlyEncrypted.delete(kind);
-      stored=await send(path,{binary:true});
+      stored=await send(path,{binary:true,signal:partSignal});
     }
     const ciphertext=await stored.blob();
     if(await hash(ciphertext)!==part.sha256)throw new Error('PhotoMigrationTargetConflict');
     const restored=await decryptPhotoPart(await ciphertext.arrayBuffer(),photo.crypto,row.household,row.id,kind);
     if(await hash(restored)!==check.sourceDigest)throw new Error('PhotoMigrationRestoreMismatch');
-  }
+  });
   const proof=await signed({run,id:row.id,hashes:kinds.map(kind=>item.parts[kind].sha256)},signingKey);
   await send('/verify',{method:'POST',body:proof});
 }
@@ -244,7 +257,10 @@ export function mountPhotoMigration({authenticate=()=>globalThis.TRoomPasskeys.a
   start.addEventListener('click',async()=>{
     if(active||!unlocked)return;
     const controller=new AbortController(),signal=controller.signal;active=controller;
-    const epoch=unlocked, api=(path,options={})=>{signal.throwIfAborted();return send(root+path,{...options,signal});};
+    const epoch=unlocked, api=(path,{signal:requestSignal=signal,...options}={})=>{
+      signal.throwIfAborted();requestSignal.throwIfAborted();
+      return send(root+path,{...options,signal:requestSignal});
+    };
     let heartbeat, expired=false;
     start.disabled=true;stop.hidden=false;
     try {

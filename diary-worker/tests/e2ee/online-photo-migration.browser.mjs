@@ -128,10 +128,38 @@ try {
     return {context,page};
   }
   const run=async()=>{const client=await login();await client.page.click('#existing-photo-migration-start');return client;};
-  const first=await run();
-  await first.page.getByText('移行を中断しました。保存済みの進捗を確認して再開してください。').waitFor();
-  assert.equal(lostPut,true);assert.equal(writes.size,1);assert.equal(db.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'encrypted');
-  await first.context.close();
+  const first=await login();
+  const downloads=new Set(),uploads=new Set();
+  const downloadWave=Promise.withResolvers(),uploadWave=Promise.withResolvers(),stopUploads=Promise.withResolvers();
+  const partOf=route=>new URL(route.request().url()).pathname.split('/').at(-1);
+  await first.page.route('**/photo-migration/source/**',async route=>{
+    downloads.add(partOf(route));
+    if(downloads.size===kinds.length)downloadWave.resolve();
+    await downloadWave.promise;
+    await route.continue().catch(()=>{});
+  });
+  await first.page.route('**/photo-migration/target/**',async route=>{
+    assert.equal(route.request().method(),'PUT');
+    const kind=partOf(route);
+    uploads.add(kind);
+    if(uploads.size===kinds.length)uploadWave.resolve();
+    await uploadWave.promise;
+    // Only the original reaches R2. Its saved response is lost while the
+    // other requests are still in flight, and must cancel the whole photo.
+    if(kind==='original')await route.continue().catch(()=>{});
+    else {await stopUploads.promise;await route.abort().catch(()=>{});}
+  });
+  try {
+    await first.page.click('#existing-photo-migration-start');
+    await first.page.getByText('移行を中断しました。保存済みの進捗を確認して再開してください。').waitFor();
+    await first.page.locator('#existing-photo-migration-stop').waitFor({state:'hidden'});
+    assert.deepEqual(downloads,new Set(kinds));assert.deepEqual(uploads,new Set(kinds));
+    assert.equal(lostPut,true);assert.equal(writes.size,1);
+    assert.equal(db.prepare('SELECT verified FROM diary_photo_migration_items').get().verified,0);
+    assert.equal(db.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'encrypted');
+  } finally {
+    downloadWave.resolve();uploadWave.resolve();stopUploads.resolve();await first.context.close();
+  }
   const manual=await login();
   const cancelTarget=Promise.withResolvers();
   await manual.page.route('**/photo-migration/target/**',async route=>{
@@ -151,7 +179,21 @@ try {
   } finally {
     cancelTarget.resolve();await manual.context.close();
   }
-  const second=await run();
+  const second=await login();
+  const freshId=[...photoIds].sort().at(-1),readback=Promise.withResolvers();
+  const freshTarget=`${migrationRoot}/target/${freshId}/`;
+  await second.page.route(`**${freshTarget}*`,async route=>{
+    if(route.request().method()==='GET')await readback.promise;
+    await route.continue().catch(()=>{});
+  });
+  try {
+    await Promise.all([
+      ...kinds.map(kind=>second.page.waitForRequest(request=>request.method()==='GET'&&new URL(request.url()).pathname===freshTarget+kind)),
+      second.page.click('#existing-photo-migration-start'),
+    ]);
+    assert.equal(writes.size,6);
+    assert.equal(db.prepare('SELECT verified FROM diary_photo_migration_items WHERE id=?').get(freshId).verified,0);
+  } finally {readback.resolve();}
   await second.page.getByText(/準備が完了しました。/).waitFor();
   assert.equal(db.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'encrypted');
   // A changed Diary sequence invalidates the prepared signed rows, but does
@@ -191,7 +233,7 @@ try {
   }finally {kit.scopeKeys.clear();}
   const other=await f.worker.fetch(new Request(`${origin}/diary/api/photos/${photoIds[0]}/original`,{headers:{Cookie:f.cookie('chiharu-admin')}}),f.env,f.ctx);
   assert.equal(other.status,404);assert.deepEqual(errors,[]);
-  await third.context.close();console.log('Online Diary photo migration: both households, lost responses, manual pause, exclusive lease, new browser sessions, isolated SQLite restore, protected cutover, draft continuity and seven-day retention passed.');
+  await third.context.close();console.log('Online Diary photo migration: parallel part transfer and readback, both households, lost responses, manual pause, exclusive lease, new browser sessions, isolated SQLite restore, protected cutover, draft continuity and seven-day retention passed.');
 } finally {
   await browser?.close();if(server)await new Promise(resolve=>server.close(resolve));await f.close();
 }
