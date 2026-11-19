@@ -118,6 +118,7 @@ internal sealed class MainForm:Form
         WindowsSyncState.DestinationUnavailable=>"登録したHDDの接続を待っています。",
         WindowsSyncState.ConnectionPending=>"通信の復帰を待っています。再ログインは不要です。",_=>"同期を停止しました。"};
     private static string SafeMessage(Exception error)=>error switch {
+        WindowsEnrollmentHttpException=>error.Message,
         OperationCanceledException=>"本人確認を中断しました。",
         HttpRequestException=>"通信またはサービスの応答を確認できません。しばらくして再試行してください。",
         CryptographicException=>"端末の鍵または本人確認の結果を確認できません。保存済みの原本は保持されています。",

@@ -87,9 +87,8 @@ internal sealed class ProbeForm : Form
 
     private static async Task RunProbe(nint owner, bool administrator, ProbeResult result, Action<string> progress, CancellationToken token)
     {
-        using var handler = new HttpClientHandler { AllowAutoRedirect = false, CookieContainer = new CookieContainer(), UseCookies = true };
-        using var client = new HttpClient(handler) { BaseAddress = new(WindowsPasskey.Origin), Timeout = TimeSpan.FromSeconds(20), MaxResponseContentBufferSize = 1024 * 1024 };
-        client.DefaultRequestHeaders.Add("Origin", WindowsPasskey.Origin);
+        using var client = WindowsDeviceEnrollment.CreateInitialTransport();
+        client.Timeout = TimeSpan.FromSeconds(20);
         client.DefaultRequestHeaders.UserAgent.ParseAdd("TCloud-Windows-Compatibility/0.1");
         var keyId = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var imported = false;
