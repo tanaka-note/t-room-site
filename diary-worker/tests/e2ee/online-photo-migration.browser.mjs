@@ -179,7 +179,37 @@ try {
   } finally {
     cancelTarget.resolve();await manual.context.close();
   }
+  const changedSession=await login();
+  let changedSessionReads=0,changedSessionAttempts=0;
+  await changedSession.page.route('**/photo-migration/next',async route=>{
+    changedSessionAttempts++;
+    await route.fulfill({status:409,json:{error:'PhotoMigrationLeaseLost'}});
+  });
+  await changedSession.page.route('**/diary/api/session',async route=>{
+    changedSessionReads++;
+    const reply=await route.fetch(),session=await reply.json();
+    assert.equal(session.canMigratePhotos,true);
+    await route.fulfill({response:reply,json:{...session,keySession:{...session.keySession,id:crypto.randomUUID()}}});
+  });
+  await changedSession.page.click('#existing-photo-migration-start');
+  await changedSession.page.getByText('パスキーでログインすると、保存済みの進捗から再開できます。').waitFor();
+  assert.equal(changedSessionAttempts,1);assert.equal(changedSessionReads,1);assert.equal(writes.size,1);
+  await changedSession.page.locator('#existing-photo-migration-stop').waitFor({state:'hidden'});
+  await changedSession.context.close();
+
   const second=await login();
+  const secondToken=crypto.randomUUID();
+  const useOtherTab=endpoint=>second.context.request.post(origin+migrationRoot+endpoint,{
+    headers:{Origin:origin,'X-Diary-Request':'1','X-Diary-Photo-Session':secondToken},data:{}});
+  let expiredLease=false;
+  await second.page.route('**/photo-migration/verify',async route=>{
+    if(!expiredLease) {
+      expiredLease=true;
+      db.prepare('UPDATE diary_photo_migration_job SET lease_until=1 WHERE id=1').run();
+      assert.equal((await useOtherTab('/acquire')).status(),200);
+    }
+    await route.continue();
+  });
   const freshId=[...photoIds].sort().at(-1),readback=Promise.withResolvers();
   const freshTarget=`${migrationRoot}/target/${freshId}/`;
   await second.page.route(`**${freshTarget}*`,async route=>{
@@ -187,10 +217,16 @@ try {
     await route.continue().catch(()=>{});
   });
   try {
-    await Promise.all([
-      ...kinds.map(kind=>second.page.waitForRequest(request=>request.method()==='GET'&&new URL(request.url()).pathname===freshTarget+kind)),
-      second.page.click('#existing-photo-migration-start'),
-    ]);
+    const allReadbacks=Promise.all(kinds.map(kind=>second.page.waitForRequest(request=>request.method()==='GET'&&new URL(request.url()).pathname===freshTarget+kind)));
+    const busy=second.page.waitForResponse(reply=>reply.url().endsWith(migrationRoot+'/acquire')&&reply.status()===409);
+    await second.page.click('#existing-photo-migration-start');
+    assert.equal((await (await busy).json()).error,'PhotoMigrationBusy');
+    await second.page.getByText(/保存済みの進捗から自動で再試行します/).waitFor();
+    assert.equal(await second.page.locator('#login-view').isVisible(),false);
+    assert.equal(await second.page.evaluate(()=>document.dispatchEvent(new Event('troom:before-auto-update',{cancelable:true}))),false);
+    assert.equal(db.prepare('SELECT COUNT(*) AS total FROM diary_photo_migration_items WHERE verified=7').get().total,0);
+    assert.equal((await useOtherTab('/release')).status(),200);
+    await allReadbacks;
     assert.equal(writes.size,6);
     assert.equal(db.prepare('SELECT verified FROM diary_photo_migration_items WHERE id=?').get(freshId).verified,0);
   } finally {readback.resolve();}
@@ -233,7 +269,7 @@ try {
   }finally {kit.scopeKeys.clear();}
   const other=await f.worker.fetch(new Request(`${origin}/diary/api/photos/${photoIds[0]}/original`,{headers:{Cookie:f.cookie('chiharu-admin')}}),f.env,f.ctx);
   assert.equal(other.status,404);assert.deepEqual(errors,[]);
-  await third.context.close();console.log('Online Diary photo migration: parallel part transfer and readback, both households, lost responses, manual pause, exclusive lease, new browser sessions, isolated SQLite restore, protected cutover, draft continuity and seven-day retention passed.');
+  await third.context.close();console.log('Online Diary photo migration: parallel parts, both households, lost responses, manual pause, exclusive lease, automatic conflict recovery, changed-session reauthentication, isolated SQLite restore, protected cutover, draft continuity and seven-day retention passed.');
 } finally {
   await browser?.close();if(server)await new Promise(resolve=>server.close(resolve));await f.close();
 }
