@@ -6,6 +6,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="TCloud.Sync.Tests" />
     <ProjectReference Include="../TCloud.Sync.Core/TCloud.Sync.Core.csproj" />
   </ItemGroup>
 </Project>

@@ -1,9 +1,36 @@
 using System.Security.Cryptography;
+using System.Runtime.InteropServices;
 using TCloud.Sync.Core;
 using TCloud.Sync.Windows;
 
 internal static class RootRegistrationTests
 {
+    public static Task FreshVolume()
+    {
+        var temporary=Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()))+Path.DirectorySeparatorChar;
+        var directory=Path.GetFullPath(Path.Combine(temporary,"tcloud-root-bootstrap-"+Guid.NewGuid().ToString("N")));
+        if(!directory.StartsWith(temporary,StringComparison.OrdinalIgnoreCase))throw new IOException("Invalid fixture directory");
+        Directory.CreateDirectory(directory);CloudFilesRootRegistration? mounted=null;
+        static int Uninitialized(string path,int kind,nint buffer,uint length,out uint returned){returned=0;return unchecked((int)0x80070001);}
+        try {
+            var registration=new WindowsDeviceRegistration(1,Guid.NewGuid().ToString("N"),Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),
+                Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),directory,VolumeInspector.ValidateDestination(directory,[]));
+            mounted=CloudFilesRootRegistration.Attach(registration,[],true,Uninitialized);mounted.VerifyPresent();
+            var saved=registration with {RootFileId=mounted.FileId};
+            Throws<COMException>(()=>CloudFilesRootRegistration.Attach(saved,[],false,Uninitialized));
+            mounted.VerifyPresent();
+            var foreignRejected=false;
+            try{_=CloudFilesRootRegistration.Attach(registration with {ScopeHash=new string('0',64)},[],true,Uninitialized);}
+            catch(Exception error)when(error is COMException or IOException or UnauthorizedAccessException
+                ||error is ArgumentException&&error.HResult==unchecked((int)0x80070057)){foreignRejected=true;}
+            Check(foreignRejected,"the non-update registration must reject an existing owner even when the initial query fails");mounted.VerifyPresent();
+            mounted.UnregisterPreservingOriginals();mounted=null;
+            var sentinel=Path.Combine(directory,"sentinel.txt");File.WriteAllText(sentinel,"existing plaintext");
+            Throws<COMException>(()=>CloudFilesRootRegistration.Attach(registration,[],true,Uninitialized));
+            Check(File.ReadAllText(sentinel)=="existing plaintext","a populated directory is never adopted after a failed query");
+        }finally{mounted?.UnregisterPreservingOriginals();Directory.Delete(directory,true);}
+        return Task.CompletedTask;
+    }
     public static Task Persistence()
     {
         var directory=Path.Combine(Path.GetTempPath(),"tcloud-root-test-"+Guid.NewGuid().ToString("N"));

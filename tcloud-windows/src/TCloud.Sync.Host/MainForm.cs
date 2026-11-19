@@ -67,7 +67,7 @@ internal sealed class MainForm:Form
         if(selected is null||service is not null)return;choose.Enabled=enroll.Enabled=false;
         try {
             WindowsShellProtection.Register(Path.Combine(AppContext.BaseDirectory,"TCloud.ShellExtension.dll"));
-            await WindowsDeviceEnrollment.EnrollAsync(Handle,false,selected,registrationFile,new Progress<string>(s=>status.Text=s),lifetime.Token,preferBestRole:true);
+            await WindowsDeviceEnrollment.EnrollAsync(Handle,false,selected,registrationFile,new Progress<string>(s=>{if(service is null)status.Text=s;}),lifetime.Token,preferBestRole:true);
             SetStartup();ShowRegistered();service=RunServiceAsync(lifetime.Token);
         }catch(Exception error){status.Text=SafeMessage(error);if(registrationFile.Exists){ShowRegistered();service=RunServiceAsync(lifetime.Token);}else choose.Enabled=enroll.Enabled=true;}
     }
@@ -83,7 +83,8 @@ internal sealed class MainForm:Form
             try {
                 var registration=registrationFile.Load();
                 WindowsShellProtection.Register(Path.Combine(AppContext.BaseDirectory,"TCloud.ShellExtension.dll"));
-                var root=CloudFilesRootRegistration.Attach(registration,OtherSyncRoots(),initialize:registration.RootFileId is null);
+                SetStatus("HDDの同期フォルダを確認しています。");
+                var root=await Task.Run(()=>CloudFilesRootRegistration.Attach(registration,OtherSyncRoots(),initialize:registration.RootFileId is null),token);
                 if(registration.RootFileId is null){registration=registration with {RootFileId=root.FileId};registrationFile.Save(registration);}
                 if(!registration.Destination.Equals(root.Root,StringComparison.OrdinalIgnoreCase)){
                     registration=registration with {Destination=root.Root};registrationFile.Save(registration);
@@ -105,6 +106,8 @@ internal sealed class MainForm:Form
             }catch(OperationCanceledException)when(token.IsCancellationRequested){return;}
             catch(Exception error)when(error is CryptographicException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException or WindowsDeviceRegistrationIncompleteException)
             {SetStatus(SafeMessage(error));return;}
+            catch(System.Runtime.InteropServices.COMException error)
+            {SetStatus($"HDDの同期処理を完了できません（Windows 0x{error.HResult:X8}）。再試行します。");}
             catch(Exception error)when(error is IOException or HttpRequestException or System.ComponentModel.Win32Exception)
             {SetStatus("HDDまたは通信の復帰を待っています。保存済みの原本は利用できます。");}
             try{await Task.Delay(TimeSpan.FromSeconds(5),token);}catch(OperationCanceledException)when(token.IsCancellationRequested){return;}
