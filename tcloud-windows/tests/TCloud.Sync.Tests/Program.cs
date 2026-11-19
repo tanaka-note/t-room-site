@@ -102,6 +102,7 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("background synchronization resumes after missing disks and temporary transport failures", SyncLoopTests.ResumeAfterFailure),
     ("revoked devices, incomplete enrollment and corrupt restart state stop without touching originals", SyncLoopTests.RevocationStops),
     ("paths cannot escape sync root or address alternate streams", Paths),
+    ("catalog path batches reject links and recheck directories before later I/O", CatalogTests.PathBatches),
     ("destination inspection is read-only and rejects overlapping roots", Destination),
     ("native passkey requests preserve RP, required verification and credential PRF inputs", PasskeyRequests),
     ("initial login and logout requests satisfy the current Security origin guard without exposing failures",EnrollmentTests.InitialSessionRequests),
@@ -109,6 +110,7 @@ var tests = new List<(string Name, Func<Task> Run)>
 };
 if (args.Contains("--native"))
 {
+    tests.Add(("bulk hydration retains every original and completes its durable baseline", WindowsEngineTests.BulkMirror));
     tests.Add(("Windows full hydration supports cached asynchronous reads and random seeks", () => NativeHydration(true)));
     tests.Add(("retained plaintext originals resist dehydration and remain editable without the provider", NativeOfflineOriginal));
     tests.Add(("real Windows deletion requests can be rejected without losing the file", NativeDeleteVeto));

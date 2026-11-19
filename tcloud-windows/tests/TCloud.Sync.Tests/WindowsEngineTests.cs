@@ -156,9 +156,16 @@ internal static class WindowsEngineTests
                 await Wait(()=>committed==3,"child folder creation and encrypted file upload");
                 await Wait(()=>!Directory.EnumerateFiles(Path.Combine(outer,"pc","uploads"),"*.json").Any(),"child original baseline");
                 Check((CloudFilesLocalStorage.PlaceholderState(backlogPath)&0x30)!=0,"overwrites, names and new uploads never wait for the initial mirror to finish");
+                engine.BeforeHydrationValidation=full=>{
+                    if(!full.Equals(backlogPath,StringComparison.OrdinalIgnoreCase))return;
+                    engine.BeforeHydrationValidation=null;
+                    File.WriteAllText(full,"saved as hydration completed");
+                };
                 lock(gate){backlogBlocked=false;}
                 await Wait(()=>(CloudFilesLocalStorage.PlaceholderState(backlogPath)&0x30)==0,"background originals resume after local uploads");
-                Check(await File.ReadAllTextAsync(backlogPath)=="initial original","deferred original bytes remain intact");
+                await Wait(()=>committed==4,"a save during hydration validation is uploaded rather than suppressed as a provider notification");
+                Check(await File.ReadAllTextAsync(backlogPath)=="saved as hydration completed","the immediate save remains intact");
+                Check(Encoding.UTF8.GetString(EncryptedChunks.Decrypt(fileKey,bodies[999],0))=="saved as hydration completed","the immediate save reaches the existing remote file");
                 Check(remote[19].Value!.Value.GetProperty("folderId").GetInt64()==8,"child files use the new inherited folder key");
                 var renamedChild=Path.Combine(directory,"saved","renamed-child");Directory.Move(childDirectory,renamedChild);
                 await Wait(()=>remoteFolders[8].Value!.Value.GetProperty("name").GetString()=="renamed-child","folder rename uses the existing display name");
@@ -181,7 +188,7 @@ internal static class WindowsEngineTests
                 Check(await File.ReadAllTextAsync(renamed)=="saved revision","provider shutdown retains ordinary plaintext");
                 await File.WriteAllTextAsync(renamed,"offline edit");
                 engine=new(device,registration,root,catalog,Path.Combine(outer,"pc"));
-                await Wait(()=>committed==4,"restart uploads a save made offline without a passkey");
+                await Wait(()=>committed==5,"restart uploads a save made offline without a passkey");
                 await Wait(()=>!Directory.EnumerateFiles(Path.Combine(outer,"pc","uploads"),"*.json").Any(),"offline edit baseline checkpoint");
                 var replacement=Encoding.UTF8.GetBytes("updated online original");
                 var replacementMetadata=CloudFileCrypto.EncryptMetadata(fileKey,new("renamed.txt","text/plain","document",2));
@@ -211,6 +218,51 @@ internal static class WindowsEngineTests
             CryptographicOperations.ZeroMemory(folderKey);CryptographicOperations.ZeroMemory(fileKey);Directory.Delete(outer,true);
         }
     }
+    public static async Task BulkMirror()
+    {
+        const int count=32;
+        var outer=Path.Combine(Path.GetTempPath(),"tcloud-bulk-"+Guid.NewGuid().ToString("N"));var directory=Path.Combine(outer,"originals");Directory.CreateDirectory(directory);
+        var signer=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));var dataKey=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        WindowsDeviceKey.Create(signer);using var rsa=RSA.Create(2048);var blob=rsa.ExportPkcs8PrivateKey();
+        try{WindowsPrivateKey.Import(dataKey,blob);}finally{CryptographicOperations.ZeroMemory(blob);}
+        var folderKey=RandomNumberGenerator.GetBytes(32);var fileKey=RandomNumberGenerator.GetBytes(32);CloudFilesRootRegistration? root=null;
+        try {
+            var registration=new WindowsDeviceRegistration(1,Guid.NewGuid().ToString("N"),Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),signer,dataKey,directory,VolumeInspector.ValidateDestination(directory,[]));
+            root=CloudFilesRootRegistration.Attach(registration,[],initialize:true);registration=registration with {RootFileId=root.FileId};
+            var payload=Encoding.UTF8.GetBytes(new string('b',32768));var wrap=CloudFileCrypto.WrapFile(folderKey,fileKey);
+            var entries=new List<WindowsCatalogEntry>{new("folder",7,1,"present",JsonSerializer.SerializeToElement(new{id=7,parentId=(long?)null,name="saved",cryptoVersion=0}),null,null)};
+            var bodies=new Dictionary<long,byte[]>();
+            for(int i=0;i<count;i++) {
+                long id=17+i;var meta=CloudFileCrypto.EncryptMetadata(fileKey,new("bulk-"+i+".txt","text/plain","document",1));var body=EncryptedChunks.Encrypt(fileKey,payload,0);bodies[id]=body;
+                entries.Add(new("file",id,id,"present",JsonSerializer.SerializeToElement(new{id,folderId=7,name="[encrypted]",cryptoVersion=1,sizeBytes=payload.Length,
+                    chunkSizeBytes=8*1024*1024,chunkCount=1,encryptedSizeBytes=body.Length,encryptedMetadata=meta.Ciphertext,metadataIv=meta.Iv,
+                    wrappedFileKey=wrap.Ciphertext,fileKeyIv=wrap.Iv,contentVersion=Convert.ToHexString(SHA256.HashData(body)).ToLowerInvariant()}),null,null));
+            }
+            var keys=new{scopeHash=registration.ScopeHash,folderKeys=new[]{new{rootFolderId=7,wrappedKey=Encode(rsa.Encrypt(folderKey,RSAEncryptionPadding.OaepSHA256))}}};
+            using var handler=new DeviceClientTests.DeviceHandler(registration){Data=request=>{
+                var route=request.RequestUri!.AbsoluteUri[WindowsDeviceClient.BaseUrl.Length..];if(route=="keys")return Json(keys);
+                if(!route.StartsWith("content/",StringComparison.Ordinal))throw new InvalidOperationException("Unexpected bulk fixture mutation");
+                var bytes=bodies[long.Parse(route[8..])];var range=request.Headers.Range!.Ranges.Single();var from=range.From!.Value;var to=range.To!.Value;
+                var response=new HttpResponseMessage(HttpStatusCode.PartialContent){Content=new ByteArrayContent(bytes.AsSpan((int)from,(int)(to-from+1)).ToArray())};
+                response.Headers.ETag=new("\"bulk-"+route[8..]+"\"");response.Content.Headers.ContentRange=new ContentRangeHeaderValue(from,to,bytes.Length);return response;
+            }};
+            using var transport=new HttpClient(handler);using var device=new WindowsDeviceClient(transport,registration);
+            var catalog=new LocalSyncCatalog(Path.Combine(outer,"pc","catalog.json"),registration);var snapshot=catalog.Empty() with {Remote=entries.ToArray(),RemotePosition=new(new string('a',32),17+count)};await catalog.SaveAsync(snapshot);
+            var complete=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using(var engine=new WindowsSyncEngine(device,registration,root,catalog,Path.Combine(outer,"pc"),new TransferProgress(s=>{if(s.Message.StartsWith("同期済み",StringComparison.Ordinal))complete.TrySetResult();}))) {
+                await engine.ReconcileAsync(snapshot,CancellationToken.None);
+                var finished=await Task.WhenAny(complete.Task,engine.Completion,Task.Delay(TimeSpan.FromSeconds(45)));
+                if(finished!=complete.Task)throw new InvalidOperationException("Bulk hydration did not settle: "+string.Join(";",engine.Errors.Select(e=>e.Message)));
+                var retained=await catalog.LoadAsync();Check(retained.Originals.Length==count&&retained.Originals.All(o=>o.Complete&&o.LocalState is not null),"every completed body has a durable verified baseline");
+                foreach(var record in retained.Originals)Check((await File.ReadAllBytesAsync(LocalPaths.ResolveUnderRoot(directory,record.RelativePath))).AsSpan().SequenceEqual(payload),"bulk plaintext equals its authenticated original");
+            }
+            root.UnregisterPreservingOriginals();root=null;
+        }finally {
+            root?.UnregisterPreservingOriginals();WindowsDeviceKey.Delete(signer);WindowsPrivateKey.Delete(dataKey);
+            CryptographicOperations.ZeroMemory(folderKey);CryptographicOperations.ZeroMemory(fileKey);Directory.Delete(outer,true);
+        }
+    }
+    private sealed class TransferProgress(Action<WindowsTransferStatus> report):IProgress<WindowsTransferStatus>{public void Report(WindowsTransferStatus value)=>report(value);}
     private static string Encode(byte[] bytes)=>Convert.ToBase64String(bytes).TrimEnd('=').Replace('+','-').Replace('/','_');
     private static HttpResponseMessage Json(object value)=>new(HttpStatusCode.OK){Content=JsonContent.Create(value)};
     private static void Check(bool condition,string message){if(!condition)throw new InvalidOperationException(message);}

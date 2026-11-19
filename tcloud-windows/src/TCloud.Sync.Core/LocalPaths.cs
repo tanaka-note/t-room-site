@@ -5,6 +5,18 @@ namespace TCloud.Sync.Core;
 public static class LocalPaths
 {
     public static string ResolveUnderRoot(string root, string relative)
+        => ResolveUnderRoot(root, relative, null);
+
+    // A catalog contains many siblings. Check a shared directory once within
+    // this synchronous validation only; actual I/O still uses the fresh checks
+    // in ResolveUnderRoot, and no filesystem result survives this call.
+    public static void ValidateAllUnderRoot(string root, IEnumerable<string> relatives)
+    {
+        var checkedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var relative in relatives) ResolveUnderRoot(root, relative, checkedDirectories);
+    }
+
+    private static string ResolveUnderRoot(string root, string relative, HashSet<string>? checkedDirectories)
     {
         if (string.IsNullOrWhiteSpace(relative) || Path.IsPathRooted(relative) || relative.Contains(':')
             || relative.Split(['/', '\\']).Any(part => part is "" or "." or ".."))
@@ -14,13 +26,13 @@ public static class LocalPaths
         if (!path.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("保存先の範囲外には操作できません。", nameof(relative));
         var current = fullRoot;
-        if (new DirectoryInfo(fullRoot).LinkTarget is not null)
+        if ((checkedDirectories is null || checkedDirectories.Add(fullRoot)) && new DirectoryInfo(fullRoot).LinkTarget is not null)
             throw new IOException("リンクを経由した保存先は操作できません。");
         // Cloud Files directories are also reparse points, but not symbolic links.
         foreach (var part in Path.GetRelativePath(fullRoot, path).Split(Path.DirectorySeparatorChar).SkipLast(1))
         {
             current = Path.Combine(current, part);
-            if (Directory.Exists(current) && new DirectoryInfo(current).LinkTarget is not null)
+            if ((checkedDirectories is null || checkedDirectories.Add(current)) && Directory.Exists(current) && new DirectoryInfo(current).LinkTarget is not null)
                 throw new IOException("リンクを経由した保存先は操作できません。");
         }
         return path;

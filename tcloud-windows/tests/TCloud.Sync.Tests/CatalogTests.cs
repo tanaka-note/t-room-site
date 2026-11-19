@@ -1,10 +1,34 @@
 using System.Security.Cryptography;
+using System.Diagnostics;
 using System.Text.Json;
 using TCloud.Sync.Core;
 using TCloud.Sync.Windows;
 
 internal static class CatalogTests
 {
+    public static async Task PathBatches()
+    {
+        var directory=Path.Combine(Path.GetTempPath(),"tcloud-path-batch-"+Guid.NewGuid().ToString("N"));
+        var root=Path.Combine(directory,"root");var parent=Path.Combine(root,"parent");var outside=Path.Combine(directory,"outside");
+        Directory.CreateDirectory(parent);Directory.CreateDirectory(outside);File.WriteAllText(Path.Combine(outside,"sentinel.txt"),"keep");
+        try {
+            var paths=Enumerable.Range(0,3200).Select(i=>"parent/file-"+i+".txt").ToArray();
+            LocalPaths.ValidateAllUnderRoot(root,paths);
+            foreach(var invalid in new[]{"../outside","parent/file:stream","parent//file","C:\\outside"})
+                await Throws<ArgumentException>(()=>{LocalPaths.ValidateAllUnderRoot(root,paths.Append(invalid));return Task.CompletedTask;});
+            // A batch never caches filesystem trust across calls or into I/O.
+            Directory.Delete(parent);
+            var start=new ProcessStartInfo("cmd.exe"){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+            foreach(var arg in new[]{"/c","mklink","/J",parent,outside})start.ArgumentList.Add(arg);
+            using(var process=Process.Start(start)!) {await process.WaitForExitAsync();Check(process.ExitCode==0,"create isolated junction fixture");}
+            await Throws<IOException>(()=>{LocalPaths.ValidateAllUnderRoot(root,paths);return Task.CompletedTask;});
+            await Throws<IOException>(()=>Task.FromResult(LocalPaths.ResolveUnderRoot(root,"parent/sentinel.txt")));
+            Check(File.ReadAllText(Path.Combine(outside,"sentinel.txt"))=="keep","link target remains untouched");
+        }finally {
+            if(new DirectoryInfo(parent).LinkTarget is not null)Directory.Delete(parent);
+            Directory.Delete(directory,true);
+        }
+    }
     public static async Task Restart()
     {
         var directory=Path.Combine(Path.GetTempPath(),"tcloud-catalog-test-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
