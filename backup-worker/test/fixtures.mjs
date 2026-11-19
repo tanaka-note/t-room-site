@@ -2,13 +2,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, readFileSync } from 'node:fs';
 import { SERVICES } from '../src/registry.js';
 
-export function database(service) {
+export function database(service, baseline = SERVICES[service]?.migration) {
   const db = new DatabaseSync(':memory:');
   const directory = new URL(`../../${service}-worker/migrations/`, import.meta.url);
   const files = readdirSync(directory).filter(f => f.endsWith('.sql')).sort();
   // Worker-first cutovers may check in migrations before the reviewed backup
   // schema is deployed. Model that explicit registry baseline, not future DDL.
-  const baseline = SERVICES[service]?.migration;
   if (baseline && !files.includes(baseline)) throw new Error('Backup migration baseline is missing');
   for (const file of files.filter(f => !baseline || f <= baseline)) db.exec(readFileSync(new URL(file, directory), 'utf8'));
   return db;

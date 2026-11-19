@@ -14,6 +14,11 @@ import { normalizeTextForHash } from './web-app-registry.mjs';
 test('Diary sealed trust and backup protocol changes also verify their Backup Worker consumer',()=>{
   for(const path of ['diary-worker/e2ee/trust.mjs','diary-worker/e2ee/backup.mjs'])assert.ok(affected([path]).includes('backup'),path);
 });
+test('shared backup schema changes verify every generated browser restore consumer',()=>{
+  for(const path of ['backup-worker/src/registry.js','backup-worker/src/schema-guard.js'])
+    for(const consumer of ['backup','security','diary','billing'])assert.ok(affected([path]).includes(consumer),`${path}: ${consumer}`);
+  assert.ok(affected(['security-worker/tools/build-billing-restore.mjs']).includes('billing'));
+});
 
 test('the retired Health Worker has a route and no data or shared-service bindings', () => {
   const config = JSON.parse(readFileSync(resolve(root, 'health-worker/wrangler.jsonc'), 'utf8'));

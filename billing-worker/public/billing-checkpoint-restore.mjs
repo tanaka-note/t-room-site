@@ -2503,10 +2503,10 @@ var SERVICES = {
     ]
   },
   "cloud": {
-    "label": "T-Cloud",
+    "label": "T-Cloud D1",
     "binding": "CLOUD_DB",
     "database": "cloud-db",
-    "migration": "0012_favorites.sql",
+    "migration": "0013_safe_trash_retention.sql",
     "tables": [
       {
         "name": "cloud_folders",
@@ -2526,9 +2526,10 @@ var SERVICES = {
           "password_wrap_iv",
           "admin_wrapped_key",
           "parent_wrapped_key",
-          "parent_wrap_iv"
+          "parent_wrap_iv",
+          "trash_operation_id"
         ],
-        "sourceColumns": "id,parent_id,name,created_by,created_at,updated_at,deleted_at,password_hash,crypto_version,encrypted_name,name_iv,password_salt,password_wrapped_key,password_wrap_iv,admin_wrapped_key,parent_wrapped_key,parent_wrap_iv"
+        "sourceColumns": "id,parent_id,name,created_by,created_at,updated_at,deleted_at,password_hash,crypto_version,encrypted_name,name_iv,password_salt,password_wrapped_key,password_wrap_iv,admin_wrapped_key,parent_wrapped_key,parent_wrap_iv,trash_operation_id"
       },
       {
         "name": "cloud_files",
@@ -2561,9 +2562,11 @@ var SERVICES = {
           "display_media_kind",
           "display_last_modified",
           "display_duration_seconds",
-          "display_thumbnail_key"
+          "display_thumbnail_key",
+          "trash_operation_id",
+          "purge_id"
         ],
-        "sourceColumns": "id,folder_id,object_key,thumbnail_key,stream_uid,original_name,mime_type,media_kind,size_bytes,status,multipart_upload_id,created_by,created_at,updated_at,deleted_at,crypto_version,encrypted_metadata,metadata_iv,wrapped_file_key,file_key_iv,encrypted_size_bytes,chunk_size_bytes,chunk_count,display_metadata_version,display_name,display_mime_type,display_media_kind,display_last_modified,display_duration_seconds,display_thumbnail_key"
+        "sourceColumns": "id,folder_id,object_key,thumbnail_key,stream_uid,original_name,mime_type,media_kind,size_bytes,status,multipart_upload_id,created_by,created_at,updated_at,deleted_at,crypto_version,encrypted_metadata,metadata_iv,wrapped_file_key,file_key_iv,encrypted_size_bytes,chunk_size_bytes,chunk_count,display_metadata_version,display_name,display_mime_type,display_media_kind,display_last_modified,display_duration_seconds,display_thumbnail_key,trash_operation_id,purge_id"
       },
       {
         "name": "cloud_crypto_config",
@@ -2635,9 +2638,30 @@ var SERVICES = {
           "occurred_at"
         ],
         "sourceColumns": "id,event_type,actor_role,details_json,occurred_at"
+      },
+      {
+        "name": "cloud_trash_operations",
+        "columns": ["id", "deleted_at", "target_type", "target_id", "purge_started"],
+        "sourceColumns": "id,deleted_at,target_type,target_id,purge_started"
+      },
+      {
+        "name": "cloud_trash_purges",
+        "columns": ["id", "file_id", "operation_id", "deleted_at", "folder_id", "object_key", "thumbnail_key", "display_thumbnail_key", "stream_uid", "size_bytes", "source", "run_id", "phase", "created_at", "completed_at"],
+        "sourceColumns": "id,file_id,operation_id,deleted_at,folder_id,object_key,thumbnail_key,display_thumbnail_key,stream_uid,size_bytes,source,run_id,phase,created_at,completed_at"
+      },
+      {
+        "name": "cloud_trash_folder_purges",
+        "columns": ["id", "folder_id", "parent_id", "operation_id", "deleted_at", "run_id", "source", "occurred_at"],
+        "sourceColumns": "id,folder_id,parent_id,operation_id,deleted_at,run_id,source,occurred_at"
       }
     ],
     "knownTables": [
+      "cloud_windows_devices",
+      "cloud_windows_challenges",
+      "cloud_windows_access",
+      "cloud_windows_catalog_control",
+      "cloud_windows_changes",
+      "cloud_windows_heads",
       "cloud_folders",
       "cloud_files",
       "cloud_audit_logs",
@@ -2653,7 +2677,11 @@ var SERVICES = {
       "cloud_usage_summary",
       "cloud_share_folders",
       "cloud_favorite_files",
-      "cloud_favorite_folders"
+      "cloud_favorite_folders",
+      "cloud_trash_operations",
+      "cloud_trash_control",
+      "cloud_trash_purges",
+      "cloud_trash_folder_purges"
     ]
   },
   "security": {
@@ -2838,6 +2866,7 @@ var SERVICES = {
       }
     ],
     "knownTables": [
+      "security_windows_authority_versions",
       "security_identities",
       "security_invitations",
       "security_credentials",
@@ -3409,6 +3438,16 @@ var SERVICES = {
 };
 function archiveSpec(service, migration) {
   const spec = SERVICES[service];
+  if (service === "cloud" && migration === "0012_favorites.sql") {
+    const legacyColumn = (column) => column !== "trash_operation_id" && column !== "purge_id";
+    const legacyTable = (name) => !name.startsWith("cloud_trash_");
+    const tables3 = spec.tables.filter((table3) => legacyTable(table3.name)).map((table3) => ({
+      ...table3,
+      columns: table3.columns.filter(legacyColumn),
+      sourceColumns: table3.sourceColumns.split(",").filter(legacyColumn).join(",")
+    }));
+    return { ...spec, migration, tables: tables3, knownTables: spec.knownTables.filter(legacyTable) };
+  }
   if (service !== "household" || migration !== "0006_independent_households.sql") return spec;
   const tables2 = spec.tables.filter((t) => !t.name.startsWith("household_crypto_")).map((t) => t.name === "household_datasets" ? { ...t, columns: t.columns.filter((c) => c !== "crypto_version"), sourceColumns: t.sourceColumns.replace(",crypto_version", "") } : t);
   return { ...spec, migration, tables: tables2, knownTables: tables2.map((t) => t.name) };
@@ -3442,7 +3481,7 @@ function billingEncryptedSpec(spec) {
 var EXPECTED = {
   "portfolio": "0f996aabee4cfcdec8a1ee2f5d5429b170727d19eba88351ec82577bdedc939a",
   "household": "2f7780c5512b5b1fbd610fc9860e4417832050d941773542871189032bfca10f",
-  "cloud": "c319c54132d640262b215ffdac570407df82f54e07a1f2395ea3b68291a7625c",
+  "cloud": "c52cc385ebd2c565f946207ddf36ec9d5a15659b96dacf84039c3023713e1b1d",
   "security": "597cec608e96b2eb5e7704d8e3216a12aaab1ab5279c8355c0291899dad3313e",
   "billing": "e3d7d3288312675f4635221c89d6dde4a9a5cdccd4d53848feaa308b1b7c725f",
   "payments": "a74f9ffcabf4a59f3ae58f552de94adc14738883ea1f07baf670c9c6fc3c740f",
@@ -3463,6 +3502,14 @@ function reviewedSchemaMatches(service, baseline, actual) {
   return typeof baseline === "string" && (actual === baseline || REVIEWED[service]?.[0] === baseline && REVIEWED[service][1] === actual);
 }
 async function assertSchema(service, rows) {
+  const windows = service === "security" ? (row) => row.tbl_name === "security_windows_authority_versions" || row.name.startsWith("windows_") : service === "cloud" ? (row) => row.name.startsWith("cloud_windows_") : () => false;
+  const windowsRows = rows.filter(windows);
+  if (windowsRows.length) {
+    const expected = service === "security" ? ["953eaa6945a4f7dd167e467de9d500ff32c5ac304dce6d829683ccfcad088a8d"] : ["1daa6b05da32595f44478904b056c787f3c0cd6ac6cbb1551840f79d495d90e9", "7ff775cfcf278592dc53ed51bbca522ec6731468ce57f5de17f1bd354606c0e4"];
+    const shape = windowsRows.map((r) => [r.type, r.name, r.tbl_name, r.sql.replace(/\r\n?/g, "\n")]);
+    if (!expected.includes(await digest(new TextEncoder().encode(JSON.stringify(shape))))) throw new Error("SchemaReviewRequired");
+    rows = rows.filter((row) => !windows(row));
+  }
   const extension = service === "billing" ? (name) => /^billing_(encryption|candidate|freeze)_/.test(name) : service === "security" ? (name) => name === "security_billing_vaults" : () => false;
   const extra = rows.filter((row) => extension(row.name));
   if (extra.length) {
@@ -3491,9 +3538,10 @@ async function assertArchiveSchema(service, migration, rows) {
     return rows.some((row) => row.name === "security_diary_key_config") ? assertEncryptedSchema(service, rows) : assertSchema(service, rows);
   }
   if (service === "diary" && (migration === "diary-e2ee-v1" || migration === "0022_photo_backup_identity.sql" && rows.some((row) => row.name === "diary_e2ee_control")) || service === "security" && migration === "security-diary-keys-v1") return assertEncryptedSchema(service, rows);
-  if (service === "household" && migration === "0006_independent_households.sql") {
+  const historical = service === "cloud" && migration === "0012_favorites.sql" ? "c319c54132d640262b215ffdac570407df82f54e07a1f2395ea3b68291a7625c" : service === "household" && migration === "0006_independent_households.sql" ? "87c3caeb5b1bd4363759e93de4fe377f03064dc96e226fc531546a16146a2ede" : null;
+  if (historical) {
     const schema2 = rows.filter((r) => r.tbl_name !== "d1_migrations").map((r) => [r.type, r.name, r.tbl_name, r.sql.replace(/\r\n?/g, "\n")]);
-    if (await digest(new TextEncoder().encode(JSON.stringify(schema2))) !== "87c3caeb5b1bd4363759e93de4fe377f03064dc96e226fc531546a16146a2ede") throw new Error("SchemaReviewRequired");
+    if (await digest(new TextEncoder().encode(JSON.stringify(schema2))) !== historical) throw new Error("SchemaReviewRequired");
     return;
   }
   return assertSchema(service, rows);
@@ -3850,7 +3898,7 @@ function exportSpec(service, migration) {
     tables: BACKUP_TABLES.map((t) => ({ ...t, sourceColumns: t.columns.join(",") }))
   };
   if (!Object.hasOwn(SERVICES, service)) throw new Error("SourceUnavailable");
-  return SERVICES[service];
+  return service === "cloud" ? archiveSpec(service, migration) : SERVICES[service];
 }
 var exportPrefix = (service, migration) => service === "diary" ? migration === DIARY_ENCRYPTED_MIGRATION ? "v10/" : "v9/" : migration === SECURITY_BILLING_MIGRATION ? "d1/security/v5/" : migration === BILLING_ENCRYPTED_MIGRATION ? "d1/billing/v4/" : service === "security" && migration === SECURITY_DIARY_MIGRATION ? "d1/security/v4/" : `d1/${service}/v3/`;
 var exportDay = (now) => new Date(now + 9 * 36e5).toISOString().slice(0, 10);

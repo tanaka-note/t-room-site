@@ -26,6 +26,10 @@
 
 Credential Managerで既存のパスキーを使用し、Security Centerで明示的に許可されたカレンダーのアカウントだけを表示する。複数権限の場合は選択する。アカウントを選び直す際は現在のサービスsessionを終了し、その端末の通知とキャッシュを消す。未同期データは同期または明示的な破棄が必要。他の端末のsessionは終了しない。
 
+設定の「アカウント」欄に、選択中のアカウント名と「ログアウト」を表示する。ログアウト確認後は既存のsession終了処理を通し、成功時に最初のログイン画面へ戻る。ローカル利用中は「この端末（ログインなし）」と「利用方法を選び直す」を表示し、端末内の予定を保持してログイン画面へ戻る。通信失敗や未同期変更で終了できない場合は現在の利用状態を維持する。
+
+パスキーのドメイン関連付けは`/.well-known/assetlinks.json`で正式packageと署名証明書に対し`common.handle_all_urls`と`common.get_login_creds`の両relationを公開する。片方だけでは一部のAndroid認証プロバイダーがRP IDの検証を拒否する。アプリ側の`asset_statements`、SecurityのAndroid originと同じ証明書を維持し、`tools/test-line-browser.mjs`で対応関係を検証する。実機での認証完了とGoogleの関連付けAPIの成功は区別する。
+
 前面での実操作に伴う正常な保護APIで30日へ延長する。バックグラウンド同期・定期polling・session照会・通知・オフライン操作では延長しない。最後の確認から最大30日、かつ署名されたsessionの期限内で取得済みデータをオフライン閲覧・編集できる。
 
 キャッシュ・未送信変更はAndroid KeystoreのAES-GCMで保護し、Identityとアカウントを照合する。初期上限100MiB、設定で50/100/200/500MiBを選択できる。全期間のテキストを上限内で保存し、上限を超える保存は失敗を表示して既存データを維持する。履歴を黙って間引いて追跡集計を不正確にしない。未送信変更を自動削除しない。
@@ -57,6 +61,8 @@ node tools/smoke-release.mjs --adb <adb.exe> --serial emulator-5556 --apk <relea
 node tools/smoke-calendar-ui.mjs --adb <adb.exe> --serial emulator-5556
 # 設定・戻る・複数通知だけを確認する場合
 node tools/smoke-calendar-ui.mjs --adb <adb.exe> --serial emulator-5556 --settings-only
+# アカウント欄・終了確認・ログイン画面への遷移・ローカル予定保持を確認
+node tools/smoke-calendar-ui.mjs --adb <adb.exe> --serial emulator-5556 --account-only
 ```
 
 単体試験とlint・releaseビルドはローカルで実行する。実機が接続されていない状態では、パスキー画面・通知の実発火・再起動・メーカーの省電力動作・容量逼迫時の動作を「実機確認済み」と扱わない。API・DB初期設定とリリース手順は[`calendar-worker/README.md`](../calendar-worker/README.md)を参照する。

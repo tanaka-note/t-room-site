@@ -316,5 +316,9 @@ class CalendarRepository(
         persist(next); mutable.value = next; rebuildReminders(); return true
     }
     private fun currentCookie() = storage.read("auth")?.getString("cookie") ?: error("再認証してください。")
-    private fun loginError(error: Exception): String = if (error is CalendarApiException && error.status == 404) "カレンダーAPIの接続を確認できません。サービスの公開・利用許可を確認してください。" else error.message ?: "パスキー認証を完了できませんでした。"
+    private fun loginError(error: Exception): String = when {
+        error is CalendarApiException && error.status == 404 -> "カレンダーAPIの接続を確認できません。サービスの公開・利用許可を確認してください。"
+        error.message?.contains("RP ID cannot be validated", ignoreCase = true) == true -> "アプリと認証先の関連付けを確認できません。最新版へ更新し、少し時間を置いてから再試行してください。"
+        else -> error.message ?: "パスキー認証を完了できませんでした。"
+    }
 }

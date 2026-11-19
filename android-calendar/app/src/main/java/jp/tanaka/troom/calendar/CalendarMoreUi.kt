@@ -74,14 +74,23 @@ import java.util.Locale
     AlertDialog(onDismissRequest = onDismiss, title = { Text("${label}を統合") }, text = { Column { Text("「${source.name}」を選択した項目へ統合します。同じ予定の関連は1つにまとまります。"); all.filter { it.id != source.id && it.mergedInto == null && !it.archived }.forEach { item -> Row(Modifier.fillMaxWidth().clickable { selected = item }, verticalAlignment = Alignment.CenterVertically) { RadioButton(selected?.id == item.id, onClick = { selected = item }); Text(item.name) } } } }, confirmButton = { TextButton(enabled = selected != null, onClick = { selected?.let(onMerge) }) { Text("統合") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("戻る") } })
 }
 
-@Composable fun SettingsScreen(state: CalendarState, model: MainViewModel, activity: MainActivity, view: String, onView: (String) -> Unit) {
+@Composable fun SettingsScreen(state: CalendarState, model: MainViewModel, activity: MainActivity, view: String, onLogout: () -> Unit, onView: (String) -> Unit) {
     var editItem by remember { mutableStateOf<Pair<String, NamedItem>?>(null) }; var mergeItem by remember { mutableStateOf<Pair<String, NamedItem>?>(null) }
     var permanentlyDeleting by remember { mutableStateOf<TrashEntry?>(null) }
     val scope = rememberCoroutineScope(); val settings = state.settings
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { model.repository.rebuildReminders() }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(14.dp, 6.dp, 14.dp, 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (view == "settings") {
-            item { Text(state.account?.name.orEmpty(), style = MaterialTheme.typography.titleMedium) }
+            item {
+                OutlinedCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("アカウント", style = MaterialTheme.typography.titleMedium)
+                        Text("アカウント名", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(if (state.account?.localOnly == true) "この端末（ログインなし）" else state.account?.name.orEmpty(), style = MaterialTheme.typography.bodyLarge)
+                        TextButton(onClick = onLogout, enabled = !state.busy) { Text(if (state.account?.localOnly == true) "利用方法を選び直す" else "ログアウト") }
+                    }
+                }
+            }
             item { AppearanceSettings(settings) { model.settings(it) } }
             item { Text("起動時の画面", style = MaterialTheme.typography.titleSmall); ChoiceField(CalendarPage.entries.firstOrNull { it.name == settings.startPage }?.label ?: "月間カレンダー", CalendarPage.entries.map { it.name to it.label }) { model.settings(settings.copy(startPage = it)) } }
             item { Text("予定の初期の長さ", style = MaterialTheme.typography.titleSmall); ChoiceField("${settings.durationMinutes}分", listOf(15, 30, 60, 90, 120, 180).map { it.toString() to "${it}分" }) { model.settings(settings.copy(durationMinutes = it.toInt())) } }

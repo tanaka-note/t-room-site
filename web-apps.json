@@ -333,6 +333,9 @@
         "billing-worker/src/legacy-cleanup.js",
         "billing-worker/src/migration-candidate.js",
         "billing-worker/src/migration-source.js",
+        "security-worker/tools/build-billing-restore.mjs",
+        "backup-worker/src/registry.js",
+        "backup-worker/src/schema-guard.js",
         "tools/shared/tlain-login.css",
         "tools/shared/tlain-login.js"
       ],

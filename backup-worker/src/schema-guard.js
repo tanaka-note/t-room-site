@@ -4,7 +4,7 @@ import { BILLING_ENCRYPTED_MIGRATION, SECURITY_BILLING_MIGRATION } from './billi
 const EXPECTED = {
   "portfolio": "0f996aabee4cfcdec8a1ee2f5d5429b170727d19eba88351ec82577bdedc939a",
   "household": "2f7780c5512b5b1fbd610fc9860e4417832050d941773542871189032bfca10f",
-  "cloud": "c319c54132d640262b215ffdac570407df82f54e07a1f2395ea3b68291a7625c",
+  "cloud": "c52cc385ebd2c565f946207ddf36ec9d5a15659b96dacf84039c3023713e1b1d",
   "security": "597cec608e96b2eb5e7704d8e3216a12aaab1ab5279c8355c0291899dad3313e",
   "billing": "e3d7d3288312675f4635221c89d6dde4a9a5cdccd4d53848feaa308b1b7c725f",
   "payments": "a74f9ffcabf4a59f3ae58f552de94adc14738883ea1f07baf670c9c6fc3c740f",
@@ -75,9 +75,13 @@ export async function assertArchiveSchema(service,migration,rows) {
     return rows.some(row=>row.name==='security_diary_key_config') ? assertEncryptedSchema(service,rows) : assertSchema(service,rows);
   }
   if(service==='diary'&&(migration==='diary-e2ee-v1'||migration==='0022_photo_backup_identity.sql'&&rows.some(row=>row.name==='diary_e2ee_control'))||service==='security'&&migration==='security-diary-keys-v1')return assertEncryptedSchema(service,rows);
-  if(service==='household'&&migration==='0006_independent_households.sql') {
-    const schema=rows.filter(r=>r.tbl_name!=='d1_migrations').map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
-    if(await digest(new TextEncoder().encode(JSON.stringify(schema)))!=='87c3caeb5b1bd4363759e93de4fe377f03064dc96e226fc531546a16146a2ede')throw new Error('SchemaReviewRequired');
+  const historical = service === 'cloud' && migration === '0012_favorites.sql'
+    ? 'c319c54132d640262b215ffdac570407df82f54e07a1f2395ea3b68291a7625c'
+    : service === 'household' && migration === '0006_independent_households.sql'
+      ? '87c3caeb5b1bd4363759e93de4fe377f03064dc96e226fc531546a16146a2ede' : null;
+  if (historical) {
+    const schema = rows.filter(r => r.tbl_name !== 'd1_migrations').map(r => [r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
+    if (await digest(new TextEncoder().encode(JSON.stringify(schema))) !== historical) throw new Error('SchemaReviewRequired');
     return;
   }
   return assertSchema(service,rows);

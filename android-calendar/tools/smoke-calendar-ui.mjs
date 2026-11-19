@@ -45,6 +45,31 @@ tap(text('月間カレンダー'));await dump('calendar');
 const initial=selectedDate();assertMonth(initial);
 assert.equal(nodes.filter(n=>n['content-desc']==='予定を追加').length,1,'Keep only the floating add button');
 assert(!text('予定を追加'),'The extra text add button must be removed');
+if(process.argv.includes('--account-only')){
+  const fixture=`AccountKeep${Date.now()}`;
+  tap(desc('予定を追加'));await dump('account-fixture-editor');
+  tap(nodes.find(n=>n.class==='android.widget.EditText'));run('shell','input','text',fixture);run('shell','input','keyevent','KEYCODE_BACK');await dump('account-fixture-entered');
+  tap(text('保存'));await dump('account-fixture-saved');
+  await openSettings();
+  assert(text('アカウント')&&text('アカウント名')&&text('この端末（ログインなし）'),'Show the account section and explicit local identity');
+  assert(!text('ログアウト'),'Do not label local use as an authenticated account');screenshot('account-settings');
+  tap(text('利用方法を選び直す'));await dump('account-cancel-dialog');run('shell','input','keyevent','KEYCODE_BACK');await dump('account-cancelled');
+  assert(text('アカウント名')&&desc('カレンダーへ戻る'),'Cancelling must retain settings and the active account');
+  tap(text('利用方法を選び直す'));await dump('account-confirm-dialog');assert(nodes.some(n=>n.text.includes('端末内の予定は残したまま')));
+  tap(text('ログイン画面へ'));await dump('account-logged-out');
+  assert(text('パスキーでログイン')&&text('ログインせずこの端末で使う'),'Leave settings for the initial login screen');screenshot('account-login-screen');
+  for(let attempt=1;attempt<=3;attempt++){
+    run('shell','am','force-stop',pkg);run('shell','am','start','-W','-n',`${pkg}/.MainActivity`);await dump(`account-logout-restart-${attempt}`);
+    assert(text('パスキーでログイン')&&text('ログインせずこの端末で使う'),'Restart must keep the logged-out screen');
+  }
+  tap(text('ログインせずこの端末で使う'));await dump('account-local-resumed');
+  tap(desc('検索'));await dump('account-search');tap(nodes.find(n=>n.class==='android.widget.EditText'));run('shell','input','text',fixture);run('shell','input','keyevent','KEYCODE_BACK');await dump('account-retained-data');
+  assert(text(fixture),'Resuming local use must retain the saved appointment');
+  tap(desc('検索'));await dump('account-finished');
+  assert(!run('logcat','-d','-b','crash').includes(pkg),'No release account UI crash');
+  console.log('PASS account section, local identity, cancel/back, return to login, logged-out restart and retained local data');
+  process.exit(0);
+}
 if(!process.argv.includes('--settings-only')){
 tap(desc('次へ'));await dump('next-month');const target=moveDate(initial,1);assertMonth(target);
 tap(desc('予定を追加'));const editorXml=await dump('editor');
@@ -90,7 +115,7 @@ console.log('PASS left/right paging, incomplete swipe and repeated navigation');
 
 const beforeSettings=selectedDate();await openSettings();tap(desc('カレンダーへ戻る'));await dump('toolbar-back');assertMonth(beforeSettings);
 await openSettings();run('shell','input','keyevent','KEYCODE_BACK');await dump('android-back');assertMonth(beforeSettings);await openSettings();
-for(const label of ['ブルー','ミント','ラベンダー','ローズ','ピーチ','グレー','スカイ','ターコイズ','ネイビー','プラム','アンバー','コーラル'])assert(text(label),`Palette ${label} must be available`);
+for(const label of ['ブルー','ミント','ラベンダー','ローズ','ピーチ','グレー','スカイ','ターコイズ','ネイビー','プラム','アンバー','コーラル'])await reveal(label);
 tap(text('ローズ'));await dump('rose');tap(text('ダーク'));await dump('dark');
 assert(checkedLabel('ローズ'));assert(checkedLabel('ダーク'));screenshot('rose-dark');
 run('shell','am','force-stop',pkg);run('shell','am','start','-W','-n',`${pkg}/.MainActivity`);await dump('reopened');
