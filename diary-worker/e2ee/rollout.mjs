@@ -46,6 +46,7 @@ async function verifyCutover(db,packet,directory,actor) {
 export async function transitionRollout(db,{actor,expectedGeneration,next,evidence,directory}) {
   requireOperator(actor);
   const current=await readRollout(db);
+  if(current.evidence?.photoMigration)fail('PhotoMigrationChecking',423);
   if(current.generation!==expectedGeneration)fail('RolloutConflict');
   const allowed={legacy:['migrating'],migrating:['legacy','paused','encrypted'],encrypted:['paused'],paused:current.everEncrypted?['encrypted']:['legacy','migrating'],restoring:['paused']};
   if(!allowed[current.phase]?.includes(next))fail('InvalidRolloutTransition');

@@ -6,6 +6,19 @@ const MAGIC=new Uint8Array([84,68,80,72,1]);
 export const PHOTO_OVERHEAD=MAGIC.length+12+16;
 export const photoHeader=bytes=>bytes.length>=PHOTO_OVERHEAD&&MAGIC.every((byte,i)=>bytes[i]===byte);
 const aad=(household,id,kind)=>encode({protocol:'T-lain diary photo',version:1,household,id,kind});
+
+// The migration caller persists a sealed source digest before reusing a nonce.
+// Retrying with that nonce is permitted only for the exact original bytes.
+export async function encryptPhotoMigrationPart(blob,descriptor,household,id,kind,nonce,sourceDigest) {
+  const raw=unb64(descriptor.key,43),bytes=new Uint8Array(await blob.arrayBuffer());
+  try {
+    if(raw.length!==32||nonce.length!==12||b64(await crypto.subtle.digest('SHA-256',bytes))!==sourceDigest)
+      throw new Error('PhotoSourceChanged');
+    const key=await crypto.subtle.importKey('raw',raw,'AES-GCM',false,['encrypt']);
+    const cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv:nonce,additionalData:aad(household,id,kind)},key,bytes);
+    return new Blob([MAGIC,nonce,cipher],{type:'application/octet-stream'});
+  } finally {raw.fill(0);bytes.fill(0);}
+}
 export async function encryptPhotoParts(parts,household,id) {
   const raw=crypto.getRandomValues(new Uint8Array(32));
   const descriptor={version:1,key:b64(raw),types:{}};
