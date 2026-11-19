@@ -3883,10 +3883,10 @@ async function assertSchema(service, rows2) {
     if (!expected.includes(await digest(new TextEncoder().encode(JSON.stringify(shape))))) throw new Error("SchemaReviewRequired");
     rows2 = rows2.filter((row) => !windows(row));
   }
-  const extension = service === "billing" ? (name) => /^billing_(encryption|candidate|freeze)_/.test(name) : service === "security" ? (name) => name === "security_billing_vaults" : () => false;
+  const extension = service === "billing" ? (name) => /^billing_(encryption|candidate|freeze)_/.test(name) : service === "security" ? (name) => name === "security_billing_vaults" : service === "diary" ? (name) => name.startsWith("diary_photo_migration_") : () => false;
   const extra = rows2.filter((row) => extension(row.name));
   if (extra.length) {
-    const expected = service === "billing" ? "78f4defbcb4a6662c28ca926de959be22d33da90f9a416f4bb832e5d23e7a7a2" : "b0d6dd06625913b84b28ee5dd371c170ddddee5a84121cc98276a2bfc8cbade4";
+    const expected = service === "billing" ? "78f4defbcb4a6662c28ca926de959be22d33da90f9a416f4bb832e5d23e7a7a2" : service === "diary" ? "8042681127de3a0fd052920c32334a938ace9708350183438c7cbfcf28bd98af" : "b0d6dd06625913b84b28ee5dd371c170ddddee5a84121cc98276a2bfc8cbade4";
     const shape = extra.map((r) => [r.type, r.name, r.tbl_name, r.sql.replace(/\r\n?/g, "\n")]);
     if (await digest(new TextEncoder().encode(JSON.stringify(shape))) !== expected) throw new Error("SchemaReviewRequired");
     rows2 = rows2.filter((row) => !extension(row.name));
@@ -4112,7 +4112,7 @@ var rows = (db, sql) => {
   }
 };
 async function restoreDiaryCheckpoint({ bucket, key, trust, onProgress = () => {
-}, wasmUrl = "/security/vendor/sql-wasm.wasm" }) {
+}, includeRecovery = false, wasmUrl = "/security/vendor/sql-wasm.wasm" }) {
   const verified = await verifiedGeneration(bucket, key, (p) => validateExportManifest(p, "diary"));
   if (!verified || verified.payload.expectedMigration !== "diary-e2ee-v1") throw new Error("EncryptedCheckpointRequired");
   const manifest = verified.payload;
@@ -4162,7 +4162,8 @@ async function restoreDiaryCheckpoint({ bucket, key, trust, onProgress = () => {
       directoryGeneration: directory.generation,
       sequence: rows(db, "SELECT COALESCE(MAX(seq),0) sequence FROM diary_e2ee_changes")[0].sequence,
       records: rows(db, "SELECT * FROM diary_e2ee_records ORDER BY id").map(parseRecord),
-      media: rows(db, "SELECT * FROM diary_e2ee_media ORDER BY id")
+      media: rows(db, "SELECT * FROM diary_e2ee_media ORDER BY id"),
+      ...includeRecovery ? { recoveryEnvelope: manifest.keyMetadata.recoveryEnvelope } : {}
     };
   } finally {
     db.close();

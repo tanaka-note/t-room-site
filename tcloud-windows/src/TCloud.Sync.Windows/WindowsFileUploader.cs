@@ -59,7 +59,7 @@ public sealed class WindowsFileUploader(WindowsDeviceClient device,WindowsDevice
                 encryptedMetadata=encrypted.Ciphertext,metadataIv=encrypted.Iv,wrappedFileKey=wrapped.Ciphertext,fileKeyIv=wrapped.Iv,
                 archiveRestore=restore,fastDisplay=await FastDisplayAsync(snapshot.Body,metadata,token)},Json);
             var record=new PendingWindowsUpload(1,registration.ScopeHash,registration.Volume,registration.RootFileId!.Value,id,relativePath,
-                Path.GetFileName(snapshot.PersistedPath!),size,snapshot.Sha256,snapshot.SourceFileId,snapshot.SourceUsn,body,[]);
+                Path.GetFileName(snapshot.PersistedPath!),size,snapshot.Sha256,snapshot.SourceFileId,snapshot.SourceUsn,body,[],MetadataName:metadata.Name);
             await journal.SaveAsync(record,token);return new(record,snapshot);
         }catch{await snapshot.DisposeAsync();root.VerifyPresent();if(snapshot.PersistedPath is not null)File.Delete(snapshot.PersistedPath);throw;}
         finally{if(folderKey is not null)CryptographicOperations.ZeroMemory(folderKey);if(fileKey is not null)CryptographicOperations.ZeroMemory(fileKey);}
@@ -102,7 +102,12 @@ public sealed class WindowsFileUploader(WindowsDeviceClient device,WindowsDevice
                 if(!Convert.ToHexString(checksum.GetHashAndReset()).Equals(record.Sha256,StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("送信用原本の検証に失敗しました。オンラインの原本は更新していません。");
             }finally{CryptographicOperations.ZeroMemory(buffer);}
-            var completed=await Request("windows-updates/"+record.OperationId+"/complete",new{parts=record.Parts.OrderBy(p=>p.PartNumber).Select(p=>new{p.PartNumber,p.Etag})},token);
+            JsonElement completed;
+            try{completed=await Request("windows-updates/"+record.OperationId+"/complete",new{parts=record.Parts.OrderBy(p=>p.PartNumber).Select(p=>new{p.PartNumber,p.Etag})},token);}
+            catch(WindowsUploadConflictException error)when(error.Code=="parts_retry_required") {
+                await journal.SaveAsync(record with {Parts=[]},token);
+                throw new HttpRequestException("送信済み部分を再確認して再送します。",error,HttpStatusCode.ServiceUnavailable);
+            }
             return await Remember(record,completed,token);
         }finally{if(owned is not null)await owned.DisposeAsync();CryptographicOperations.ZeroMemory(folderKey);if(fileKey is not null)CryptographicOperations.ZeroMemory(fileKey);}
     }

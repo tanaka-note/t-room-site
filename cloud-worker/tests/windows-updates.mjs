@@ -20,7 +20,7 @@ env.FILES={
   resumeMultipartUpload(key,id){return{
     async uploadPart(partNumber,body){const upload=uploads.get(id);assert.equal(upload.key,key);const bytes=Buffer.from(await new Response(body).arrayBuffer()),etag=crypto.randomUUID();upload.parts.set(partNumber,{bytes,etag});return{partNumber,etag};},
     async complete(parts){completeCalls++;const upload=uploads.get(id);if(!upload)throw new Error('NoSuchUpload');
-      objects.set(key,Buffer.concat(parts.map(p=>{const part=upload.parts.get(p.partNumber);assert.equal(part.etag,p.etag);return part.bytes;})));uploads.delete(id);},
+      objects.set(key,Buffer.concat(parts.map(p=>{const part=upload.parts.get(p.partNumber);if(!part||part.etag!==p.etag)throw new Error('InvalidPart');return part.bytes;})));uploads.delete(id);},
     async abort(){uploads.delete(id);}
   };},
   async head(key){return objects.has(key)?{size:objects.get(key).length}:null;},
@@ -149,6 +149,18 @@ test('audit failure rolls back parking, archive and current pointer; retry reuse
   assert.equal(db.prepare('SELECT object_key FROM cloud_files WHERE id=?').get(upload.uploadId).object_key,upload.objectKey);
   assert.equal(db.prepare('SELECT count(*) AS n FROM cloud_file_versions WHERE source_file_id=?').get(old.id).n,0);
   const calls=completeCalls;assert.equal((await finish(upload)).status,200);assert.equal(completeCalls,calls);
+});
+
+test('a replaced multipart acknowledgement retries the same version without archiving the current original',async()=>{
+  const old=await original(),{data}=await revisionInput(old),upload=await send(data);
+  const row=db.prepare('SELECT * FROM cloud_files WHERE id=?').get(upload.uploadId);
+  await env.FILES.resumeMultipartUpload(row.object_key,row.multipart_upload_id).uploadPart(1,new Uint8Array(160).fill(2));
+  const failed=await finish(upload);assert.equal(failed.status,409);assert.equal(failed.body.code,'parts_retry_required');
+  assert.equal(db.prepare('SELECT object_key FROM cloud_files WHERE id=?').get(old.id).object_key,old.oldKey);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM cloud_file_versions WHERE source_file_id=?').get(old.id).n,0);
+  upload.parts=[await env.FILES.resumeMultipartUpload(row.object_key,row.multipart_upload_id).uploadPart(1,new Uint8Array(160).fill(2))];
+  assert.equal((await finish(upload)).status,200);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM cloud_file_versions WHERE source_file_id=?').get(old.id).n,1);
 });
 
 test('scope, catalog epoch and restore metadata are checked before a revision is accepted',async()=>{

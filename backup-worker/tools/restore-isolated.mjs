@@ -132,7 +132,7 @@ export async function restoreIsolated(bucket, key, service, {anchor,minimumGener
     if(['billing','payments','inventory','calendar','portfolio'].includes(service)) db.exec(`UPDATE ${service}_accounts SET is_active=0,session_version=session_version+1`);
     if(service==='diary') db.exec('UPDATE diary_accounts SET active=0,session_version=session_version+1,must_change_password=1');
     if(service==='ai') db.exec("UPDATE ai_accounts SET status='disabled'; UPDATE ai_request_claims SET status='failed',error_code='isolated_restore' WHERE status='processing'");
-    if(encryptedDiary)db.exec("UPDATE diary_e2ee_control SET phase='paused',ever_encrypted=1");
+    if(encryptedDiary)db.exec("UPDATE diary_e2ee_control SET phase='paused',ever_encrypted=1,evidence=json_remove(evidence,'$.photoMigration')");
     // Rebuild only derived Windows state in this new, isolated database. Device
     // grants are excluded from the durable allowlist and never become active.
     if(service==='cloud'&&db.prepare("SELECT 1 FROM sqlite_schema WHERE name='cloud_windows_catalog_control' AND type='table'").get()) {

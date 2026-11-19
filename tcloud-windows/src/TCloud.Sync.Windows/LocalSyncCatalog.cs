@@ -4,7 +4,7 @@ using TCloud.Sync.Core;
 namespace TCloud.Sync.Windows;
 
 public sealed record RetainedOriginalRecord(long Id,long Revision,string RelativePath,string PlaceholderIdentity,
-    long SizeBytes,string? Sha256,bool Complete,string? ContentVersion=null,WindowsFileState? LocalState=null,bool Deleted=false,long LocalFileId=0);
+    long SizeBytes,string? Sha256,bool Complete,string? ContentVersion=null,WindowsFileState? LocalState=null,bool Deleted=false,long LocalFileId=0,string? RemoteName=null);
 public sealed record LocalFolderRecord(long Id,string RelativePath,long FileId,long Revision);
 public sealed record LocalSyncSnapshot(int Version,string ScopeHash,VolumeBinding Volume,long RootFileId,
     WindowsCatalogStart? RemotePosition,WindowsCatalogEntry[] Remote,RetainedOriginalRecord[] Originals,LocalFolderRecord[]? Folders=null);
@@ -51,7 +51,7 @@ public sealed class LocalSyncCatalog(string path,WindowsDeviceRegistration regis
             var version=remote?.Value is {} value&&value.TryGetProperty("contentVersion",out var content)?content.GetString():null;
             return current with {Originals=[..current.Originals.Where(e=>e.Id!=descriptor.Id),
                 new(descriptor.Id,descriptor.Revision,descriptor.RelativePath,descriptor.Identity,descriptor.SizeBytes,sha256,retained,version,
-                    LocalFileId:old?.LocalFileId??0)]};
+                    LocalFileId:old?.LocalFileId??0,RemoteName:descriptor.RemoteName)]};
         },token);
     public Task<LocalSyncSnapshot> MarkOriginalRetainedAsync(OriginalDescriptor descriptor,CancellationToken token=default)
         =>UpdateAsync(current=>

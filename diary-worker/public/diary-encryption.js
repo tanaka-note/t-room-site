@@ -7,7 +7,7 @@ import { createEncryptedMediaClient } from './crypto/e2ee/media-client.mjs';
 import { validatePublicTrust,DIARY_READER_PROTOCOL } from './crypto/e2ee/crypto.mjs';
 import {TRUST_PIN,sameTrust,checkTrustFloor,rememberTrustFloor} from './crypto/e2ee/trust.mjs';
 import {saveDevice,loadDevice,clearDevice} from './crypto/e2ee/device.mjs';
-import {takePreparedVault} from './crypto/e2ee/session.mjs';
+import {takePreparedVault,photoReadContext} from './crypto/e2ee/session.mjs';
 const PIN='tlain-diary-authority-public-v1';
 export async function importDiaryTrust(file) {
   if(!file||file.size>12000)throw new Error('信頼設定ファイルを確認してください。');
@@ -64,7 +64,15 @@ async function createEncryptedDiary(session,authentication) {
   catch(error){client.lock();cache?.close();throw error;}
   cached=null;
   navigation=await createPrivateNavigation(client);
-  media=createEncryptedMediaClient(client,request,nativeFetch);
+  let photoBinding;
+  media=createEncryptedMediaClient(client,request,nativeFetch,{
+    photoContext:()=>{
+      if(photoBinding?.generation!==client.generation)photoBinding={generation:client.generation,
+        context:photoReadContext(liveSession.keySession,client.household,initial.rollout.generation,client.directory.generation)};
+      return photoBinding.context;
+    },
+    onPhotoExpiry:expiresAt=>{deadline=Math.max(deadline||0,expiresAt);}
+  });
   api=createEncryptedDiaryApi(client,{session,nativeApi,media,prepareNavigation:()=>navigation.prepareTags(),onHousehold:async household=>{
     const reply=await request('/profile');
     if(reply.profile.actor.accountId!==expectedAccount||reply.profile.webAuthnCredentialId!==expectedCredential||reply.profile.household!==household||reply.profile.directory.value.generation!==client.directory.generation){client.lock();throw new Error('パスキーでログインし直してください。');}

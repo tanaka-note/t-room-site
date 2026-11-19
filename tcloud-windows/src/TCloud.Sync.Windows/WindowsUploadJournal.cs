@@ -8,7 +8,7 @@ public sealed record UploadedPart(int PartNumber,string Etag,string PlainSha256)
 public sealed record UploadAcknowledgement(string OperationId,long UploadId,long FileId,string State,long Revision,long? ArchiveId,string? ContentVersion=null);
 public sealed record PendingWindowsUpload(int Version,string ScopeHash,VolumeBinding Volume,long RootFileId,
     string OperationId,string RelativePath,string SnapshotName,long SizeBytes,string Sha256,long SourceFileId,long SourceUsn,
-    JsonElement Request,UploadedPart[] Parts,UploadAcknowledgement? Result=null);
+    JsonElement Request,UploadedPart[] Parts,UploadAcknowledgement? Result=null,string? MetadataName=null);
 
 /// <summary>PC-only restart records. File keys remain wrapped; no Cookie, bearer, PRF or private key is stored.</summary>
 public sealed class WindowsUploadJournal(string directory,string staging,WindowsDeviceRegistration registration)

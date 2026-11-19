@@ -19,8 +19,10 @@ const server=createServer(async(req,res)=>{try{
   const url=new URL(req.url,origin);
   if(url.pathname.startsWith('/diary/api/')){
     const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=Buffer.concat(chunks);
-    requests.push({path:url.pathname,method:req.method});
+    const observed={path:url.pathname,method:req.method};
+    requests.push(observed);
     const response=await f.worker.fetch(new Request(url,{method:req.method,headers:req.headers,...(body.length?{body}:{})}),f.env,f.ctx);
+    observed.status=response.status;
     res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));return;
   }
   if(url.pathname.startsWith('/security/')||url.pathname==='/assets/pwa-auto-update.js'){res.setHeader('Content-Type','text/javascript');res.end('');return;}
@@ -48,7 +50,7 @@ function seedLegacyPhoto(fileName) {
 }
 const old = seedLegacyPhoto('legacy.png'), oldId = old.id;
 const store=createStore(f.db,{households:writer.directory.households,epochs:writer.directory.epochs,directory:writer.directory,photos:legacyRegistry});writer.transport.mutation=(p,o)=>store.mutation(writer.actor,p,o);
-const entry=await writer.commitAction('seed',{entryDate:'2026-11-18',title:'Mixed photos',content:`[[写真:${oldId}]]`,tags:[],photos:[old]},{state:'published'});
+const entry=await writer.commitAction('seed',{entryDate:'2026-11-18',title:'Mixed photos',content:`[[写真:${oldId}]]\n${'Scroll position fixture\n'.repeat(45)}`,tags:[],photos:[old]},{state:'published'});
 const browser=await chromium.launch({headless:true});
 try{
   const desktop=process.argv.includes('--desktop');
@@ -65,8 +67,50 @@ try{
   const newId=f.db.sqlite.prepare('SELECT id FROM diary_e2ee_media WHERE id!=? AND status=\'attached\'').get(oldId).id;
   const row=f.db.sqlite.prepare('SELECT original_key FROM diary_e2ee_media WHERE id=?').get(newId);assert.ok(photoHeader(f.r2.get(row.original_key).bytes));assert.equal(f.r2.size,6);
   for(const kind of ['original','display','thumbnail'])assert.deepEqual(Buffer.from(f.r2.get(`legacy/${oldId}/${kind}`).bytes),png);
+  let releaseThumb, releaseDisplay, thumbRequested, displayRequested;
+  const thumbnailGate = new Promise(resolve => { releaseThumb = resolve; });
+  const displayGate = new Promise(resolve => { releaseDisplay = resolve; });
+  const thumbnailRequest = new Promise(resolve => { thumbRequested = resolve; });
+  const displayRequest = new Promise(resolve => { displayRequested = resolve; });
+  await page.route(`**/api/photos/${newId}/thumbnail`, async route => {
+    thumbRequested();
+    await thumbnailGate;
+    await route.continue();
+  }, {times:1});
+  await page.route(`**/api/photos/${newId}/display`, async route => {
+    displayRequested();
+    await displayGate;
+    await route.continue();
+  }, {times:1});
   await page.reload();await page.locator('#app-view').waitFor({state:'visible'});await page.locator(`#entry-list [data-entry-id="${entry.id}"]`).click();
-  await page.waitForFunction(()=>{const a=[...document.querySelectorAll('#detail-content .entry-photo')];return a.length===2&&a.every(i=>i.naturalWidth>0);});
+  const frame = page.locator('#entry-dialog[open] .entry-photo-frame').last();
+  const layout = () => frame.evaluate(async element => {
+    await new Promise(requestAnimationFrame);
+    const dialog = element.closest('dialog');
+    const {height, top} = element.getBoundingClientRect();
+    return {height, top, scrollTop:dialog.scrollTop, scrollHeight:dialog.scrollHeight};
+  });
+  try {
+    await frame.scrollIntoViewIfNeeded();
+    const waitForRequest = (request, label) => Promise.race([request,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(label)), 8000).unref())]);
+    await waitForRequest(thumbnailRequest, 'visible photo did not request its thumbnail');
+    const initial = await layout();
+    assert.ok(initial.height > 100 && initial.scrollTop > 0);
+    assert.equal(await frame.locator('.diary-photo-placeholder').isVisible(), true);
+    assert.equal(await frame.locator('.entry-photo-display').getAttribute('src'), null);
+    releaseThumb();
+    await waitForRequest(displayRequest, 'thumbnail did not trigger the display variant');
+    await frame.locator('.entry-photo[data-photo-state="ready"]').waitFor();
+    assert.equal(await frame.locator('.diary-photo-placeholder').isVisible(), false);
+    assert.deepEqual(await layout(), initial, 'thumbnail must keep the initial scroll geometry');
+    releaseDisplay();
+    await frame.locator('.entry-photo-display[data-photo-state="ready"]').waitFor();
+    assert.deepEqual(await layout(), initial, 'the display variant must also keep the initial scroll geometry');
+  } finally {
+    releaseThumb();
+    releaseDisplay();
+  }
   const images=page.locator('#detail-content .entry-photo');await images.last().click();
   await page.waitForFunction(()=>document.querySelector('#photo-viewer-image').naturalWidth>0&&document.querySelector('#photo-viewer-status').hidden);
   const event=page.waitForEvent('download');await page.click('#photo-download-original');const download=await event;
@@ -74,7 +118,9 @@ try{
   await page.keyboard.press('ArrowLeft');await page.waitForFunction(()=>document.querySelector('#photo-viewer-file').textContent.includes('legacy.png')&&document.querySelector('#photo-viewer-status').hidden);
   const legacyDownload=page.waitForEvent('download');await page.click('#photo-download-original');const oldDownload=await legacyDownload;const oldChunks=[];for await(const chunk of await oldDownload.createReadStream())oldChunks.push(chunk);assert.deepEqual(Buffer.concat(oldChunks),png);
   await page.keyboard.press('ArrowRight');await page.waitForFunction(()=>document.querySelector('#photo-viewer-file').textContent.includes('new-private.png')&&document.querySelector('#photo-viewer-status').hidden);
-  assert.ok(requests.filter(r=>r.path===`/diary/api/photos/${newId}/display`).length<=2,'detail and viewer reuse the decoded blob after reload');
+  const displayReads=requests.filter(r=>r.path===`/diary/api/photos/${newId}/display`);
+  assert.ok(displayReads.some(r=>r.status===304),'the viewer revalidates the detail blob');
+  assert.ok(displayReads.filter(r=>r.status===200).length<=2,'the viewer reuses the decoded blob without downloading it again');
   await page.keyboard.press('Escape');await page.locator('#photo-viewer-dialog').waitFor({state:'hidden'});
   await page.keyboard.press('Escape');await page.locator('#entry-dialog').waitFor({state:'hidden'});
   await page.click('#camera-roll-button');
@@ -92,11 +138,71 @@ try{
     while (!reads && performance.now() < deadline) await new Promise(requestAnimationFrame);
     const first=reads;loader.reset();for(const resolve of done)resolve();await new Promise(requestAnimationFrame);const stale=host.querySelectorAll('img[src]').length;host.remove();return {max,first,stale};
   });
-  assert.ok(bounds.first>0&&bounds.first<40);assert.ok(bounds.max<=4);assert.equal(bounds.stale,0);
+  assert.ok(bounds.first>0&&bounds.first<40);assert.ok(bounds.max<=8);assert.equal(bounds.stale,0);
+
+  const priority=await page.evaluate(async()=>{
+    const {createPhotoImages}=await import('/diary/diary-photo-images.js');
+    const started=[],aborted=[];
+    const loader=createPhotoImages({readPhoto:(photo,_kind,{signal})=>new Promise((_,reject)=>{
+      started.push(photo.id);
+      signal.addEventListener('abort',()=>{
+        aborted.push(photo.id);
+        reject(new DOMException('Aborted','AbortError'));
+      },{once:true});
+    })});
+    const host=document.createElement('div');
+    host.style.cssText='position:fixed;inset:0 0 auto;height:380px;overflow:auto;z-index:99999;background:white';
+    document.body.append(host);
+    const waitFor=async(predicate)=>{
+      const until=performance.now()+5000;
+      while(!predicate()&&performance.now()<until)await new Promise(requestAnimationFrame);
+      return predicate();
+    };
+    try {
+      for(let id=0;id<60;id++){
+        const image=document.createElement('img');
+        image.style.cssText='display:block;width:120px;height:50px';
+        host.append(image);
+        loader.bind(image,{id},'thumbnail',{root:host});
+      }
+      const filled=await waitFor(()=>started.filter(id=>typeof id==='number'&&id<8).length>=6);
+      const first=[...started];
+      const selected=document.createElement('img');
+      host.append(selected);
+      loader.bind(selected,{id:'selected'},'thumbnail',{eager:true});
+      const selectedStarted=await waitFor(()=>started.includes('selected'));
+      const selectedBeforePreemption=selectedStarted&&aborted.length===0;
+      host.scrollTop=2400;
+      const newViewport=await waitFor(()=>started.some(id=>typeof id==='number'&&id>=48));
+      return {filled,selectedBeforePreemption,newViewport,preempted:first.some(id=>aborted.includes(id))};
+    } finally {
+      loader.reset();host.remove();
+    }
+  });
+  assert.deepEqual(priority,{filled:true,selectedBeforePreemption:true,newViewport:true,preempted:true});
   await page.click('#logout-button');await page.locator('#login-view').waitFor({state:'visible'});
   assert.equal(await page.locator('img[src^="blob:"]').count(),0,'logout releases plaintext object URLs');
   await page.click('#passkey-login');await page.locator('#app-view').waitFor({state:'visible'});
-  await page.click('#camera-roll-button');
+  let releaseAlbumThumbnail;
+  const albumThumbnailGate = new Promise(resolve => { releaseAlbumThumbnail = resolve; });
+  const firstAlbumRequest = requests.length;
+  await page.route(`**/api/photos/${newId}/thumbnail`, async route => {
+    await albumThumbnailGate;
+    await route.continue();
+  }, {times:1});
+  try {
+    await page.click('#camera-roll-button');
+    const tile = page.locator(`#camera-roll-grid [data-photo-id="${newId}"]`);
+    const placeholder = tile.locator('.diary-photo-placeholder');
+    await placeholder.waitFor({state:'visible'});
+    assert.equal(await placeholder.evaluate(element => getComputedStyle(element,'::before').content), '"写真を読み込み中…"');
+    releaseAlbumThumbnail();
+    await tile.locator('img[data-photo-state="ready"]').waitFor();
+    await placeholder.waitFor({state:'hidden'});
+    assert.equal(requests.slice(firstAlbumRequest).some(({path}) => path.endsWith('/display')), false);
+  } finally {
+    releaseAlbumThumbnail();
+  }
   await page.waitForFunction(()=>{const images=[...document.querySelectorAll('#camera-roll-grid img')];return images.length===2&&images.every(i=>i.naturalWidth>0);});
   if (!desktop) {
     const album = page.locator('#camera-roll-dialog');

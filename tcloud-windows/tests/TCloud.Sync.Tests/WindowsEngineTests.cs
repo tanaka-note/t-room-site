@@ -35,7 +35,7 @@ internal static class WindowsEngineTests
             remote[17]=FileEntry(17,JsonSerializer.SerializeToElement(new{sizeBytes=initial.Length,chunkSizeBytes=8*1024*1024,chunkCount=1,encryptedSizeBytes=initial.Length+32,
                 encryptedMetadata=meta.Ciphertext,metadataIv=meta.Iv,wrappedFileKey=wrap.Ciphertext,fileKeyIv=wrap.Iv}),revision,contentVersion);
             var keys=JsonSerializer.SerializeToElement(new{scopeHash=registration.ScopeHash,folderKeys=new[]{new{rootFolderId=7,wrappedKey=Encode(rsa.Encrypt(folderKey,RSAEncryptionPadding.OaepSHA256))}}});
-            var pending=new Dictionary<string,(JsonElement Body,List<byte[]> Parts,object? Result)>();int committed=0,deleteCalls=0;long nextFile=18;bool loseCompletion=true;
+            var pending=new Dictionary<string,(JsonElement Body,List<byte[]> Parts,object? Result)>();int committed=0,deleteCalls=0;long nextFile=18;bool loseCompletion=true,retryPart=true;
             var createdFolders=new Dictionary<string,long>();var publicKey=rsa.ExportParameters(false);
             object Ack(string op,long target)=>new{operationId=op,uploadId=100,fileId=target,state="committed",revision,archiveId=(long?)100,contentVersion};
             var gate=new object();
@@ -73,6 +73,7 @@ internal static class WindowsEngineTests
                     }
                     if(route.StartsWith("data/windows-updates/",StringComparison.Ordinal)&&route.EndsWith("/complete",StringComparison.Ordinal)) {
                         var op=route.Split('/')[2];var active=pending[op];if(active.Result is not null)return Json(active.Result);
+                        if(retryPart){retryPart=false;return new HttpResponseMessage(HttpStatusCode.Conflict){Content=JsonContent.Create(new{code="parts_retry_required"})};}
                         var target=active.Body.GetProperty("fileId").ValueKind==JsonValueKind.Null?nextFile++:active.Body.GetProperty("fileId").GetInt64();
                         bodies[target]=active.Parts.Single();revision++;committed++;contentVersion=Convert.ToHexString(SHA256.HashData(bodies[target])).ToLowerInvariant();
                         remote[target]=FileEntry(target,active.Body,revision,contentVersion);var ack=Ack(op,target);pending[op]=(active.Body,active.Parts,ack);
@@ -137,13 +138,21 @@ internal static class WindowsEngineTests
                 await Wait(()=>!Directory.EnumerateFiles(Path.Combine(outer,"pc","uploads"),"*.json").Any(),"new original baseline checkpoint");
                 Console.WriteLine("ENGINE fixture: new upload acknowledged");
                 var childDirectory=Path.Combine(directory,"saved","child");Directory.CreateDirectory(childDirectory);
-                await File.WriteAllTextAsync(Path.Combine(childDirectory,"child.txt"),"child original");
+                await File.WriteAllTextAsync(Path.Combine(childDirectory,"literal~003F.txt"),"child original");
                 await Wait(()=>committed==3,"child folder creation and encrypted file upload");
                 await Wait(()=>!Directory.EnumerateFiles(Path.Combine(outer,"pc","uploads"),"*.json").Any(),"child original baseline");
                 Check(remote[19].Value!.Value.GetProperty("folderId").GetInt64()==8,"child files use the new inherited folder key");
                 var renamedChild=Path.Combine(directory,"saved","renamed-child");Directory.Move(childDirectory,renamedChild);
                 await Wait(()=>remoteFolders[8].Value!.Value.GetProperty("name").GetString()=="renamed-child","folder rename uses the existing display name");
                 await Wait(()=>!File.Exists(Path.Combine(outer,"pc","metadata.json")),"folder rename checkpoint");
+                await Wait(()=>File.Exists(Path.Combine(renamedChild,"literal~003F.txt")),"a parent rename preserves the literal local file name");
+                var childValue=remote[19].Value!.Value;
+                var childFolderKey=CloudFileCrypto.UnlockChildFolder(folderKey,new(remoteFolders[8].Value!.Value.GetProperty("parentWrappedKey").GetString()!,remoteFolders[8].Value!.Value.GetProperty("parentWrapIv").GetString()!));
+                try {
+                    var childFileKey=CloudFileCrypto.UnlockFile(childFolderKey,new(childValue.GetProperty("wrappedFileKey").GetString()!,childValue.GetProperty("fileKeyIv").GetString()!));
+                    try{Check(CloudFileCrypto.DecryptMetadata(childFileKey,new(childValue.GetProperty("encryptedMetadata").GetString()!,childValue.GetProperty("metadataIv").GetString()!)).Name=="literal~003F.txt","a folder rename never converts Windows name escapes into an online rename");}
+                    finally{CryptographicOperations.ZeroMemory(childFileKey);}
+                }finally{CryptographicOperations.ZeroMemory(childFolderKey);}
                 lock(gate) {
                     var deleted=DateTimeOffset.UtcNow.ToString("O");var operation=Guid.NewGuid().ToString();
                     remote[19]=new("file",19,++revision,"trashed",null,deleted,operation);

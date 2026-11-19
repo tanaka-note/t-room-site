@@ -5,7 +5,7 @@ using TCloud.Sync.Core;
 
 namespace TCloud.Sync.Windows;
 
-public sealed record OriginalDescriptor(long Id,long Revision,string RelativePath,long SizeBytes,string Identity);
+public sealed record OriginalDescriptor(long Id,long Revision,string RelativePath,long SizeBytes,string Identity,string? RemoteName=null);
 
 /// <summary>Connects scoped device HTTP, existing vault crypto and complete local staging to CFAPI.</summary>
 public sealed class WindowsOriginalTransfer
@@ -36,7 +36,7 @@ public sealed class WindowsOriginalTransfer
         var path=relativePath??value.RelativePath;_=LocalPaths.ResolveUnderRoot(root.Root,path);
         var identity=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
             "TCloud.Windows.Original.v1\n"+registration.ScopeHash+"\n"+entry.Id+"\n"+entry.Revision)));
-        var descriptor=new OriginalDescriptor(entry.Id,entry.Revision,path,value.SizeBytes,identity);
+        var descriptor=new OriginalDescriptor(entry.Id,entry.Revision,path,value.SizeBytes,identity,value.Metadata?.Name);
         entries.AddOrUpdate(identity,(entry,descriptor),(_,old)=>old.Descriptor==descriptor?old
             :throw new InvalidDataException("同じ原本の保存先が複数指定されています。"));
         return descriptor;

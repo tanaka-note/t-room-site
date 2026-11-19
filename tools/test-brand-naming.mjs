@@ -148,6 +148,7 @@ try {
 const allowed = {
   // These fixed protocol transcripts/AAD must interoperate with existing ciphertext.
   "cloud-worker/src/windows-sync.js": /^const PURPOSE = 'T-ROOM Cloud Storage Windows device authorization v1';$/,
+  "cloud-worker/tests/windows-updates.mjs": /additionalData:new TextEncoder\(\)\.encode\('T-ROOM Cloud Storage file metadata v1'\)/,
   "tcloud-windows/src/TCloud.Sync.Core/CloudFileCrypto.cs": /private const string \w+Context = "T-ROOM Cloud Storage [^"]+";/,
   "tcloud-windows/src/TCloud.Sync.Core/EncryptedChunks.cs": /Encoding.UTF8.GetBytes\(\$"T-ROOM Cloud Storage file chunk v1\|\{index\}"\)/,
   "tcloud-windows/src/TCloud.Sync.Windows/PasskeyEnvelope.cs": /"T-ROOM Cloud Storage passkey (admin|client) private key v1"/,

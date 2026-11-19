@@ -101,7 +101,10 @@ async function complete(request,env,session,deps,id) {
   let stored=await env.FILES.head(op.object_key);
   if(!stored) {
     try {await env.FILES.resumeMultipartUpload(op.object_key,fresh.multipart_upload_id).complete(parts);}
-    catch(error){if(!await env.FILES.head(op.object_key))throw error;}
+    catch(error){if(!await env.FILES.head(op.object_key)) {
+      if(/InvalidPart|invalid (?:part|etag)/i.test(String(error?.message||'')))fail(409,'parts_retry_required');
+      throw error;
+    }}
     stored=await env.FILES.head(op.object_key);
   }
   if(!stored||Number(stored.size)!==fresh.encrypted_size_bytes)fail(502,'stored_size_mismatch');

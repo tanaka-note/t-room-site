@@ -36,7 +36,8 @@ export function commands(target) {
     ].map(n => `tests/${n}.mjs`)),
     backup: [{ cwd: 'backup-worker', script: 'test' }],
     calendar: [{ cwd: 'calendar-worker', script: 'test' }],
-    security: [node('security-worker', '--test', ...files('security-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
+    security: [node('.', 'tools/check-web-app-builds.mjs', '--target', 't-room-security'),
+      node('security-worker', '--test', ...files('security-worker/test', /\.test\.js$/).map(f => `test/${f}`))],
     diary: [node('.', 'tools/check-web-app-builds.mjs', '--target', 't-room-diary'),
       node('.', 'tools/verify-web-contracts.mjs'),
       node('diary-worker', '--test', 'tests/photo-backup-retirement.mjs'),
@@ -76,7 +77,7 @@ export function browserTests(target) {
     billing: ['billing-worker/test/dialog-navigation.browser.mjs'],
     inventory: ['inventory-worker/test/inventory.browser.mjs'] })[target] || [];
   if (target === 'cloud') existing.unshift('cloud-worker/tests/trash-retention.browser.mjs', 'cloud-worker/tests/move-partial.browser.mjs', 'cloud-worker/tests/scoped-moves.browser.mjs', 'cloud-worker/tests/folder-history-loading.browser.mjs', 'cloud-worker/tests/backup-status.browser.mjs', 'cloud-worker/tests/diary-backup-mount.browser.mjs', 'cloud-worker/tests/photo-preview-loading.browser.mjs');
-  if (target === 'diary') existing.push('diary-worker/tests/browser/archive-navigation.mjs','diary-worker/tests/e2ee/progressive.browser.mjs','diary-worker/tests/browser/photo-selection-snapshot.mjs','diary-worker/tests/e2ee/photo-selection.browser.mjs','diary-worker/tests/e2ee/photo-editing.browser.mjs','diary-worker/tests/e2ee/photo-mixed.browser.mjs','diary-worker/tests/e2ee/integrity.browser.mjs');
+  if (target === 'diary') existing.push('diary-worker/tests/browser/archive-navigation.mjs','diary-worker/tests/e2ee/progressive.browser.mjs','diary-worker/tests/browser/photo-selection-snapshot.mjs','diary-worker/tests/e2ee/photo-selection.browser.mjs','diary-worker/tests/e2ee/photo-editing.browser.mjs','diary-worker/tests/e2ee/photo-mixed.browser.mjs','diary-worker/tests/e2ee/integrity.browser.mjs','diary-worker/tests/e2ee/online-photo-migration.browser.mjs');
   const searchClear = ['site', 'cloud', 'diary', 'inventory'].includes(target) ? ['tools/test-search-clear.browser.mjs'] : [];
   return ['cloud', 'security', 'diary', 'billing'].includes(target)
     ? [...existing, ...searchClear, 'diary-worker/tests/browser/passkey-account-dialog.mjs'] : [...existing, ...searchClear];

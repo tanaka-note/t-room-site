@@ -2,6 +2,7 @@ import { b64,encode,validateEnvelope } from './crypto.mjs';
 import { canRead } from './policy.mjs';
 import { readRollout,writeLease } from './rollout.mjs';
 import {PHOTO_PREFIX,PHOTO_OVERHEAD,photoHeader} from './photo-crypto.mjs';
+import {PHOTO_CONTEXT_HEADER, PHOTO_FORMAT_HEADER, PHOTO_EXPIRY_HEADER, validPhotoEtag} from './session.mjs';
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[45][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 const HOUR=3_600_000;
@@ -59,14 +60,32 @@ export async function drainEncryptedMedia(env,{limit=50}={}) {
   let processed=0;for(const row of rows){if(await referenced(env,row.id))continue;await env.DB.prepare("UPDATE diary_e2ee_media SET status='retiring' WHERE id=?").bind(row.id).run();await deleteObjects(env,row);processed++;}return {processed};
 }
 
-export async function handleEncryptedMedia(request,env,url,path,actor,{json,readJson,readMultipartForm,store}) {
+export async function handleEncryptedMedia(request,env,url,path,actor,{json,readJson,readMultipartForm,store,photoSession}) {
   const root='/api/encryption/uploads',method=request.method;
   const asset=path.match(/^\/api\/photos\/([0-9a-f-]{36})\/(original|display|thumbnail)$/);
   if(asset&&method==='GET') {
     const row=await env.DB.prepare('SELECT * FROM diary_e2ee_media WHERE id=? AND household=?').bind(asset[1],actor.activeHouseholdId).first();
     if(!row||row.status==='retiring'||!await referenced(env,row.id,actor))fail(404,'PhotoNotFound');
-    const object=await env.MEDIA.get(row[`${asset[2]}_key`]);if(!object)fail(404,'PhotoNotFound');
-    return new Response(object.body,{headers:{'Content-Type':row.original_key.startsWith(PHOTO_PREFIX)||asset[2]==='original'?'application/octet-stream':'image/webp','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
+    const kind=asset[2];
+    const encrypted=row.original_key.startsWith(PHOTO_PREFIX);
+    const format=encrypted?'encrypted':'legacy';
+    if(photoSession&&request.headers.get(PHOTO_FORMAT_HEADER)!==format)fail(409,'PhotoFormatChanged');
+    const validator=photoSession&&kind!=='original'?request.headers.get('If-None-Match'):null;
+    const options=validPhotoEtag(validator)?{onlyIf:new Headers({'If-None-Match':validator})}:undefined;
+    const object=await env.MEDIA.get(row[`${kind}_key`], options);if(!object)fail(404,'PhotoNotFound');
+    const headers=new Headers({'Content-Type':encrypted||kind==='original'?'application/octet-stream':'image/webp',
+      'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
+    if(photoSession) {
+      headers.set(PHOTO_CONTEXT_HEADER,photoSession.context);
+      headers.set(PHOTO_FORMAT_HEADER,format);
+      headers.set(PHOTO_EXPIRY_HEADER,String(photoSession.expiresAt));
+      if(validPhotoEtag(object.httpEtag))headers.set('ETag',object.httpEtag);
+    }
+    if(!object.body) {
+      if(!options||validator!==object.httpEtag)fail(503,'PhotoUnavailable');
+      return new Response(null,{status:304,headers});
+    }
+    return new Response(object.body,{headers});
   }
   const retiring=path.match(/^\/api\/encryption\/media\/([0-9a-f-]{36})$/);
   if(retiring&&method==='DELETE')return json(await retireMedia(env,actor,retiring[1]));

@@ -163,7 +163,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
             using var resolved=resolver.Resolve(entry);var desired=MappedPath(resolved.RelativePath,entry,snapshot.Folders??[]);
             var relative=UniquePath(desired,entry.Id,reserved,seeded);reserved.Add(relative);
             var full=LocalPaths.ResolveUnderRoot(root.Root,relative);if(File.Exists(full))PreserveConflict(full,relative);
-            seeded.Add(new(entry.Id,entry.Revision,relative,Identity(entry),resolved.SizeBytes,null,false,Version(entry)));
+            seeded.Add(new(entry.Id,entry.Revision,relative,Identity(entry),resolved.SizeBytes,null,false,Version(entry),RemoteName:resolved.Metadata?.Name));
         }
         if(seeded.Count!=snapshot.Originals.Length) {
             snapshot=await catalog.UpdateAsync(s=>s with {Originals=[..s.Originals,..seeded.Where(e=>!s.Originals.Any(old=>old.Id==e.Id))]},token);
@@ -199,7 +199,9 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
         foreach(var entry in files.Where(e=>e.State=="present")) {
             token.ThrowIfCancellationRequested();root.VerifyPresent();
             using var resolved=resolver.Resolve(entry);records.TryGetValue(entry.Id,out var old);
-            var desired=UniquePath(MappedPath(resolved.RelativePath,entry,snapshot.Folders??[]),entry.Id,new HashSet<string>(StringComparer.OrdinalIgnoreCase),snapshot.Originals);
+            var mapped=MappedPath(resolved.RelativePath,entry,snapshot.Folders??[]);
+            if(old?.RemoteName==resolved.Metadata?.Name&&old is not null)mapped=Path.Combine(Path.GetDirectoryName(mapped)??"",Path.GetFileName(old.RelativePath));
+            var desired=UniquePath(mapped,entry.Id,new HashSet<string>(StringComparer.OrdinalIgnoreCase),snapshot.Originals);
             var actual=old is null?null:Locate(old,tree);
             var path=actual??old?.RelativePath??UniquePath(desired,entry.Id,claimed,snapshot.Originals);
             claimed.Add(path);
@@ -230,7 +232,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                     actual=null;path=old.RelativePath;
                 }else if(dirty) {
                     if(!folders.TryGetValue(Path.GetDirectoryName(path)??"",out var folder))continue;
-                    var name=localMoved?Path.GetFileName(path):resolved.Metadata!.Name;
+                    var name=Path.GetFileName(path)!=Path.GetFileName(old.RelativePath)?Path.GetFileName(path):resolved.Metadata!.Name;
                     await using var prepared=await uploader.PrepareAsync(resolver,entry,folder,path,snapshot.RemotePosition!.Epoch,
                         resolved.Metadata! with {Name=name,LastModified=new DateTimeOffset(File.GetLastWriteTimeUtc(full)).ToUnixTimeMilliseconds()},token);
                     try {await FinishUploadAsync(await uploader.TransferAsync(prepared.Record,resolver,prepared.Snapshot.Body,token:token),token);}
@@ -241,7 +243,8 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                     await PutAsync(old with {LocalState=null,LocalFileId=WindowsFileState.Read(full).Id},token);return;
                 }else if(localMoved&&entry.Revision==old.Revision) {
                     if(!folders.TryGetValue(Path.GetDirectoryName(path)??"",out var folder))continue;
-                    await RenameFileAsync(entry,resolver,folder,path,snapshot.RemotePosition!.Epoch,token);return;
+                    await RenameFileAsync(entry,resolver,folder,path,snapshot.RemotePosition!.Epoch,
+                        Path.GetFileName(path)!=Path.GetFileName(old.RelativePath)?Path.GetFileName(path):resolved.Metadata!.Name,token);return;
                 }else if(!remoteBodyChanged) {
                     // Online-only rename/move has no reason to fetch the video again.
                     var target=LocalPaths.ResolveUnderRoot(root.Root,desired);
@@ -249,20 +252,20 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                         Directory.CreateDirectory(Path.GetDirectoryName(target)!);File.Move(full,target);path=desired;
                     }
                     var currentState=WindowsFileState.Read(LocalPaths.ResolveUnderRoot(root.Root,path));
-                    await PutAsync(old with {Revision=entry.Revision,RelativePath=path,ContentVersion=Version(entry),LocalState=currentState==stamp?stamp:null,LocalFileId=currentState.Id},token);
+                    await PutAsync(old with {Revision=entry.Revision,RelativePath=path,ContentVersion=Version(entry),LocalState=currentState==stamp?stamp:null,LocalFileId=currentState.Id,RemoteName=resolved.Metadata?.Name},token);
                     done++;continue;
                 }
             }
             if(!File.Exists(full)) {
                 if(actual is not null||old?.LocalFileId is >0&&ScanTree().Files.Any(f=>f.State.Id==old.LocalFileId))return;
-                var descriptor=new RetainedOriginalRecord(entry.Id,entry.Revision,path,Identity(entry),resolved.SizeBytes,null,false,Version(entry));
+                var descriptor=new RetainedOriginalRecord(entry.Id,entry.Revision,path,Identity(entry),resolved.SizeBytes,null,false,Version(entry),RemoteName:resolved.Metadata?.Name);
                 await PutAsync(descriptor,token);downloads[descriptor.PlaceholderIdentity]=(entry,snapshot.Remote,path);
                 provider.Add(path,resolved.SizeBytes,descriptor.PlaceholderIdentity);
             }
             var state=CloudFilesLocalStorage.PlaceholderState(full);
             if((state&0x30)!=0&&old is not null&&old.Revision!=entry.Revision) {
                 using(var mutation=provider.AllowLocalMutation(full))File.Delete(full);
-                var replacement=new RetainedOriginalRecord(entry.Id,entry.Revision,path,Identity(entry),resolved.SizeBytes,null,false,Version(entry));
+                var replacement=new RetainedOriginalRecord(entry.Id,entry.Revision,path,Identity(entry),resolved.SizeBytes,null,false,Version(entry),RemoteName:resolved.Metadata?.Name);
                 await PutAsync(replacement,token);downloads[replacement.PlaceholderIdentity]=(entry,snapshot.Remote,path);
                 provider.Add(path,resolved.SizeBytes,replacement.PlaceholderIdentity);remoteBodyChanged=false;
             }
@@ -279,7 +282,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                     :await OriginalStager.DownloadLegacyAsync(staging,resolved.SizeBytes,source,token:token,retain:true);
                 var current=(await catalog.LoadAsync(token)).Remote.SingleOrDefault(e=>e.Kind=="file"&&e.Id==entry.Id);
                 if(current?.Revision!=entry.Revision){await staged.DisposeAsync();root.VerifyPresent();File.Delete(staged.PersistedPath!);return;}
-                await exchange.InstallAsync(staged,new(entry.Id,entry.Revision,path,Identity(entry),resolved.SizeBytes,staged.Sha256,true,Version(entry)),token);
+                await exchange.InstallAsync(staged,new(entry.Id,entry.Revision,path,Identity(entry),resolved.SizeBytes,staged.Sha256,true,Version(entry),RemoteName:resolved.Metadata?.Name),token);
             }
             done++;progress?.Report(new("原本をHDDへ保存しています。",done,total));
         }
@@ -337,7 +340,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
         var snapshot=await catalog.LoadAsync(token);var remote=snapshot.Remote.SingleOrDefault(e=>e.Kind=="file"&&e.Id==result.FileId&&e.Revision>=result.Revision);
         if(remote is null)return;
         if(result.ContentVersion?.Length!=64)throw new InvalidDataException("送信原本の版情報がありません。");
-        var baseline=new RetainedOriginalRecord(result.FileId,result.Revision,record.RelativePath,Identity(remote with {Revision=result.Revision}),record.SizeBytes,record.Sha256,true,result.ContentVersion,stamp,LocalFileId:record.SourceFileId);
+        var baseline=new RetainedOriginalRecord(result.FileId,result.Revision,record.RelativePath,Identity(remote with {Revision=result.Revision}),record.SizeBytes,record.Sha256,true,result.ContentVersion,stamp,LocalFileId:record.SourceFileId,RemoteName:record.MetadataName);
         await PutAsync(baseline,token);await uploads.ForgetAsync(record,token);root.VerifyPresent();File.Delete(uploads.SnapshotPath(record));
     }
     private async Task PreserveUploadConflictAsync(PendingWindowsUpload record,CancellationToken token)
@@ -354,10 +357,10 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
         var extension=Path.GetExtension(relative);var candidate=relative[..^extension.Length]+" (競合 "+DateTime.Now.ToString("yyyyMMdd-HHmmss")+"-"+Guid.NewGuid().ToString("N")[..6]+")"+extension;
         root.VerifyPresent();File.Move(full,LocalPaths.ResolveUnderRoot(root.Root,candidate));return candidate;
     }
-    private async Task RenameFileAsync(WindowsCatalogEntry entry,CloudOriginalResolver resolver,long folder,string path,string epoch,CancellationToken token)
+    private async Task RenameFileAsync(WindowsCatalogEntry entry,CloudOriginalResolver resolver,long folder,string path,string epoch,string name,CancellationToken token)
     {
         using var original=resolver.Resolve(entry);var value=entry.Value!.Value;
-        var metadata=original.Metadata! with {Name=Path.GetFileName(path)};
+        var metadata=original.Metadata! with {Name=name};
         var encrypted=CloudFileCrypto.EncryptMetadata(original.FileKey!,metadata);
         var parent=resolver.CopyFolderKey(folder);CloudCipherEnvelope wrap;
         try {wrap=CloudFileCrypto.WrapFile(parent,original.FileKey!);}finally{CryptographicOperations.ZeroMemory(parent);}
@@ -402,7 +405,8 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
         if(matches) {
             if(intent.Kind=="file") {
                 var original=snapshot.Originals.Single(e=>e.Id==intent.Id);
-                await PutAsync(original with {Revision=remote.Revision,RelativePath=intent.RelativePath,ContentVersion=Version(remote),LocalState=null,LocalFileId=intent.LocalFileId},token);
+                using var resolver=new CloudOriginalResolver(key,snapshot.Remote,keys);using var resolved=resolver.Resolve(remote);
+                await PutAsync(original with {Revision=remote.Revision,RelativePath=intent.RelativePath,ContentVersion=Version(remote),LocalState=null,LocalFileId=intent.LocalFileId,RemoteName=resolved.Metadata?.Name},token);
             }else await catalog.UpdateAsync(s=>s with {Folders=(s.Folders??[]).Select(f=>f.Id==intent.Id?f with {Revision=remote.Revision,RelativePath=intent.RelativePath}:f).ToArray()},token);
             File.Delete(metadataPath);return false;
         }

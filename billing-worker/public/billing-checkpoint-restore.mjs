@@ -3534,10 +3534,10 @@ async function assertSchema(service, rows) {
     if (!expected.includes(await digest(new TextEncoder().encode(JSON.stringify(shape))))) throw new Error("SchemaReviewRequired");
     rows = rows.filter((row) => !windows(row));
   }
-  const extension = service === "billing" ? (name) => /^billing_(encryption|candidate|freeze)_/.test(name) : service === "security" ? (name) => name === "security_billing_vaults" : () => false;
+  const extension = service === "billing" ? (name) => /^billing_(encryption|candidate|freeze)_/.test(name) : service === "security" ? (name) => name === "security_billing_vaults" : service === "diary" ? (name) => name.startsWith("diary_photo_migration_") : () => false;
   const extra = rows.filter((row) => extension(row.name));
   if (extra.length) {
-    const expected = service === "billing" ? "78f4defbcb4a6662c28ca926de959be22d33da90f9a416f4bb832e5d23e7a7a2" : "b0d6dd06625913b84b28ee5dd371c170ddddee5a84121cc98276a2bfc8cbade4";
+    const expected = service === "billing" ? "78f4defbcb4a6662c28ca926de959be22d33da90f9a416f4bb832e5d23e7a7a2" : service === "diary" ? "8042681127de3a0fd052920c32334a938ace9708350183438c7cbfcf28bd98af" : "b0d6dd06625913b84b28ee5dd371c170ddddee5a84121cc98276a2bfc8cbade4";
     const shape = extra.map((r) => [r.type, r.name, r.tbl_name, r.sql.replace(/\r\n?/g, "\n")]);
     if (await digest(new TextEncoder().encode(JSON.stringify(shape))) !== expected) throw new Error("SchemaReviewRequired");
     rows = rows.filter((row) => !extension(row.name));

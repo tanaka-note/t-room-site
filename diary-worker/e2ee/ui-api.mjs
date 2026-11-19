@@ -10,16 +10,73 @@ export function createEncryptedDiaryApi(client,{session,nativeApi,media,onHouseh
     }
     await syncing.promise;client.assertOpen(generation);await prepareNavigation();client.assertOpen(generation);initialized=true;
   };
-  const photos=()=>{
-    if(client.albumCache?.records===client.records)return client.albumCache.photos;
-    const output=[];
-    for(const {row} of client.records.values())if(row.state==='published') {
-      const entry=client.entry(row.id),order=new Map(findPhotoMarkers(entry.content).map((marker,i)=>[marker.id,i]));
-      for(const photo of entry.photos)output.push({...photo,entryId:entry.id,entryDate:entry.entryDate,entryTitle:entry.title,authorId:entry.authorId,authorName:entry.authorName,revision:entry.revision,_position:order.get(photo.id)??1e9,_published:entry.lastPublishedAt||'',_tags:entry.tags,_content:entry.content});
+  const photoOrder = (a, b) => -(a.entryDate.localeCompare(b.entryDate) || a._published.localeCompare(b._published)
+    || a.entryId - b.entryId || a._position - b._position || String(a.createdAt || '').localeCompare(String(b.createdAt || ''))
+    || a.id.localeCompare(b.id));
+  const albumPhoto = ({_position, _published, _tags, _content, ...photo}) => photo;
+  function collectPhotos(records) {
+    const photos = [];
+    for (const {row} of records) {
+      if (row.state !== 'published' || !row.photoIds.length) continue;
+      const entry = client.entry(row.id);
+      const order = new Map(findPhotoMarkers(entry.content).map((marker, i) => [marker.id, i]));
+      for (const photo of entry.photos) {
+        photos.push({...photo, entryId:entry.id, entryDate:entry.entryDate, entryTitle:entry.title, authorId:entry.authorId,
+          authorName:entry.authorName, revision:entry.revision, _position:order.get(photo.id) ?? -1,
+          _published:entry.lastPublishedAt || '', _tags:entry.tags, _content:entry.content});
+      }
     }
-    output.sort((a,b)=>-(a.entryDate.localeCompare(b.entryDate)||a._published.localeCompare(b._published)||a.entryId-b.entryId||a._position-b._position||String(a.createdAt||'').localeCompare(String(b.createdAt||''))||a.id.localeCompare(b.id)));
-    client.albumCache={records:client.records,photos:output};return output;
-  };
+    return photos.sort(photoOrder);
+  }
+
+  function albumIndex() {
+    const {records, sequence} = client;
+    if (client.albumCache?.records === records && client.albumCache.sequence === sequence) return client.albumCache;
+    const byDate = new Map();
+    for (const record of records.values()) {
+      if (record.row.state !== 'published' || !record.row.photoIds.length) continue;
+      const date = (record.entry || record.summary).entryDate;
+      if (!byDate.has(date)) byDate.set(date, {date, records:[], count:0, photos:null});
+      const day = byDate.get(date);
+      day.records.push(record);
+      day.count += record.row.photoIds.length;
+    }
+    const days = [...byDate.values()].sort((a, b) => b.date.localeCompare(a.date));
+    const index = {records, sequence, days, photos:null};
+    client.albumCache = index;
+    return index;
+  }
+
+  function photosForDay(day) {
+    return day.photos ??= collectPhotos(day.records);
+  }
+
+  async function photoPage({month, oldest, offset, limit}) {
+    const generation = client.generation;
+    const index = albumIndex();
+    const days = index.days.filter(day => !month || day.date.startsWith(month));
+    if (oldest) days.reverse();
+    const page = [];
+    let count = 0, skipped = 0;
+    const end = offset + limit;
+    for (const day of days) {
+      // All articles on an intersecting day are needed to preserve publication
+      // order and the within-article order at both page boundaries.
+      if (count + day.count <= offset) skipped += day.count;
+      else if (count < end) page.push(day);
+      count += day.count;
+    }
+    await client.hydrateRecords(page.filter(day => !day.photos).flatMap(day => day.records));
+    client.assertOpen(generation);
+    if (index.records !== client.records || index.sequence !== client.sequence) fail(409, '写真一覧が更新されました。もう一度お試しください。');
+    const photos = page.flatMap(day => oldest ? photosForDay(day).slice().reverse() : photosForDay(day));
+    return {photos:photos.slice(offset - skipped, end - skipped).map(albumPhoto), hasMore:count > end, offset, limit};
+  }
+
+  function allPhotos() {
+    const index = albumIndex();
+    return index.photos ??= index.days.flatMap(photosForDay);
+  }
   return async(path,options={})=>{
     const url=new URL(path,'https://diary.invalid'),method=options.method||'GET',body=options.body?typeof options.body==='string'?JSON.parse(options.body):options.body:{};
     if(url.pathname==='/passkey/handoff')return nativeApi(path,options);
@@ -63,14 +120,17 @@ export function createEncryptedDiaryApi(client,{session,nativeApi,media,onHouseh
       return {months:[...counts].filter(([,count])=>count>0).sort((a,b)=>b[0].localeCompare(a[0])).map(([value,count])=>({value,count}))};
     }
     if(url.pathname==='/photos'||url.pathname==='/photos/save-list') {
-      await client.hydrateRecords([...client.records.values()].filter(record=>record.row.state==='published'));
       const p=url.searchParams,month=p.get('month'),entryQuery=p.get('entryQuery'),fileNameQuery=p.get('fileName'),from=p.get('dateFrom'),to=p.get('dateTo');
       const saving=url.pathname==='/photos/save-list';if(saving&&(!/^\d{4}-\d{2}-\d{2}$/.test(from||'')||!/^\d{4}-\d{2}-\d{2}$/.test(to||'')||from>to))fail(400,'InvalidDates');
-      let result=photos().filter(photo=>(!month||photo.entryDate.startsWith(month))&&(!from||photo.entryDate>=from)&&(!to||photo.entryDate<=to)&&(!fileNameQuery||photo.fileName.includes(fileNameQuery))&&(!entryQuery||photo.entryTitle.includes(entryQuery)||photo._content.includes(entryQuery)||photo.fileName.includes(entryQuery)||photo._tags.some(t=>t.includes(entryQuery))));
-      if(saving||month&&p.get('order')==='oldest')result.reverse();
-      result=result.map(({_position,_published,_tags,_content,...photo})=>photo);
+      const offset=Math.max(0,Number(p.get('offset'))||0),limit=Math.min(100,Math.max(1,Number(p.get('limit'))||48));
+      const oldest = month && p.get('order') === 'oldest';
+      if (!saving && !entryQuery && !fileNameQuery && !from && !to) return photoPage({month, oldest, offset, limit});
+
+      await client.hydrateRecords([...client.records.values()].filter(record=>record.row.state==='published'));
+      const result=allPhotos().filter(photo=>(!month||photo.entryDate.startsWith(month))&&(!from||photo.entryDate>=from)&&(!to||photo.entryDate<=to)&&(!fileNameQuery||photo.fileName.includes(fileNameQuery))&&(!entryQuery||photo.entryTitle.includes(entryQuery)||photo._content.includes(entryQuery)||photo.fileName.includes(entryQuery)||photo._tags.some(t=>t.includes(entryQuery))));
+      if(saving||oldest)result.reverse();
       if(saving)return {photos:result.map(({id,fileName,contentType,originalSize})=>({id,fileName,contentType,originalSize}))};
-      const offset=Math.max(0,Number(p.get('offset'))||0),limit=Math.min(100,Math.max(1,Number(p.get('limit'))||48));return {photos:result.slice(offset,offset+limit),hasMore:result.length>offset+limit,offset,limit};
+      return {photos:result.slice(offset,offset+limit).map(albumPhoto),hasMore:result.length>offset+limit,offset,limit};
     }
     const photo=url.pathname.match(/^\/photos\/([0-9a-f-]{36})$/);
     if(photo&&method==='DELETE')return body.revision?client.deletePhoto(photo[1],body.revision):media.retire(photo[1]);

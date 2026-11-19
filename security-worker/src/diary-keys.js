@@ -299,6 +299,7 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
     await audit('diary_rekey_committed',actor.identityId);return json(result);
   }
   if(['/api/diary/config','/api/diary/rotation/begin'].includes(path)&&request.method==='POST') {
+    if((await env.DIARY_AUTH.encryptionRollout()).evidence?.photoMigration)fail(423,'PhotoMigrationChecking');
     const rotationBegin=path.endsWith('/rotation/begin');
     const input=await readJson(request,rotationBegin?25_000_000:4_000_000),current=await config(env);
     if(rotationBegin&&(!current||!exact(input,['configuration','manifest'])))fail(400,'InvalidRotationRequest');

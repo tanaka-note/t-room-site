@@ -173,7 +173,8 @@ export async function saveExport(env, service, now, { fetcher = fetch, sleep = m
   if(keyMetadata) {
     const rotation=await env.DIARY_DB.prepare('SELECT status,configuration FROM diary_e2ee_rotation WHERE id=1').first();
     if(rotation?.status==='committed'&&JSON.parse(rotation.configuration).directory.value.generation>keyMetadata.directory.value.generation)throw new Error('DiaryKeyGenerationConflict');
-    const control=await env.DIARY_DB.prepare('SELECT phase,ever_encrypted FROM diary_e2ee_control WHERE id=1').first();
+    const control=await env.DIARY_DB.prepare("SELECT phase,ever_encrypted,json_extract(evidence,'$.photoMigration') AS photo_migration FROM diary_e2ee_control WHERE id=1").first();
+    if(control?.photo_migration&&!checkpoint)throw new Error('PhotoMigrationChecking');
     if(control?.phase==='migrating'&&!control.ever_encrypted){await requireFrozenMigration(env.DIARY_DB);await verifyLegacyCoverage(env.DIARY_DB);}
     else if(!control?.ever_encrypted||!['encrypted','paused'].includes(control.phase))throw new Error('DiaryBackupRequiresEncryptedSnapshot');
   }
@@ -201,6 +202,8 @@ export async function saveExport(env, service, now, { fetcher = fetch, sleep = m
     };
     try {
       for await (const sql of sqlStatements(body)) for (const { table, row } of exportedRows(sql, meta.tables)) {
+        if(table==='diary_e2ee_control'&&!checkpoint&&row.evidence&&JSON.parse(row.evidence).photoMigration)
+          throw new Error('PhotoMigrationChecking');
         if(keyMetadata)await verifyEncryptedDiaryRow(table,row,keyMetadata.directory.value);
         const size = new TextEncoder().encode(JSON.stringify(row)).length;
         if (size > 8 * 1024 * 1024) throw new Error('SnapshotTooLarge');
