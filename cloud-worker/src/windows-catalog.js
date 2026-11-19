@@ -1,4 +1,5 @@
 // Only the dedicated Windows device API uses this catalog. Web listings are unchanged.
+import { fileContentVersion } from './file-version.js';
 const json=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'}});
 const fail=(code,status=409)=>json({code,error:code},status);
 const integer=(value,fallback=0)=>value===null?fallback:/^(0|[1-9]\d*)$/.test(value)&&Number.isSafeInteger(Number(value))?Number(value):NaN;
@@ -15,7 +16,7 @@ export function windowsCatalogScope(chain,binding,{historical=false,unfiled=fals
   }
   return false;
 }
-function record(row,binding) {
+async function record(row,binding) {
   const historical=['trashed','purged'].includes(row.state);
   const chain=JSON.parse(historical?row.ancestors:row.live_ancestors||'null');
   if(!windowsCatalogScope(chain,binding,{historical,unfiled:row.kind==='file'&&row.parent_id===null}))return null;
@@ -27,6 +28,7 @@ function record(row,binding) {
   }
   if(row.state!=='present')return null;
   const {objectKey,...value}=JSON.parse(row.payload);
+  if(row.kind==='file')value.contentVersion=await fileContentVersion({object_key:JSON.parse(row.payload).objectKey});
   return {kind:row.kind,id:row.entity_id,revision:row.seq,state:'present',value};
 }
 export async function handleWindowsCatalog(request,env,url,route,binding) {
@@ -50,7 +52,7 @@ export async function handleWindowsCatalog(request,env,url,route,binding) {
       LEFT JOIN cloud_windows_file_projection fp ON c.kind='file' AND fp.entity_id=c.entity_id
       LEFT JOIN cloud_windows_folder_projection dp ON c.kind='folder' AND dp.entity_id=c.entity_id
       WHERE c.seq>? AND c.seq<=? ORDER BY c.seq LIMIT ?`).bind(after,upper,limit).all();
-    const source=rows.results||[],items=source.map(row=>record(row,binding)).filter(Boolean);
+    const source=rows.results||[],items=(await Promise.all(source.map(row=>record(row,binding)))).filter(Boolean);
     const next=source.length===limit?source.at(-1).seq:upper;
     return json({epoch:control.epoch,until:upper,next,complete:next===upper,items});
   }

@@ -6,9 +6,11 @@ import { enqueueSecurityAudit, recordSecurityAudit, withPasswordLoginAudit, hand
 import { sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAuthMethod, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt } from "../../assets/session-policy.mjs";
 import { handleYouTubeSearchRequest } from "./youtube-search.js";
 import { handleWindowsSync, cleanupWindowsSync } from "./windows-sync.js";
+import { handleWindowsUpdates, abortStaleWindowsUploads } from "./windows-updates.js";
+import { fileContentVersion } from "./file-version.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-bee223ea277d";
+const APP_BUILD_ID = "cloud-1f41e08c843c";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";
@@ -174,10 +176,14 @@ export default {
             dispatch: async (value, dataPath, binding, deviceId) => {
               const account = binding.role === 'member' ? PASSKEY_MEMBER_ACCOUNT : ACCOUNTS.find(item => item.role === binding.role);
               if (!account) throw new HttpError(403, '利用できるアカウントを確認できません。');
-              const nativeSession = { ...account, ...binding, authMethod: 'windows-device',
+              const nativeSession = { ...account, ...binding, authMethod: 'windows-device', windowsDeviceId: deviceId,
                 passkeySessionEpoch: binding.sessionEpoch, version: binding.sessionVersion,
                 sessionId: 'windows-' + deviceId, canDelete: false, canTrashUnlockedFiles: false,
                 canReviewDeletion: false, canRequestDelete: false, exp: Math.floor(Date.now()/1000)+900 };
+              if(dataPath.startsWith('/api/windows-updates')||dataPath==='/api/windows-folders')return handleWindowsUpdates(value,env,dataPath,nativeSession,{
+                readJson,normalizeEncryptedFile,normalizeFastDisplayMetadata,validCryptoText,validName,
+                requireUpload,requireFileEdit,requireFolderAccess,requireTrashCutoverReady,requireMemberMoveScope,normalizeEncryptedFolder,normalizeParentWrappedFolder
+              });
               return handleApi(value, env, url, dataPath, context, nativeSession);
             }
           }));
@@ -762,13 +768,13 @@ async function listPublicShareItems(token, request, env, url) {
     return json({
       targetType: "selection",
       rootFileId: Number(share.target_id),
-      files: (selected.results || []).map((file) => ({ ...mapFile(file), shareWrappedFileKey: file.shareWrappedFileKey, shareFileKeyIv: file.shareFileKeyIv })),
+      files: await Promise.all((selected.results || []).map(async(file) => ({ ...await mapFile(file), shareWrappedFileKey: file.shareWrappedFileKey, shareFileKeyIv: file.shareFileKeyIv }))),
       expiresAt: Number(share.expires_at)
     });
   }
   if (share.target_type === "file") {
     const file = await requireReadyFile(env, Number(share.target_id), false);
-    return json({ targetType: "file", file: mapFile(file), expiresAt: Number(share.expires_at) });
+    return json({ targetType: "file", file: await mapFile(file), expiresAt: Number(share.expires_at) });
   }
   const requestedFolderId = optionalId(url.searchParams.get("folderId"));
   if (folderSetCount && !requestedFolderId) {
@@ -809,7 +815,7 @@ async function listPublicShareItems(token, request, env, url) {
     rootFolderId,
     folder: publicFolderRecord(folder),
     folders: (folders.results || []).map(publicFolderRecord),
-    files: (files.results || []).map(mapFile),
+    files: await Promise.all((files.results || []).map(mapFile)),
     expiresAt: Number(share.expires_at)
   });
 }
@@ -825,7 +831,8 @@ async function getPublicShareThumbnail(token, fileId, request, env) {
 
 async function getPublicShareContent(token, fileId, disposition, request, env) {
   const share = await requireAuthorizedShare(token, request, env);
-  const file = await requireSharedFile(env, share, fileId);
+  const current = await requireSharedFile(env, share, fileId);
+  const file = await contentForRequest(request,env,current);
   const rangeHeader = request.headers.get("Range");
   const object = await env.FILES.get(file.object_key, rangeHeader ? { range: request.headers } : undefined);
   if (!object) throw new HttpError(404, "ファイル本体が見つかりません。");
@@ -1070,7 +1077,7 @@ async function listItems(url, env, session) {
     if (query) { clauses.push("(display_metadata_version = 0 OR LOWER(COALESCE(display_name, original_name)) LIKE ?)"); values.push(`%${query}%`); }
     if (kind) { clauses.push("(display_metadata_version = 0 OR COALESCE(display_media_kind, media_kind) = ?)"); values.push(kind); }
     fileStatement = env.DB.prepare(`
-      SELECT id, folder_id AS folderId, COALESCE(display_name, original_name) AS name,
+      SELECT id, object_key AS _contentKey, folder_id AS folderId, COALESCE(display_name, original_name) AS name,
         COALESCE(display_mime_type, mime_type) AS mimeType,
         COALESCE(display_media_kind, media_kind) AS mediaKind, size_bytes AS sizeBytes,
         display_metadata_version AS displayMetadataVersion,
@@ -1100,7 +1107,7 @@ async function listItems(url, env, session) {
   const files = fileStatement ? pages.shift() : { results: [] };
   const path = pathStatement ? pages.shift() : { results: [] };
   const fileResults = files.results || [];
-  const visibleFiles = fileResults.slice(0, filePageSize);
+  const visibleFiles = await versionListedFiles(fileResults.slice(0, filePageSize));
   const nextFileOffset = fileResults.length > filePageSize ? fileOffset + filePageSize : null;
   const folderResults = folders.results || [];
   const visibleFolders = folderResults.slice(0, folderPageSize).map((item) => ({
@@ -1228,7 +1235,7 @@ async function searchItems(url, env, session, { folderId, query, kind, sort, fav
       fileValues.push(kind);
     }
     const result = await env.DB.prepare(`${scopeSql}
-      SELECT file.id, file.folder_id AS folderId,
+      SELECT file.id, file.object_key AS _contentKey, file.folder_id AS folderId,
         COALESCE(file.display_name, file.original_name) AS name,
         COALESCE(file.display_mime_type, file.mime_type) AS mimeType,
         COALESCE(file.display_media_kind, file.media_kind) AS mediaKind,
@@ -1259,7 +1266,7 @@ async function searchItems(url, env, session, { folderId, query, kind, sort, fav
   }
 
   const visibleFolders = folderRows.slice(0, pageSize);
-  const visibleFiles = fileRows.slice(0, pageSize);
+  const visibleFiles = await versionListedFiles(fileRows.slice(0, pageSize));
   const folderIds = [...new Set([
     ...visibleFolders.map((folder) => Number(folder.id)),
     ...visibleFiles.map((file) => Number(file.folderId))
@@ -1353,7 +1360,7 @@ async function listPlayerMedia(url, env, session) {
       FROM cloud_folders child JOIN folder_scope parent ON child.parent_id = parent.id
       WHERE child.deleted_at IS NULL AND child.password_hash IS NULL AND parent.depth < 100
     )
-    SELECT file.id, file.folder_id AS folderId,
+    SELECT file.id, file.object_key AS _contentKey, file.folder_id AS folderId,
       COALESCE(file.display_name, file.original_name) AS name,
       COALESCE(file.display_mime_type, file.mime_type) AS mimeType,
       COALESCE(file.display_media_kind, file.media_kind) AS mediaKind,
@@ -1375,7 +1382,7 @@ async function listPlayerMedia(url, env, session) {
     ORDER BY file.updated_at DESC, file.id DESC LIMIT ? OFFSET ?`)
     .bind(rootFolderId, pageSize + 1, offset).all();
   const rows = result.results || [];
-  const visible = rows.slice(0, pageSize);
+  const visible = await versionListedFiles(rows.slice(0, pageSize));
   const folderIds = [...new Set(visible.flatMap((file) => String(file.pathFolderIds || "")
     .split(",").map(Number).filter(Boolean)))];
   const folders = await loadConflictFolderRecords(env, folderIds);
@@ -1665,6 +1672,7 @@ async function updateFolder(id, request, env, session) {
   const unlocked = await requireFolderAccess(env, id, session);
   const body = await readJson(request, 8192);
   const name = validName(body.name);
+  const windowsCondition=await windowsMetadataCondition(env,session,body,'folder',id);
   const moving = Object.prototype.hasOwnProperty.call(body, "parentId");
   const parentId = moving ? optionalId(body.parentId) : folder.parent_id;
   const conditionalMove = moving && Object.prototype.hasOwnProperty.call(body, "expectedParentId");
@@ -1702,16 +1710,17 @@ async function updateFolder(id, request, env, session) {
       .bind(name, passwordHash, passwordSalt, passwordWrappedKey, passwordWrapIv, id).run();
     await rememberFolderUnlock(env, session, id);
   } else if (!moving) {
-    await env.DB.prepare("UPDATE cloud_folders SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-      .bind(name, id).run();
+    const changed=await env.DB.prepare(`UPDATE cloud_folders SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? ${windowsCondition.sql}`)
+      .bind(name, id,...windowsCondition.values).run();
+    if(changed.meta?.changes!==1)throw new HttpError(409,"フォルダが変更されています。");
   }
   if (moving) {
     // A move never renames the folder, including requests from older clients.
     // Always compare the authorized snapshot, even without expectedParentId.
     const result = await env.DB.prepare(`UPDATE cloud_folders SET name = ?, parent_id = ?, parent_wrapped_key = ?, parent_wrap_iv = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-      AND deleted_at IS NULL AND parent_id IS ? AND parent_wrapped_key IS ? AND parent_wrap_iv IS ? AND name IS ?`)
+      AND deleted_at IS NULL AND parent_id IS ? AND parent_wrapped_key IS ? AND parent_wrap_iv IS ? AND name IS ? ${windowsCondition.sql}`)
       .bind(folder.name, parentId, parentPackage.parentWrappedKey, parentPackage.parentWrapIv, id,
-        folder.parent_id, folder.parentWrappedKey, folder.parentWrapIv, folder.name).run();
+        folder.parent_id, folder.parentWrappedKey, folder.parentWrapIv, folder.name,...windowsCondition.values).run();
     if (result.meta?.changes !== 1) throw new HttpError(409, "移動元が変更されています。現在の場所を確認してください。");
   }
   await audit(env, "folder_updated", session, "folder", id, { folderNameEncrypted: false, passwordChanged: passwordAction === "replace", moved: moving, parentId });
@@ -1889,6 +1898,8 @@ async function uploadPart(id, partNumber, request, env, session) {
   await requireFolderAccess(env, file.folder_id, session);
   const upload = env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id);
   const part = await upload.uploadPart(partNumber, request.body);
+  if(session.windowsDeviceId)await env.DB.prepare("UPDATE cloud_windows_uploads SET created_at=CURRENT_TIMESTAMP WHERE upload_id=? AND device_id=? AND state='pending'")
+    .bind(id,session.windowsDeviceId).run();
   return json({ partNumber: part.partNumber, etag: part.etag });
 }
 
@@ -1898,6 +1909,7 @@ async function completeUpload(id, request, env, session) {
   if (!Array.isArray(body.parts) || !body.parts.length || body.parts.length > 10000) throw new HttpError(400, "アップロード情報が不正です。");
   const parts = body.parts.map((part) => ({ partNumber: Number(part.partNumber), etag: String(part.etag || "") }));
   const file = await requireUploadingFile(env, id);
+  if(file.created_by.startsWith('windows:'))throw new HttpError(409,"Windowsのアップロードは同期アプリから確定してください。");
   requireUploadOwnership(session, file);
   await requireFolderAccess(env, file.folder_id, session);
   const upload = env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id);
@@ -1918,6 +1930,7 @@ async function completeUpload(id, request, env, session) {
 async function cancelUpload(id, env, session) {
   requireUpload(session);
   const file = await requireUploadingFile(env, id);
+  if(file.created_by.startsWith('windows:'))throw new HttpError(409,"Windowsのアップロードは同期アプリから中止してください。");
   requireUploadOwnership(session, file);
   await requireFolderAccess(env, file.folder_id, session);
   await env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id).abort();
@@ -1929,7 +1942,7 @@ async function getFile(id, env, session) {
   const file = await requireReadyFile(env, id, true);
   requireTrashVisibility(session, file);
   await requireFolderAccess(env, file.folder_id, session);
-  const mapped = mapFile(file);
+  const mapped = await mapFile(file);
   if (Number(file.crypto_version) === 1 && file.folder_id) {
     const folder = await requireFolder(env, file.folder_id);
     Object.assign(mapped, {
@@ -1945,11 +1958,22 @@ async function getFile(id, env, session) {
   return json({ file: mapped });
 }
 
+async function windowsMetadataCondition(env,session,body,kind,id) {
+  if(!session.windowsDeviceId)return {sql:'',values:[]};
+  if(!Number.isSafeInteger(body.windowsExpectedRevision)||body.windowsExpectedRevision<1
+    ||typeof body.windowsEpoch!=='string'||!/^[a-f0-9]{32}$/.test(body.windowsEpoch))throw new HttpError(400,'同期の確認位置が必要です。');
+  return {sql:`AND EXISTS(SELECT 1 FROM cloud_windows_heads WHERE kind=? AND entity_id=? AND seq=?)
+    AND EXISTS(SELECT 1 FROM cloud_windows_catalog_control WHERE id=1 AND epoch=?)
+    AND EXISTS(SELECT 1 FROM cloud_windows_devices WHERE id=? AND status='active' AND revoked_at IS NULL)`,
+    values:[kind,id,body.windowsExpectedRevision,body.windowsEpoch,session.windowsDeviceId]};
+}
+
 async function updateFile(id, request, env, session) {
   requireFileEdit(session);
   const file = await requireReadyFile(env, id, false);
   const unlocked = await requireFolderAccess(env, file.folder_id, session);
   const body = await readJson(request, 16384);
+  const windowsCondition=await windowsMetadataCondition(env,session,body,'file',id);
   const moving = Object.prototype.hasOwnProperty.call(body, "folderId");
   const conditionalMove = moving && Object.prototype.hasOwnProperty.call(body, "expectedFolderId");
   if (conditionalMove && file.folder_id !== optionalId(body.expectedFolderId)) {
@@ -1995,7 +2019,7 @@ async function updateFile(id, request, env, session) {
       display_duration_seconds = CASE WHEN ? THEN display_duration_seconds ELSE ? END,
       updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'ready' AND deleted_at IS NULL
       AND folder_id IS ? AND wrapped_file_key IS ? AND file_key_iv IS ?
-      ${updatingMetadata ? "AND encrypted_metadata IS ? AND metadata_iv IS ?" : ""}`)
+      ${updatingMetadata ? "AND encrypted_metadata IS ? AND metadata_iv IS ?" : ""} ${windowsCondition.sql}`)
       .bind(retainMetadata ? 1 : 0, encryptedMetadata, retainMetadataIv ? 1 : 0, metadataIv,
         moving ? 1 : 0, folderId, moving ? 1 : 0, wrappedFileKey, moving ? 1 : 0, fileKeyIv,
         retainDisplay ? 1 : 0, display ? 1 : 0,
@@ -2006,7 +2030,7 @@ async function updateFile(id, request, env, session) {
         retainDisplay ? 1 : 0, display?.durationSeconds || null, id,
         file.folder_id, file.wrapped_file_key, file.file_key_iv,
         ...(updatingMetadata ? [expectedMetadata?.expectedEncryptedMetadata ?? file.encrypted_metadata,
-          expectedMetadata?.expectedMetadataIv ?? file.metadata_iv] : [])).run();
+          expectedMetadata?.expectedMetadataIv ?? file.metadata_iv] : []),...windowsCondition.values).run();
     if (result.meta?.changes !== 1) throw new HttpError(409, "ファイルが変更されています。最新の状態を読み込み直してください。");
     await audit(env, "file_updated", session, "file", id, { encrypted: true, moved: moving, folderId });
     return json({ ok: true });
@@ -2233,9 +2257,11 @@ async function getDisplayThumbnail(id, env, session) {
 }
 
 async function streamFile(id, disposition, request, env, session) {
-  const file = await requireReadyFile(env, id, true);
-  requireTrashVisibility(session, file);
-  await requireFolderAccess(env, file.folder_id, session);
+  const current = await requireReadyFile(env, id, true);
+  requireTrashVisibility(session, current);
+  await requireFolderAccess(env, current.folder_id, session);
+  const file = await contentForRequest(request,env,current);
+  if(file.id!==current.id)await requireFolderAccess(env,file.folder_id,session);
   if (file.stream_uid && disposition === "view" && env.STREAM) {
     const token = await env.STREAM.video(file.stream_uid).generateToken({ expiresIn: 900 });
     return json({ streamToken: token, streamUid: file.stream_uid });
@@ -2251,7 +2277,7 @@ async function listTrash(env, session) {
   requireDelete(session);
   await requireTrashCutoverReady(env);
   const result = await env.DB.prepare(`
-    SELECT f.id, f.folder_id AS folderId, f.original_name AS name, f.mime_type AS mimeType, f.media_kind AS mediaKind,
+    SELECT f.id, f.object_key AS _contentKey, f.folder_id AS folderId, f.original_name AS name, f.mime_type AS mimeType, f.media_kind AS mediaKind,
       f.size_bytes AS sizeBytes, f.thumbnail_key IS NOT NULL AS hasThumbnail, f.deleted_at AS deletedAt,
       f.trash_operation_id AS trashOperationId,
       (f.purge_id IS NOT NULL OR COALESCE((SELECT op.purge_started FROM cloud_trash_operations op WHERE op.id=f.trash_operation_id),0)) AS purgeStarted,
@@ -2270,7 +2296,7 @@ async function listTrash(env, session) {
   for (const file of result.results || []) {
     try {
       await requireFolderAccess(env, file.folderId, session);
-      files.push(trashRetentionRecord(file, env));
+      files.push(trashRetentionRecord((await versionListedFiles([file]))[0], env));
     } catch (error) {
       if (!(error instanceof HttpError) || error.status !== 423) throw error;
     }
@@ -2951,7 +2977,8 @@ async function executeTrashRun(env, source, session, onlyFileId = null) {
 }
 
 async function abortStaleUploads(env) {
-  const stale = await env.DB.prepare("SELECT id, object_key, multipart_upload_id FROM cloud_files WHERE status = 'uploading' AND created_at < datetime('now', '-1 day') LIMIT 100").all();
+  await abortStaleWindowsUploads(env);
+  const stale = await env.DB.prepare("SELECT id, object_key, multipart_upload_id FROM cloud_files WHERE status = 'uploading' AND created_by NOT LIKE 'windows:%' AND created_at < datetime('now', '-1 day') LIMIT 100").all();
   for (const file of stale.results || []) {
     try { await env.FILES.resumeMultipartUpload(file.object_key, file.multipart_upload_id).abort(); } catch {}
     await env.DB.prepare("DELETE FROM cloud_files WHERE id = ? AND status = 'uploading' AND deleted_at IS NULL").bind(file.id).run();
@@ -3432,8 +3459,29 @@ function mapBreadcrumbs(results, session, memberRootId) {
   }));
 }
 
-function mapFile(file) {
+async function contentForRequest(request,env,current) {
+  const version=new URL(request.url).searchParams.get('contentVersion');
+  if(!version)return current;
+  if(!/^[a-f0-9]{64}$/.test(version))throw new HttpError(400,'ファイル内容の版を確認してください。');
+  if(await fileContentVersion(current)===version)return current;
+  if(!await env.DB.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='cloud_file_versions'").first())
+    throw new HttpError(409,'ファイルの内容が更新されました。最新の状態を読み込み直してください。');
+  const candidates=await env.DB.prepare(`WITH RECURSIVE lineage(candidate_id,source_id,depth) AS (
+      SELECT file_id,source_file_id,0 FROM cloud_file_versions WHERE content_version=?
+      UNION ALL SELECT l.candidate_id,v.source_file_id,l.depth+1 FROM lineage l JOIN cloud_file_versions v ON v.file_id=l.source_id WHERE l.depth<100
+    ) SELECT f.* FROM cloud_file_versions v JOIN cloud_files f ON f.id=v.file_id
+      WHERE v.content_version=? AND f.status='ready' AND f.purge_id IS NULL
+      AND EXISTS(SELECT 1 FROM lineage WHERE candidate_id=f.id AND source_id=?) ORDER BY f.id DESC LIMIT 200`)
+    .bind(version,version,current.id).all();
+  for(const file of candidates.results||[])if(await fileContentVersion(file)===version)return file;
+  throw new HttpError(409,'ファイル内容の指定した版を取得できません。最新の状態を読み込み直してください。');
+}
+async function versionListedFiles(rows) {
+  return Promise.all(rows.map(async({_contentKey,...file})=>({...file,contentVersion:await fileContentVersion({object_key:_contentKey})})));
+}
+async function mapFile(file) {
   return {
+    contentVersion: await fileContentVersion(file),
     id: file.id, folderId: file.folder_id, name: file.display_name || file.original_name,
     mimeType: file.display_mime_type || file.mime_type,
     mediaKind: file.display_media_kind || file.media_kind, sizeBytes: file.size_bytes,
@@ -3796,7 +3844,13 @@ async function cloudPasskeySession(env, session, action, ttlSeconds = undefined)
 function requireAdmin(session) { if (session.role !== "admin") throw new HttpError(403, "この操作は管理者のみ行えます。"); }
 function requireShareCreation(session) { if (!["admin", "subadmin"].includes(session.role)) throw new HttpError(403, "共有URLを発行できません。"); }
 function requireUpload(session) { if (!session.canUpload) throw new HttpError(403, "副管理者はアップロードできません。"); }
-function requireUploadOwnership(session, file) { if (session.role !== "admin" && file.created_by !== session.role) throw new HttpError(403, "別アカウントの処理途中アップロードは操作できません。"); }
+function requireUploadOwnership(session, file) {
+  if(file.created_by.startsWith('windows:')) {
+    if(file.created_by!=='windows:'+session.windowsDeviceId)throw new HttpError(403,"別端末のアップロードは操作できません。");
+    return;
+  }
+  if(session.role!=="admin"&&file.created_by!==session.role)throw new HttpError(403,"別アカウントの処理途中アップロードは操作できません。");
+}
 function requireDelete(session) { if (!session.canDelete) throw new HttpError(403, "副管理者は削除できません。"); }
 function requireFileEdit(session) { if (!session.canEditFiles && !session.canRenameUnlockedItems) throw new HttpError(403, "既存ファイルの情報を変更できません。"); }
 function requireFolderEdit(session) { if (!session.canEditFolders && !session.canRenameUnlockedItems) throw new HttpError(403, "フォルダ情報を変更できません。"); }

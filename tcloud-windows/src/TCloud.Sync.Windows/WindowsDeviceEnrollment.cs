@@ -9,7 +9,7 @@ namespace TCloud.Sync.Windows;
 public static class WindowsDeviceEnrollment
 {
     public static async Task<WindowsDeviceRegistration> EnrollAsync(nint owner, bool administrator, string destination,
-        WindowsDeviceRegistrationFile file, IProgress<string>? progress=null, CancellationToken token=default)
+        WindowsDeviceRegistrationFile file, IProgress<string>? progress=null, CancellationToken token=default,bool preferBestRole=false)
     {
         if(file.Exists)throw new InvalidOperationException("登録済みの端末情報を上書きしません。");
         var roots=new[]{Environment.GetEnvironmentVariable("OneDrive"),Environment.GetEnvironmentVariable("OneDriveConsumer"),
@@ -33,6 +33,7 @@ public static class WindowsDeviceEnrollment
                 || verified.GetProperty("credentialId").GetString()!=assertion.ServerResponse.GetProperty("id").GetString())
                 throw new CryptographicException("本人確認の結果が一致しません。");
             var links=verified.GetProperty("links").EnumerateArray().ToArray();
+            if(preferBestRole)administrator=links.Any(value=>value.GetProperty("accountId").GetString()=="admin");
             var link=administrator ? links.FirstOrDefault(value=>value.GetProperty("accountId").GetString()=="admin") : default;
             var linkId=administrator ? link.ValueKind==JsonValueKind.Object ? link.GetProperty("id").GetString() : null
                 : links.Any(value=>value.GetProperty("accountId").GetString()=="folder-member") ? "cloud-member" : null;

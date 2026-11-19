@@ -29,6 +29,8 @@
         rootFolderId: descriptor.rootFolderId,
         fileId: descriptor.fileId,
         version: descriptor.version,
+        contentVersion: descriptor.contentVersion,
+        sourceUpdatedAt: descriptor.sourceUpdatedAt,
         chunkCount: descriptor.chunkCount,
         chunkSizeBytes: descriptor.chunkSizeBytes,
         sizeBytes: descriptor.sizeBytes,
@@ -363,6 +365,12 @@
   }
 
   function descriptorFor(file, endpoint) {
+    if(file.contentVersion) {
+      if(!/^[a-f0-9]{64}$/.test(String(file.contentVersion)))throw new Error('ファイル内容の版を確認してください。');
+      const url=new URL(endpoint,global.location.href);
+      url.searchParams.set('contentVersion',file.contentVersion);
+      endpoint=url.pathname+url.search;
+    }
     return {
       endpoint,
       expectedSession: global.TCloudSession?.check()?.sessionCacheId || "",
@@ -377,7 +385,9 @@
       accountScope: file.offlineAccountScope || "",
       rootFolderId: Number(file.offlineRootFolderId || 0),
       fileId: Number(file.id || 0),
-      version: String(file.updatedAt || file.createdAt || "1"),
+      version: String(file.contentVersion || file.updatedAt || file.createdAt || "1"),
+      contentVersion: file.contentVersion || null,
+      sourceUpdatedAt: String(file.updatedAt || file.createdAt || "1"),
       offlineOnly: Boolean(file.offlineOnly)
     };
   }

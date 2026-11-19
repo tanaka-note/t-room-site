@@ -5,16 +5,18 @@ using TCloud.Sync.Core;
 namespace TCloud.Sync.Windows;
 
 public sealed record ResolvedOriginal(long Id,long Revision,string RelativePath,long SizeBytes,
-    EncryptedFileLayout? Layout,byte[]? FileKey):IDisposable
+    EncryptedFileLayout? Layout,byte[]? FileKey,CloudFileMetadata? Metadata=null):IDisposable
 {
     public long StoredBytes=>Layout?.EncryptedSizeBytes??SizeBytes;
     public void Dispose(){if(FileKey is not null)CryptographicOperations.ZeroMemory(FileKey);}
 }
+public sealed record ResolvedFolder(long Id,long? ParentId,long Revision,string RelativePath);
 
 /// <summary>Uses the existing vault envelopes locally; no decrypted keys enter a catalog or request.</summary>
 public sealed class CloudOriginalResolver:IDisposable
 {
     private readonly Dictionary<long,JsonElement> folders;
+    private readonly Dictionary<long,long> revisions;
     private readonly Dictionary<long,byte[]> folderKeys=[];
     private readonly Dictionary<long,string> folderPaths=[];
     private readonly HashSet<long> roots=[];
@@ -26,6 +28,7 @@ public sealed class CloudOriginalResolver:IDisposable
         this.privateKey=privateKey;
         folders=entries.Where(e=>e.Kind=="folder"&&e.State=="present"&&e.Value.HasValue)
             .ToDictionary(e=>e.Id,e=>e.Value!.Value);
+        revisions=entries.Where(e=>e.Kind=="folder"&&e.State=="present").ToDictionary(e=>e.Id,e=>e.Revision);
         try
         {
             foreach(var root in keys.GetProperty("folderKeys").EnumerateArray())
@@ -39,6 +42,11 @@ public sealed class CloudOriginalResolver:IDisposable
     }
     public ResolvedOriginal Resolve(WindowsCatalogEntry entry)
     {lock(gate)return ResolveCore(entry);}
+    public ResolvedFolder[] DescribeFolders()
+    {lock(gate){ObjectDisposedException.ThrowIf(disposed,this);return folders.Select(pair=>
+        new ResolvedFolder(pair.Key,Number(pair.Value,"parentId"),revisions[pair.Key],FolderPath(pair.Key,[]))).ToArray();}}
+    public byte[] CopyFolderKey(long id)
+    {lock(gate){ObjectDisposedException.ThrowIf(disposed,this);return FolderKey(id,[]).ToArray();}}
     private ResolvedOriginal ResolveCore(WindowsCatalogEntry entry)
     {
         ObjectDisposedException.ThrowIf(disposed,this);
@@ -49,20 +57,22 @@ public sealed class CloudOriginalResolver:IDisposable
         byte[]? key=null;
         try
         {
-            EncryptedFileLayout? layout=null;string name;
+            EncryptedFileLayout? layout=null;string name;CloudFileMetadata metadata;
             if(Number(value,"cryptoVersion")==1)
             {
                 if(folder is null)throw new InvalidDataException("暗号化ファイルの保存先がありません。");
                 key=CloudFileCrypto.UnlockFile(FolderKey(folder.Value,[]),Envelope(value,"wrappedFileKey","fileKeyIv"));
-                name=CloudFileCrypto.DecryptMetadata(key,Envelope(value,"encryptedMetadata","metadataIv")).Name;
+                metadata=CloudFileCrypto.DecryptMetadata(key,Envelope(value,"encryptedMetadata","metadataIv"));name=metadata.Name;
                 layout=new(size,value.GetProperty("chunkSizeBytes").GetInt32(),value.GetProperty("chunkCount").GetInt32(),
                     value.GetProperty("encryptedSizeBytes").GetInt64());layout.Validate();
             }
-            else name=value.GetProperty("name").GetString()??throw new InvalidDataException("ファイル名がありません。");
+            else {name=value.GetProperty("name").GetString()??throw new InvalidDataException("ファイル名がありません。");
+                metadata=new(name,value.TryGetProperty("mimeType",out var mime)?mime.GetString()??"application/octet-stream":"application/octet-stream",
+                    value.TryGetProperty("mediaKind",out var kind)?kind.GetString()??"other":"other",0);}
             var parent=folder is null?"":FolderPath(folder.Value,[]);
             var path=Path.Combine(parent,LocalPaths.EncodeName(name));
             _=LocalPaths.ResolveUnderRoot(Path.GetTempPath(),path);
-            return new(entry.Id,entry.Revision,path,size,layout,key);
+            return new(entry.Id,entry.Revision,path,size,layout,key,metadata);
         }
         catch {if(key is not null)CryptographicOperations.ZeroMemory(key);throw;}
     }
@@ -82,7 +92,8 @@ public sealed class CloudOriginalResolver:IDisposable
     {
         if(folderPaths.TryGetValue(id,out var existing))return existing;
         if(!seen.Add(id)||seen.Count>100||!folders.TryGetValue(id,out var folder))throw new InvalidDataException("フォルダ構成を確認できません。");
-        var name=Number(folder,"cryptoVersion")==1?CloudFileCrypto.DecryptFolderName(FolderKey(id,[]),Envelope(folder,"encryptedName","nameIv"))
+        var display=folder.GetProperty("name").GetString();
+        var name=Number(folder,"cryptoVersion")==1&&(string.IsNullOrWhiteSpace(display)||display=="[encrypted]")?CloudFileCrypto.DecryptFolderName(FolderKey(id,[]),Envelope(folder,"encryptedName","nameIv"))
             :folder.GetProperty("name").GetString()??throw new InvalidDataException("フォルダ名がありません。");
         var parent=roots.Contains(id)?null:Number(folder,"parentId");
         var path=Path.Combine(parent is null?"":FolderPath(parent.Value,seen),LocalPaths.EncodeName(name));

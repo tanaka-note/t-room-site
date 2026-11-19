@@ -11,6 +11,7 @@ public sealed class WindowsCatalogSynchronizer(IWindowsCatalogSource source,Loca
         {
             var before=await store.LoadAsync(token);
             var start=await source.StartAsync(token);
+            if(before.RemotePosition==start)return before;
             var snapshot=before.RemotePosition is not {} position||position.Epoch!=start.Epoch||position.Cursor>start.Cursor;
             var after=snapshot?0:before.RemotePosition!.Cursor;
             var candidate=before;

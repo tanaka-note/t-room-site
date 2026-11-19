@@ -154,11 +154,11 @@ async function access(request, env, deps) {
   return { row, ...await checkDevice(env, row, deps) };
 }
 export function windowsDataRoute(path, method) {
-  return method === 'GET' && (/^\/api\/(items|crypto-config)$/.test(path) || /^\/api\/files\/[1-9]\d*$/.test(path))
-    || method === 'POST' && (/^\/api\/(uploads|folders)$/.test(path) || /^\/api\/uploads\/[1-9]\d*\/complete$/.test(path))
+  return method === 'GET' && (/^\/api\/(items|crypto-config)$/.test(path) || /^\/api\/files\/[1-9]\d*$/.test(path)||/^\/api\/windows-updates\/[a-f0-9]{32}$/.test(path))
+    || method === 'POST' && (/^\/api\/(windows-updates|windows-folders)$/.test(path)
+      || /^\/api\/windows-updates\/[a-f0-9]{32}\/(complete|cancel)$/.test(path))
     || method === 'PUT' && /^\/api\/uploads\/[1-9]\d*\/parts\/[1-9]\d*$/.test(path)
-    || method === 'PATCH' && /^\/api\/(files|folders)\/[1-9]\d*$/.test(path)
-    || method === 'DELETE' && /^\/api\/uploads\/[1-9]\d*$/.test(path);
+    || method === 'PATCH' && /^\/api\/(files|folders)\/[1-9]\d*$/.test(path);
 }
 export async function handleWindowsSync(request, env, url, path, deps) {
   try {

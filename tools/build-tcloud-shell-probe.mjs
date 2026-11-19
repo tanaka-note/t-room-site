@@ -11,6 +11,7 @@ const artifacts = join(root, 'tcloud-windows/artifacts/native-shell');
 const inputs = ['probe-folder.cpp', 'exports.def', 'view-host.cpp', 'CMakeLists.txt'];
 const hash = createHash('sha256');
 for (const input of inputs) hash.update(input).update(readFileSync(join(source, input)));
+hash.update(readFileSync(join(root,'tcloud-windows/src/TCloud.ShellExtension/folder.cpp')));
 hash.update(readFileSync(fileURLToPath(import.meta.url)));
 const buildId = hash.digest('hex');
 const output = join(artifacts, buildId);
@@ -20,7 +21,7 @@ const invoke = (command, args) => {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error('Native Shell probe build failed.');
 };
-if (!['TCloud.ShellProbe.dll', 'TCloud.ShellViewHost.exe'].every(file => existsSync(join(output, file)))) {
+if (!['TCloud.ShellProbe.dll', 'TCloud.ShellExtension.dll', 'TCloud.ShellViewHost.exe'].every(file => existsSync(join(output, file)))) {
   // An optional, locally provisioned official Zig distribution avoids global installation.
   // Nothing is downloaded or installed by this script. Windows CI uses its installed MSVC.
   const toolchains = join(root, 'tcloud-windows/artifacts/native-toolchain');
@@ -31,6 +32,7 @@ if (!['TCloud.ShellProbe.dll', 'TCloud.ShellViewHost.exe'].every(file => existsS
     const common = ['c++', '-std=c++20', '-O2', '-target', 'x86_64-windows-gnu', '-DUNICODE', '-D_UNICODE', '-Wall', '-Wextra', '-Werror'];
     const libraries = ['-lshell32', '-lshlwapi', '-lole32', '-luuid', '-luser32', '-lcomctl32'];
     invoke(zig, [...common, join(source, 'probe-folder.cpp'), join(source, 'exports.def'), '-shared', '-o', join(output, 'TCloud.ShellProbe.dll'), ...libraries]);
+    invoke(zig, [...common, join(root,'tcloud-windows/src/TCloud.ShellExtension/folder.cpp'), join(source,'exports.def'), '-shared', '-o', join(output,'TCloud.ShellExtension.dll'), ...libraries]);
     invoke(zig, [...common, join(source, 'view-host.cpp'), '-municode', '-Wl,--subsystem,windows', '-o', join(output, 'TCloud.ShellViewHost.exe'), ...libraries]);
   } else {
     const build = join(output, 'build');

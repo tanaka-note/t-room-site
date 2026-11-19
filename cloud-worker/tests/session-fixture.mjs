@@ -1,4 +1,6 @@
 import { withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
+import { fileContentVersion } from '../src/file-version.js';
+import { handleWindowsUpdates,abortStaleWindowsUploads } from '../src/windows-updates.js';
 import { attachPasskeyLedger } from "./passkey-ledger-fixture.mjs";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import {accountDisplayName} from "../../assets/account-display.mjs";
@@ -35,7 +37,7 @@ const env = { TRASH_CUTOVER_MODE: "ready", DB: { prepare: statement, async batch
   FILES: { async createMultipartUpload() { return { uploadId: "fixture-upload" }; }, resumeMultipartUpload() { return { async abort() {}, async uploadPart() { return { partNumber: 1, etag: "fixture" }; } }; }, async get() { access.push("read"); return null; }, async head() { access.push("head"); return null; } }
 };
 const securityDb = attachPasskeyLedger(env);
-const context = { isValidSessionSecret, requireSessionSecret, accountDisplayName, lineBrowserResponse, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console,
+const context = { fileContentVersion, handleWindowsUpdates,abortStaleWindowsUploads,isValidSessionSecret, requireSessionSecret, accountDisplayName, lineBrowserResponse, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console,
   sessionCookieValue, sessionPolicyForAuthMethod, cloudSessionPolicyForAuthMethod, shouldRefreshSession, passwordLifetimeClaims, validSessionLifetime, sessionExpiresAt, validateServicePasskeySession,
   withPasswordLoginAudit, handlePasswordLoginClientAudit, recordSecurityAudit: async () => {}, enqueueSecurityAudit: () => {}, handleYouTubeSearchRequest: async () => new Response("{}") };
 context.globalThis = context;

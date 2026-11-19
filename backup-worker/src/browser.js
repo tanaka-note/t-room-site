@@ -38,7 +38,7 @@ export async function storageSnapshot(env, refresh = false, cache = globalThis.c
   for (const id of serviceIds) {
     const spec = SERVICES[id];
     try {
-      const additional = id==='security' ? ['d1/security/v4','d1/security/v5'] : id==='billing' ? ['d1/billing/v4'] : [];
+      const additional = id==='security' ? ['d1/security/v4','d1/security/v5'] : id==='billing' ? ['d1/billing/v4'] : id==='cloud'?['d1/cloud/v4']:[];
       const [v3Daily, v3Monthly, v2Daily, v2Monthly, legacyDaily, legacyMonthly, storedDataBytes,...newer] = await Promise.all([
         listObjects(env.BACKUP, `d1/${id}/v3/daily/`), listObjects(env.BACKUP, `d1/${id}/v3/monthly/`),
         listObjects(env.BACKUP, `d1/${id}/v2/daily/`), listObjects(env.BACKUP, `d1/${id}/v2/monthly/`),

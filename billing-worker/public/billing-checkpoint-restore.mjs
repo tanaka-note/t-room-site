@@ -2662,6 +2662,7 @@ var SERVICES = {
       "cloud_windows_catalog_control",
       "cloud_windows_changes",
       "cloud_windows_heads",
+      "cloud_windows_uploads",
       "cloud_folders",
       "cloud_files",
       "cloud_audit_logs",
@@ -3436,8 +3437,20 @@ var SERVICES = {
     ]
   }
 };
+var CLOUD_VERSIONS_MIGRATION = "0016_windows_file_updates.sql";
+var versionColumns = ["file_id", "source_file_id", "source_revision", "operation_id", "content_version", "restore_metadata", "restore_iv", "restore_name", "restore_display_name", "created_at", "restored_at"];
+function cloudVersionsSpec() {
+  const spec = SERVICES.cloud;
+  return {
+    ...spec,
+    migration: CLOUD_VERSIONS_MIGRATION,
+    tables: [...spec.tables, { name: "cloud_file_versions", columns: versionColumns, sourceColumns: versionColumns.join(",") }],
+    knownTables: [...spec.knownTables, "cloud_file_versions"]
+  };
+}
 function archiveSpec(service, migration) {
   const spec = SERVICES[service];
+  if (service === "cloud" && migration === CLOUD_VERSIONS_MIGRATION) return cloudVersionsSpec();
   if (service === "cloud" && migration === "0012_favorites.sql") {
     const legacyColumn = (column) => column !== "trash_operation_id" && column !== "purge_id";
     const legacyTable = (name) => !name.startsWith("cloud_trash_");
@@ -3502,10 +3515,21 @@ function reviewedSchemaMatches(service, baseline, actual) {
   return typeof baseline === "string" && (actual === baseline || REVIEWED[service]?.[0] === baseline && REVIEWED[service][1] === actual);
 }
 async function assertSchema(service, rows) {
+  const versions = service === "cloud" ? rows.filter((row) => row.tbl_name === "cloud_file_versions" || row.name === "cloud_version_restore_name") : [];
+  if (service === "cloud" && Boolean(versions.length) !== rows.some((row) => row.name === "cloud_windows_uploads")) throw new Error("SchemaReviewRequired");
+  if (versions.length) {
+    const shape = versions.map((r) => [r.type, r.name, r.tbl_name, r.sql.replace(/\r\n?/g, "\n")]);
+    if (await digest(new TextEncoder().encode(JSON.stringify(shape))) !== "78a6cd859c5ede6044f7ab9b7531bb26da704d8aa4cdcc2dc66a5c974a1cd986") throw new Error("SchemaReviewRequired");
+    rows = rows.filter((row) => !versions.includes(row));
+  }
   const windows = service === "security" ? (row) => row.tbl_name === "security_windows_authority_versions" || row.name.startsWith("windows_") : service === "cloud" ? (row) => row.name.startsWith("cloud_windows_") : () => false;
   const windowsRows = rows.filter(windows);
   if (windowsRows.length) {
-    const expected = service === "security" ? ["953eaa6945a4f7dd167e467de9d500ff32c5ac304dce6d829683ccfcad088a8d"] : ["1daa6b05da32595f44478904b056c787f3c0cd6ac6cbb1551840f79d495d90e9", "7ff775cfcf278592dc53ed51bbca522ec6731468ce57f5de17f1bd354606c0e4"];
+    const expected = service === "security" ? ["953eaa6945a4f7dd167e467de9d500ff32c5ac304dce6d829683ccfcad088a8d"] : [
+      "1daa6b05da32595f44478904b056c787f3c0cd6ac6cbb1551840f79d495d90e9",
+      "7ff775cfcf278592dc53ed51bbca522ec6731468ce57f5de17f1bd354606c0e4",
+      "14ae18e007e8ff1dc2973098c2e93b3f34ca531544837a983db88cbb9c6ab31b"
+    ];
     const shape = windowsRows.map((r) => [r.type, r.name, r.tbl_name, r.sql.replace(/\r\n?/g, "\n")]);
     if (!expected.includes(await digest(new TextEncoder().encode(JSON.stringify(shape))))) throw new Error("SchemaReviewRequired");
     rows = rows.filter((row) => !windows(row));
@@ -3900,7 +3924,7 @@ function exportSpec(service, migration) {
   if (!Object.hasOwn(SERVICES, service)) throw new Error("SourceUnavailable");
   return service === "cloud" ? archiveSpec(service, migration) : SERVICES[service];
 }
-var exportPrefix = (service, migration) => service === "diary" ? migration === DIARY_ENCRYPTED_MIGRATION ? "v10/" : "v9/" : migration === SECURITY_BILLING_MIGRATION ? "d1/security/v5/" : migration === BILLING_ENCRYPTED_MIGRATION ? "d1/billing/v4/" : service === "security" && migration === SECURITY_DIARY_MIGRATION ? "d1/security/v4/" : `d1/${service}/v3/`;
+var exportPrefix = (service, migration) => service === "diary" ? migration === DIARY_ENCRYPTED_MIGRATION ? "v10/" : "v9/" : service === "cloud" && migration === CLOUD_VERSIONS_MIGRATION ? "d1/cloud/v4/" : migration === SECURITY_BILLING_MIGRATION ? "d1/security/v5/" : migration === BILLING_ENCRYPTED_MIGRATION ? "d1/billing/v4/" : service === "security" && migration === SECURITY_DIARY_MIGRATION ? "d1/security/v4/" : `d1/${service}/v3/`;
 var exportDay = (now) => new Date(now + 9 * 36e5).toISOString().slice(0, 10);
 function validateExportManifest(manifest, service) {
   const spec = service === "household" ? archiveSpec(service, manifest?.expectedMigration) : exportSpec(service, manifest?.expectedMigration), prefix = exportPrefix(service, manifest?.expectedMigration);

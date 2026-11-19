@@ -117,6 +117,8 @@ public sealed class WindowsDeviceClient : IDisposable
     }
     internal static async Task<JsonElement> ReadJsonAsync(HttpResponseMessage response,CancellationToken token,int maxBytes=65536)
     {
+        if((int)response.StatusCode>=500||response.StatusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests)
+            throw new HttpRequestException("同期サービスへの接続を待って再試行します。",null,response.StatusCode);
         await response.Content.LoadIntoBufferAsync(maxBytes,token);
         using var document=JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(token));return document.RootElement.Clone();
     }

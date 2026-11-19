@@ -1,10 +1,15 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace TCloud.Sync.Core;
 
-public sealed record CloudFileMetadata(string Name, string MimeType, string MediaKind, long LastModified);
+public sealed record CloudFileMetadata(string Name, string MimeType, string MediaKind, long LastModified)
+{
+    // Preserve existing duration/container and future metadata during a rename.
+    [JsonExtensionData] public Dictionary<string,JsonElement>? Extra {get;init;}
+}
 public sealed record CloudCipherEnvelope(string Ciphertext, string Iv);
 
 /// <summary>The existing Web vault format. Unwrapped byte-array keys belong to the caller and must be cleared.</summary>
@@ -36,6 +41,10 @@ public static class CloudFileCrypto
         ValidateKey(fileKey);
         return Encrypt(folderKey, fileKey, FileKeyContext);
     }
+    public static CloudCipherEnvelope WrapChildFolder(ReadOnlySpan<byte> parentKey,ReadOnlySpan<byte> childKey)
+    {ValidateKey(childKey);return Encrypt(parentKey,childKey,ChildKeyContext);}
+    public static CloudCipherEnvelope EncryptFolderName(ReadOnlySpan<byte> folderKey,string name)
+    {ValidateName(name);return Encrypt(folderKey,StrictUtf8.GetBytes(name),FolderNameContext);}
 
     public static string DecryptFolderName(ReadOnlySpan<byte> folderKey, CloudCipherEnvelope envelope)
     {

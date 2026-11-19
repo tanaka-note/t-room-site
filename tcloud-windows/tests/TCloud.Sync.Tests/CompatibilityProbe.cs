@@ -90,6 +90,11 @@ internal static class CompatibilityProbe
             var rejectedBeforeSave = fixture.RejectedDeleteCount;
             var save = Attempt(() => ((dynamic)workbook).Save());
             var savedFlag = (bool)((dynamic)workbook).Saved;
+            var snapshotWhileOpen=Attempt(()=>
+            {
+                var snapshot=TCloud.Sync.Windows.LocalOriginalSnapshot.CaptureAsync(path,Path.Combine(fixture.Root,"fixture-staging")).GetAwaiter().GetResult();
+                snapshot.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            });
             ((dynamic)workbook).Close(false);
             Release(cell); cell = null;
             Release(sheet); sheet = null;
@@ -112,8 +117,8 @@ internal static class CompatibilityProbe
             var deleteAfterConversion = FixtureClient.Run($"[System.IO.File]::Delete({FixtureClient.PathArgument(path)})");
             var contentPreserved = File.Exists(path) && File.ReadAllBytes(path).AsSpan().SequenceEqual(savedBytes);
             Console.WriteLine(JsonSerializer.Serialize(new { office = "Excel", save, savedFlag, valueVerified,
-                rejectedDuringSave, deleteOrdinaryCopy, deleteAfterConversion, contentPreserved }));
-            if (!save.Succeeded || !savedFlag || !valueVerified || deleteAfterConversion.Succeeded || !contentPreserved)
+                snapshotWhileOpen,rejectedDuringSave, deleteOrdinaryCopy, deleteAfterConversion, contentPreserved }));
+            if (!save.Succeeded || !savedFlag || !snapshotWhileOpen.Succeeded || !valueVerified || deleteAfterConversion.Succeeded || !contentPreserved)
                 throw new InvalidOperationException("The synthetic Excel edit was not verified after reopening.");
         }
         finally

@@ -1,6 +1,6 @@
 import {verifyLegacyCoverage,requireFrozenMigration} from '../../diary-worker/e2ee/migration-store.mjs';
 import {DIARY_ENCRYPTED_MIGRATION,SECURITY_DIARY_MIGRATION,ENCRYPTED_DIARY_TABLES,SECURITY_DIARY_TABLES,readDiaryKeyMetadata,sameKeyMetadata,verifyEncryptedDiaryRow} from './diary-encrypted.js';
-import { SERVICES,archiveSpec } from './registry.js';
+import { SERVICES,archiveSpec,CLOUD_VERSIONS_MIGRATION } from './registry.js';
 import { BACKUP_TABLES } from '../../diary-worker/src/backup.js';
 import { assertSchema,assertArchiveSchema,assertEncryptedSchema } from './schema-guard.js';
 import { compress, decode, digest, verifiedPut, verifiedGeneration } from './integrity.js';
@@ -34,6 +34,7 @@ export function exportSpec(service,migration) {
 }
 export const exportBucket = (env, service) => service === 'diary' ? env.DIARY_BACKUP : env.BACKUP;
 export const exportPrefix = (service,migration) => service === 'diary' ? (migration===DIARY_ENCRYPTED_MIGRATION?'v10/':'v9/')
+  : service==='cloud'&&migration===CLOUD_VERSIONS_MIGRATION?'d1/cloud/v4/'
   : migration===SECURITY_BILLING_MIGRATION?'d1/security/v5/'
   : migration===BILLING_ENCRYPTED_MIGRATION?'d1/billing/v4/'
   : service==='security'&&migration===SECURITY_DIARY_MIGRATION?'d1/security/v4/':`d1/${service}/v3/`;
@@ -166,6 +167,7 @@ export async function saveExport(env, service, now, { fetcher = fetch, sleep = m
     && await env.SECURITY_DB.prepare("SELECT 1 AS present FROM sqlite_schema WHERE type='table' AND name='security_billing_vaults'").first()) {
     migration=SECURITY_BILLING_MIGRATION;
   }
+  if(service==='cloud'&&env.CLOUD_DB&&await env.CLOUD_DB.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='cloud_file_versions'").first())migration=CLOUD_VERSIONS_MIGRATION;
   const spec = exportSpec(service,migration), bucket = exportBucket(env, service), prefix = exportPrefix(service,migration), day = exportDay(now);
   const keyMetadata=migration===DIARY_ENCRYPTED_MIGRATION?await readDiaryKeyMetadata(env.SECURITY_DB):null;
   if(keyMetadata) {

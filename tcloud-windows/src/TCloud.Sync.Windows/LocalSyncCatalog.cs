@@ -4,9 +4,10 @@ using TCloud.Sync.Core;
 namespace TCloud.Sync.Windows;
 
 public sealed record RetainedOriginalRecord(long Id,long Revision,string RelativePath,string PlaceholderIdentity,
-    long SizeBytes,string? Sha256,bool Complete);
+    long SizeBytes,string? Sha256,bool Complete,string? ContentVersion=null,WindowsFileState? LocalState=null,bool Deleted=false,long LocalFileId=0);
+public sealed record LocalFolderRecord(long Id,string RelativePath,long FileId,long Revision);
 public sealed record LocalSyncSnapshot(int Version,string ScopeHash,VolumeBinding Volume,long RootFileId,
-    WindowsCatalogStart? RemotePosition,WindowsCatalogEntry[] Remote,RetainedOriginalRecord[] Originals);
+    WindowsCatalogStart? RemotePosition,WindowsCatalogEntry[] Remote,RetainedOriginalRecord[] Originals,LocalFolderRecord[]? Folders=null);
 
 /// <summary>Atomic PC-side restart state. No Cookie, access token, PRF or plaintext key fields.</summary>
 public sealed class LocalSyncCatalog(string path,WindowsDeviceRegistration registration)
@@ -46,8 +47,11 @@ public sealed class LocalSyncCatalog(string path,WindowsDeviceRegistration regis
                 throw new InvalidDataException("保存済み原本より古い版、または同じ版の異なる内容は確定できません。");
             var retained=old is {Complete:true}&&old.Revision==descriptor.Revision&&old.SizeBytes==descriptor.SizeBytes
                 &&old.PlaceholderIdentity==descriptor.Identity&&old.RelativePath==descriptor.RelativePath&&old.Sha256==sha256;
+            var remote=current.Remote.SingleOrDefault(e=>e.Kind=="file"&&e.Id==descriptor.Id&&e.Revision==descriptor.Revision);
+            var version=remote?.Value is {} value&&value.TryGetProperty("contentVersion",out var content)?content.GetString():null;
             return current with {Originals=[..current.Originals.Where(e=>e.Id!=descriptor.Id),
-                new(descriptor.Id,descriptor.Revision,descriptor.RelativePath,descriptor.Identity,descriptor.SizeBytes,sha256,retained)]};
+                new(descriptor.Id,descriptor.Revision,descriptor.RelativePath,descriptor.Identity,descriptor.SizeBytes,sha256,retained,version,
+                    LocalFileId:old?.LocalFileId??0)]};
         },token);
     public Task<LocalSyncSnapshot> MarkOriginalRetainedAsync(OriginalDescriptor descriptor,CancellationToken token=default)
         =>UpdateAsync(current=>
@@ -65,7 +69,8 @@ public sealed class LocalSyncCatalog(string path,WindowsDeviceRegistration regis
         ArgumentNullException.ThrowIfNull(update);await gate.WaitAsync(token);
         try
         {
-            var value=update(await LoadCoreAsync(token));Validate(value);
+            var before=await LoadCoreAsync(token);var value=update(before);Validate(value);
+            if(ReferenceEquals(before,value))return value;
             await SaveCoreAsync(value,token);return value;
         }
         finally {gate.Release();}
@@ -122,6 +127,13 @@ public sealed class LocalSyncCatalog(string path,WindowsDeviceRegistration regis
         }
         if(value.Originals.Select(e=>e.RelativePath).Distinct(StringComparer.OrdinalIgnoreCase).Count()!=value.Originals.Length)
             throw new InvalidDataException("複数の原本が同じ保存先を使用しています。");
+        if(value.Folders is {} folders) {
+            if(folders.Length>100000||folders.Any(f=>f is null||f.Id<1||f.FileId==0||f.Revision<1)
+                ||folders.Select(f=>f.Id).Distinct().Count()!=folders.Length
+                ||folders.Select(f=>f.RelativePath).Distinct(StringComparer.OrdinalIgnoreCase).Count()!=folders.Length)
+                throw new InvalidDataException("フォルダの同期記録が不正です。");
+            foreach(var folder in folders)_=LocalPaths.ResolveUnderRoot(registration.Destination,folder.RelativePath);
+        }
     }
     private void ValidatePath()
     {

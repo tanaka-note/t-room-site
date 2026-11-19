@@ -92,7 +92,7 @@ internal static class DeviceClientTests
             if(route=="challenge")
             {
                 Check(request.Headers.Authorization is null,"proof request has no old access token");
-                if(Unavailable)return Response(HttpStatusCode.ServiceUnavailable,new {code="authorization_unavailable"});
+                if(Unavailable)return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable){Content=new StringContent("synthetic edge outage",System.Text.Encoding.UTF8,"text/html")};
                 if(Revoked)return Response(HttpStatusCode.Unauthorized,new {code="device_revoked"});
                 if(InitialIncomplete)return Response(HttpStatusCode.Unauthorized,new {code="initial_auth_incomplete"});
                 challenge=new(registration.DeviceId,Guid.NewGuid().ToString("N"),Encode(RandomNumberGenerator.GetBytes(32)),

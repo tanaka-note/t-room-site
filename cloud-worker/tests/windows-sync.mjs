@@ -50,7 +50,9 @@ test('initial passkey enrollment issues a separate, non-cookie, limited Windows 
   assert.equal(items.status,200); assert.deepEqual(items.body.folders.map(f=>f.id),[7]); assert.equal(items.cookie,null);
   assert.equal((await call('/data/items?folderId=9','GET',undefined,device.authorization)).status,403);
   assert.equal((await call('/data/folders/7','PATCH',{name:'changed',passwordAction:'replace',authProof:'fixture'},device.authorization)).status,403);
-  assert.equal((await call('/data/folders/8','PATCH',{name:'renamed child',passwordAction:'keep'},device.authorization)).status,200,'ordinary folder rename still works');
+  const position=db.prepare("SELECT seq FROM cloud_windows_heads WHERE kind='folder' AND entity_id=8").get();
+  const epoch=db.prepare('SELECT epoch FROM cloud_windows_catalog_control WHERE id=1').get().epoch;
+  assert.equal((await call('/data/folders/8','PATCH',{name:'renamed child',passwordAction:'keep',windowsExpectedRevision:position.seq,windowsEpoch:epoch},device.authorization)).status,200,'ordinary folder rename still works');
   for(const route of ['/data/files/1','/data/folders/7','/data/trash'])
     assert.equal((await call(route,'DELETE',undefined,device.authorization)).status,403,'no native original deletion');
   assert.equal((await api(null,'/items','GET',undefined,device.authorization)).status,401,'device bearer grants no Web session');

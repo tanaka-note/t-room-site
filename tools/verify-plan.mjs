@@ -29,7 +29,7 @@ export function commands(target) {
       { cwd: '.', script: 'browser-policy:test' }
     ],
     cloud: tests('cloud-worker', ...[
-      'windows-sync', 'trash-retention', 'trash-retention-runtime', 'folder-trash', 'subadmin-trash', 'retired-player', 'photo-navigation', 'photo-loading', 'photo-viewer-assets', 'search-input', 'folder-scroll-position', 'folder-listing-api', 'diary-backup-mount',
+      'windows-sync', 'windows-updates', 'trash-retention', 'trash-retention-runtime', 'folder-trash', 'subadmin-trash', 'retired-player', 'photo-navigation', 'photo-loading', 'photo-viewer-assets', 'search-input', 'folder-scroll-position', 'folder-listing-api', 'diary-backup-mount',
       'listing-model', 'listing-boundary', 'selection-state', 'selection-boundary', 'bulk-delete', 'bulk-delete-boundary', 'selection-move', 'selection-history', 'selection-toolbar-stability', 'search-delete-stability', 'transfer-progress', 'upload-view-boundary', 'folder-transfer', 'search-result-ranking', 'upload-live-progress', 'upload-differential', 'transfer-cancel', 'crypto-roundtrip', 'member-api-boundary', 'passkey-session-resume', 'passkey-rolling', 'vault-cache', 'session-refresh', 'permission-guards', 'password-session-lifetime',
       'manual-thumbnail-api', 'encrypted-thumbnail-policy', 'favorites-api', 'share-isolation',
       'media-format', 'media-remux-race', 'media-range', 'media-prefetch', 'media-long-range', 'offline-storage', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'player-stability', 'desktop-seek', 'sort-preferences-preview-cleanup', 'passkey-performance'
@@ -89,7 +89,7 @@ export function affected(paths) {
     const path = raw.replaceAll('\\', '/');
     if (/^(docs\/|README\.md$|AGENTS\.md$)/.test(path) || /\.md$/.test(path)) continue;
     if (path.startsWith('tcloud-windows/')) { add('tcloud-windows'); continue; }
-    if (['tools/verify-tcloud-windows.mjs', 'tools/build-tcloud-shell-probe.mjs'].includes(path)) { add('tooling', 'tcloud-windows'); continue; }
+    if (['tools/verify-tcloud-windows.mjs', 'tools/build-tcloud-shell-probe.mjs','tools/build-tcloud-windows.mjs'].includes(path)) { add('tooling', 'tcloud-windows'); continue; }
     if (path === 'site-worker/retired-services.mjs') { add('site', 'health'); continue; }
     if (['tools/web-app-registry.mjs', 'tools/test-web-app-build-freshness.mjs'].includes(path)) { add('tooling', 'site'); continue; }
     if (/^(tools\/(verify|install-verify|check-cloud-infrastructure|test-cloud-infrastructure|test-development|test-release|test-browser|browser-|local-dev|release|worker-logs)|\.github\/|\.node-version$)/.test(path)) { add('tooling'); continue; }
@@ -112,7 +112,7 @@ export function affected(paths) {
       || /^tools\/password-auth/.test(path)) add('auth');
     if (/^cloud-worker\/public\/(crypto-vault|vendor\/argon2)/.test(path)) add('security', 'auth');
     if (path === 'cloud-worker/public/crypto-vault.js') add('tcloud-windows');
-    if (['cloud-worker/src/windows-sync.js', 'cloud-worker/src/windows-catalog.js', 'security-worker/src/windows-device-context.js'].includes(path)) add('tcloud-windows');
+    if (['cloud-worker/src/windows-sync.js', 'cloud-worker/src/windows-catalog.js', 'cloud-worker/src/windows-updates.js', 'security-worker/src/windows-device-context.js'].includes(path)) add('tcloud-windows');
     // Registry build dependencies are the authoritative cross-service asset map.
     for (const app of registry.apps) {
       if ((app.buildFiles || []).includes(path) || (app.buildRoots || []).some(d => path.startsWith(`${d}/`))) {

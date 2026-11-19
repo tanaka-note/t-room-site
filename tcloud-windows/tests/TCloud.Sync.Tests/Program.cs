@@ -26,6 +26,11 @@ if(args.Contains("--snapshot-probe"))
     try {await LocalSnapshotTests.Capture();Console.WriteLine("PASS local save snapshot and concurrent writer rejection");return 0;}
     catch(Exception error){Console.Error.WriteLine(error);return 1;}
 }
+if(args.Contains("--engine-probe"))
+{
+    try {await WindowsEngineTests.RoundTrip();Console.WriteLine("PASS mounted original upload, lost acknowledgement, rename, restart and online trash");return 0;}
+    catch(Exception error){Console.Error.WriteLine(error);return 1;}
+}
 if(args.Contains("--root-probe"))
 {
     try {await RootRegistrationTests.Persistence();Console.WriteLine("PASS persisted root ownership and registration recovery");return 0;}
@@ -116,6 +121,7 @@ if (args.Contains("--native"))
     tests.Add(("persistent sync roots resume only their owner and unlink without deleting originals", RootRegistrationTests.Persistence));
     tests.Add(("operational CFAPI transport keeps verified originals and permits only in-root rename", ProviderTests.Transfer));
     tests.Add(("device renewal, catalog, vault decryption, disk staging and CFAPI retain one verified original", OriginalTransferTests.Pipeline));
+    tests.Add(("resident engine uploads, renames, resumes interrupted commits and follows verified online trash",WindowsEngineTests.RoundTrip));
     tests.Add(("browser PRF envelopes unlock existing member and administrator keys in Windows", NativePasskeyEnvelope));
 }
 var failed = 0;
