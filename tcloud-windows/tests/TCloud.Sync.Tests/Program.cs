@@ -104,6 +104,7 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("paths cannot escape sync root or address alternate streams", Paths),
     ("destination inspection is read-only and rejects overlapping roots", Destination),
     ("native passkey requests preserve RP, required verification and credential PRF inputs", PasskeyRequests),
+    ("initial login and logout requests satisfy the current Security origin guard without exposing failures",EnrollmentTests.InitialSessionRequests),
     ("administrator public keys use the current authenticated Cloud config endpoint", AdministratorPublicKey)
 };
 if (args.Contains("--native"))
