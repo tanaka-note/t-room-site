@@ -1,5 +1,5 @@
 import { saveExport, pruneExports, exportBucket, DATABASES } from './export-backup.js';
-import { DISABLED_BACKUP_EXPORTS } from './dispatch.js';
+import { isBackupExportDisabled } from './dispatch.js';
 import { reportRun } from './monitor.js';
 import { withExportLease } from './export-lease.js';
 
@@ -13,7 +13,7 @@ export function exportReason(error) {
 
 export async function executeExportWorkflow(env, payload, step) {
   const { service, scheduledTime } = payload || {};
-  if (!Object.hasOwn(DATABASES, service) || DISABLED_BACKUP_EXPORTS.includes(service)
+  if (!Object.hasOwn(DATABASES, service) || isBackupExportDisabled(service)
       || !Number.isSafeInteger(scheduledTime) || scheduledTime <= 0) throw new Error('InvalidBackupJob');
   if(payload.checkpoint&&(service!=='diary'||!/^[a-f0-9-]{36}$/.test(payload.checkpoint)))throw new Error('InvalidBackupJob');
   // Avoid starting all database exports at once. Each job has durable retries
