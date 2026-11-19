@@ -120,7 +120,6 @@ public sealed class LocalSyncCatalog(string path,WindowsDeviceRegistration regis
             throw new InvalidDataException("同期記録の確認位置が不正です。");
         foreach(var item in value.Originals)
         {
-            _=LocalPaths.ResolveUnderRoot(registration.Destination,item.RelativePath);
             static bool Hash(string? text)=>text?.Length==64&&text.All(char.IsAsciiHexDigit);
             if(item.Id<1||item.Revision<1||item.SizeBytes<1||!Hash(item.PlaceholderIdentity)||item.Sha256 is not null&&!Hash(item.Sha256)
                 ||item.Complete&&item.Sha256 is null)throw new InvalidDataException("原本の保存記録が不正です。");
@@ -132,8 +131,9 @@ public sealed class LocalSyncCatalog(string path,WindowsDeviceRegistration regis
                 ||folders.Select(f=>f.Id).Distinct().Count()!=folders.Length
                 ||folders.Select(f=>f.RelativePath).Distinct(StringComparer.OrdinalIgnoreCase).Count()!=folders.Length)
                 throw new InvalidDataException("フォルダの同期記録が不正です。");
-            foreach(var folder in folders)_=LocalPaths.ResolveUnderRoot(registration.Destination,folder.RelativePath);
         }
+        LocalPaths.ValidateAllUnderRoot(registration.Destination,value.Originals.Select(o=>o.RelativePath)
+            .Concat((value.Folders??[]).Select(f=>f.RelativePath)));
     }
     private void ValidatePath()
     {

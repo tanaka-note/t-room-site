@@ -38,6 +38,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
     private readonly FileSystemWatcher watcher;
     private readonly object passGate=new();
     private CancellationTokenSource? currentPass;
+    private string? activeHydrationPath;
     private long lastLocalChange;
     private WindowsCatalogStart? lastRemotePosition;
     private volatile bool ignoreLocalEvents;
@@ -62,6 +63,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
     public string RecoveryDirectory=>WindowsRecovery.DirectoryFor(staging);
     public ConcurrentQueue<Exception> Errors {get;}=new();
     public Task Completion=>worker;
+    internal Action<string>? BeforeHydrationValidation {get;set;}
     public async Task ReconcileAsync(LocalSyncSnapshot snapshot,CancellationToken token)
     {
         root.VerifyPresent();if(ready&&lastRemotePosition==snapshot.RemotePosition)return;
@@ -121,13 +123,17 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
         if(ignoreLocalEvents||Ignored(Path.GetFileName(args.FullPath)))return;
         try{if(File.Exists(args.FullPath)&&(CloudFilesLocalStorage.PlaceholderState(args.FullPath)&0x30)!=0)return;}
         catch(Exception error)when(error is IOException or System.ComponentModel.Win32Exception or UnauthorizedAccessException) { }
-        localChanges.AddOrUpdate(args.FullPath,1,(_,n)=>n+1);Interrupt(local:true);
+        localChanges.AddOrUpdate(args.FullPath,1,(_,n)=>n+1);
+        Interrupt(local:true,hydrationNoticePath:args.ChangeType==WatcherChangeTypes.Changed?args.FullPath:null);
     }
-    private void Interrupt(bool local)
+    private void Interrupt(bool local,string? hydrationNoticePath=null)
     {
         Interlocked.Increment(ref generation);
         if(local)Interlocked.Exchange(ref lastLocalChange,Environment.TickCount64);
-        lock(passGate)currentPass?.Cancel();
+        // Hydration itself emits write notifications. Validate that one body
+        // before deciding whether it is a user edit; renames, other files,
+        // remote changes and notification overflow still interrupt immediately.
+        lock(passGate)if(hydrationNoticePath is null||!string.Equals(activeHydrationPath,hydrationNoticePath,StringComparison.OrdinalIgnoreCase))currentPass?.Cancel();
         try{if(wake.CurrentCount==0)wake.Release();}catch(Exception error)when(error is ObjectDisposedException or SemaphoreFullException){ }
     }
     private async Task WorkAsync(CancellationToken token)
@@ -224,7 +230,8 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                     await using var check=await LocalOriginalSnapshot.CaptureAsync(full,staging,token:token);
                     dirty=check.Sha256!=old.Sha256;
                     if(!dirty&&stamp.Id==check.SourceFileId&&stamp.Usn==check.SourceUsn) {
-                        await PutAsync(old with {LocalState=stamp,LocalFileId=stamp.Id},token);
+                        old=old with {Complete=true,LocalState=stamp,LocalFileId=stamp.Id};
+                        await PutAsync(old,token);
                         if(change==localChanges.GetValueOrDefault(full)&&WindowsFileState.Read(full)==stamp)verifiedLocal[stamp.Id]=(stamp,full,change,old.Sha256);
                     }
                 }
@@ -253,7 +260,10 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                         Directory.CreateDirectory(Path.GetDirectoryName(target)!);File.Move(full,target);path=desired;
                     }
                     var currentState=WindowsFileState.Read(LocalPaths.ResolveUnderRoot(root.Root,path));
-                    await PutAsync(old with {Revision=entry.Revision,RelativePath=path,ContentVersion=Version(entry),LocalState=currentState==stamp?stamp:null,LocalFileId=currentState.Id,RemoteName=resolved.Metadata?.Name},token);
+                    var updated=old with {Revision=entry.Revision,RelativePath=path,ContentVersion=Version(entry),LocalState=currentState==stamp?stamp:null,LocalFileId=currentState.Id,RemoteName=resolved.Metadata?.Name};
+                    // A stable body needs no checkpoint. In particular, do not
+                    // reload and validate the entire catalog for every sibling.
+                    if(updated!=old)await PutAsync(updated,token);
                     done++;continue;
                 }
             }
@@ -314,9 +324,30 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
             using var resolved=resolver.Resolve(entry);
             if(hydrate) {
                 downloads[Identity(entry)]=(entry,snapshot.Remote,path);
-                await provider.HydrateAsync(path,token);
-                var retained=(await catalog.LoadAsync(token)).Originals.Single(e=>e.Id==entry.Id);
-                await PutAsync(retained with {Complete=true,ContentVersion=Version(entry),LocalState=null,LocalFileId=WindowsFileState.Read(full).Id},token);
+                long validatedChange=-1;
+                lock(passGate)activeHydrationPath=full;
+                try {
+                    await provider.HydrateAsync(path,token);
+                    BeforeHydrationValidation?.Invoke(full);
+                    var retained=(await catalog.LoadAsync(token)).Originals.Single(e=>e.Id==entry.Id);
+                    var stamp=WindowsFileState.Read(full);var change=localChanges.GetValueOrDefault(full);
+                    await using var check=await LocalOriginalSnapshot.CaptureAsync(full,staging,token:token);
+                    // Never mistake a save made as soon as the file opens for
+                    // provider traffic. Compare actual bytes and a stable stamp.
+                    if(check.Sha256!=retained.Sha256||stamp.Id!=check.SourceFileId||stamp.Usn!=check.SourceUsn
+                        ||WindowsFileState.Read(full)!=stamp||localChanges.GetValueOrDefault(full)!=change) {
+                        Interrupt(local:true);return;
+                    }
+                    await PutAsync(retained with {Complete=true,ContentVersion=Version(entry),LocalState=stamp,LocalFileId=stamp.Id},token);
+                    verifiedLocal[stamp.Id]=(stamp,full,change,retained.Sha256);validatedChange=change;
+                }finally {
+                    lock(passGate) {
+                        activeHydrationPath=null;
+                        // An edit racing the final checkpoint must not remain
+                        // deferred behind the rest of the initial backup.
+                        if(localChanges.GetValueOrDefault(full)!=validatedChange)currentPass?.Cancel();
+                    }
+                }
             }else {
                 // Recheck the current catalog before exchanging any body downloaded from an older view.
                 var source=new CloudContentSource(device,resolved.Id,resolved.StoredBytes,resolved.Revision);
