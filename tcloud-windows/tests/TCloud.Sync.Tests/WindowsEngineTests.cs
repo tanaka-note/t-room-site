@@ -239,9 +239,11 @@ internal static class WindowsEngineTests
                     wrappedFileKey=wrap.Ciphertext,fileKeyIv=wrap.Iv,contentVersion=Convert.ToHexString(SHA256.HashData(body)).ToLowerInvariant()}),null,null));
             }
             var keys=new{scopeHash=registration.ScopeHash,folderKeys=new[]{new{rootFolderId=7,wrappedKey=Encode(rsa.Encrypt(folderKey,RSAEncryptionPadding.OaepSHA256))}}};
+            int contentReads=0;
             using var handler=new DeviceClientTests.DeviceHandler(registration){Data=request=>{
                 var route=request.RequestUri!.AbsoluteUri[WindowsDeviceClient.BaseUrl.Length..];if(route=="keys")return Json(keys);
                 if(!route.StartsWith("content/",StringComparison.Ordinal))throw new InvalidOperationException("Unexpected bulk fixture mutation");
+                Interlocked.Increment(ref contentReads);
                 var bytes=bodies[long.Parse(route[8..])];var range=request.Headers.Range!.Ranges.Single();var from=range.From!.Value;var to=range.To!.Value;
                 var response=new HttpResponseMessage(HttpStatusCode.PartialContent){Content=new ByteArrayContent(bytes.AsSpan((int)from,(int)(to-from+1)).ToArray())};
                 response.Headers.ETag=new("\"bulk-"+route[8..]+"\"");response.Content.Headers.ContentRange=new ContentRangeHeaderValue(from,to,bytes.Length);return response;
@@ -255,6 +257,17 @@ internal static class WindowsEngineTests
                 if(finished!=complete.Task)throw new InvalidOperationException("Bulk hydration did not settle: "+string.Join(";",engine.Errors.Select(e=>e.Message)));
                 var retained=await catalog.LoadAsync();Check(retained.Originals.Length==count&&retained.Originals.All(o=>o.Complete&&o.LocalState is not null),"every completed body has a durable verified baseline");
                 foreach(var record in retained.Originals)Check((await File.ReadAllBytesAsync(LocalPaths.ResolveUnderRoot(directory,record.RelativePath))).AsSpan().SequenceEqual(payload),"bulk plaintext equals its authenticated original");
+            }
+            // Older interrupted hydration left a valid stamp/hash but no
+            // completion flag. Repair the flag without downloading it again.
+            var resumed=await catalog.UpdateAsync(s=>s with {Originals=s.Originals.Select((o,i)=>i==0?o with {Complete=false}:o).ToArray()});
+            var readsBeforeRestart=Volatile.Read(ref contentReads);var settled=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using(var engine=new WindowsSyncEngine(device,registration,root,catalog,Path.Combine(outer,"pc"),new TransferProgress(s=>{if(s.Message.StartsWith("同期済み",StringComparison.Ordinal))settled.TrySetResult();}))) {
+                await engine.ReconcileAsync(resumed,CancellationToken.None);
+                var finished=await Task.WhenAny(settled.Task,engine.Completion,Task.Delay(TimeSpan.FromSeconds(45)));
+                Check(finished==settled.Task,"restart settles cached originals");
+                Check((await catalog.LoadAsync()).Originals.All(o=>o.Complete),"existing validated bodies repair interrupted completion flags");
+                Check(Volatile.Read(ref contentReads)==readsBeforeRestart,"repair never downloads an already saved original again");
             }
             root.UnregisterPreservingOriginals();root=null;
         }finally {
