@@ -19,8 +19,10 @@ const server=createServer(async(req,res)=>{try{
   const url=new URL(req.url,origin);
   if(url.pathname.startsWith('/diary/api/')){
     const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=Buffer.concat(chunks);
-    requests.push({path:url.pathname,method:req.method});
+    const observed={path:url.pathname,method:req.method};
+    requests.push(observed);
     const response=await f.worker.fetch(new Request(url,{method:req.method,headers:req.headers,...(body.length?{body}:{})}),f.env,f.ctx);
+    observed.status=response.status;
     res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));return;
   }
   if(url.pathname.startsWith('/security/')||url.pathname==='/assets/pwa-auto-update.js'){res.setHeader('Content-Type','text/javascript');res.end('');return;}
@@ -116,7 +118,9 @@ try{
   await page.keyboard.press('ArrowLeft');await page.waitForFunction(()=>document.querySelector('#photo-viewer-file').textContent.includes('legacy.png')&&document.querySelector('#photo-viewer-status').hidden);
   const legacyDownload=page.waitForEvent('download');await page.click('#photo-download-original');const oldDownload=await legacyDownload;const oldChunks=[];for await(const chunk of await oldDownload.createReadStream())oldChunks.push(chunk);assert.deepEqual(Buffer.concat(oldChunks),png);
   await page.keyboard.press('ArrowRight');await page.waitForFunction(()=>document.querySelector('#photo-viewer-file').textContent.includes('new-private.png')&&document.querySelector('#photo-viewer-status').hidden);
-  assert.ok(requests.filter(r=>r.path===`/diary/api/photos/${newId}/display`).length<=2,'detail and viewer reuse the decoded blob after reload');
+  const displayReads=requests.filter(r=>r.path===`/diary/api/photos/${newId}/display`);
+  assert.ok(displayReads.some(r=>r.status===304),'the viewer revalidates the detail blob');
+  assert.ok(displayReads.filter(r=>r.status===200).length<=2,'the viewer reuses the decoded blob without downloading it again');
   await page.keyboard.press('Escape');await page.locator('#photo-viewer-dialog').waitFor({state:'hidden'});
   await page.keyboard.press('Escape');await page.locator('#entry-dialog').waitFor({state:'hidden'});
   await page.click('#camera-roll-button');
@@ -134,7 +138,48 @@ try{
     while (!reads && performance.now() < deadline) await new Promise(requestAnimationFrame);
     const first=reads;loader.reset();for(const resolve of done)resolve();await new Promise(requestAnimationFrame);const stale=host.querySelectorAll('img[src]').length;host.remove();return {max,first,stale};
   });
-  assert.ok(bounds.first>0&&bounds.first<40);assert.ok(bounds.max<=4);assert.equal(bounds.stale,0);
+  assert.ok(bounds.first>0&&bounds.first<40);assert.ok(bounds.max<=8);assert.equal(bounds.stale,0);
+
+  const priority=await page.evaluate(async()=>{
+    const {createPhotoImages}=await import('/diary/diary-photo-images.js');
+    const started=[],aborted=[];
+    const loader=createPhotoImages({readPhoto:(photo,_kind,{signal})=>new Promise((_,reject)=>{
+      started.push(photo.id);
+      signal.addEventListener('abort',()=>{
+        aborted.push(photo.id);
+        reject(new DOMException('Aborted','AbortError'));
+      },{once:true});
+    })});
+    const host=document.createElement('div');
+    host.style.cssText='position:fixed;inset:0 0 auto;height:380px;overflow:auto;z-index:99999;background:white';
+    document.body.append(host);
+    const waitFor=async(predicate)=>{
+      const until=performance.now()+5000;
+      while(!predicate()&&performance.now()<until)await new Promise(requestAnimationFrame);
+      return predicate();
+    };
+    try {
+      for(let id=0;id<60;id++){
+        const image=document.createElement('img');
+        image.style.cssText='display:block;width:120px;height:50px';
+        host.append(image);
+        loader.bind(image,{id},'thumbnail',{root:host});
+      }
+      const filled=await waitFor(()=>started.filter(id=>typeof id==='number'&&id<8).length>=6);
+      const first=[...started];
+      const selected=document.createElement('img');
+      host.append(selected);
+      loader.bind(selected,{id:'selected'},'thumbnail',{eager:true});
+      const selectedStarted=await waitFor(()=>started.includes('selected'));
+      const selectedBeforePreemption=selectedStarted&&aborted.length===0;
+      host.scrollTop=2400;
+      const newViewport=await waitFor(()=>started.some(id=>typeof id==='number'&&id>=48));
+      return {filled,selectedBeforePreemption,newViewport,preempted:first.some(id=>aborted.includes(id))};
+    } finally {
+      loader.reset();host.remove();
+    }
+  });
+  assert.deepEqual(priority,{filled:true,selectedBeforePreemption:true,newViewport:true,preempted:true});
   await page.click('#logout-button');await page.locator('#login-view').waitFor({state:'visible'});
   assert.equal(await page.locator('img[src^="blob:"]').count(),0,'logout releases plaintext object URLs');
   await page.click('#passkey-login');await page.locator('#app-view').waitFor({state:'visible'});

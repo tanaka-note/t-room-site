@@ -9,6 +9,27 @@ import {
 } from "./crypto.mjs";
 import {validDeviceKeys} from './device.mjs';
 
+export const PHOTO_CONTEXT_HEADER = 'X-Diary-Photo-Context';
+export const PHOTO_FORMAT_HEADER = 'X-Diary-Photo-Format';
+export const PHOTO_EXPIRY_HEADER = 'X-Diary-Photo-Expires';
+
+export function photoSessionClaims(session) {
+  return { id:session.sessionId, identityId:session.identityId, credentialId:session.credentialId,
+    serviceLinkId:session.serviceLinkId, accountId:session.accountId, version:session.accountVersion, epoch:session.passkeySessionEpoch };
+}
+
+// The digest binds a request to the already authenticated session. It carries
+// no authority by itself and never contains the cookie or cryptographic keys.
+export async function photoReadContext(keySession, household, rolloutGeneration, directoryGeneration) {
+  const {id, identityId, credentialId, serviceLinkId, accountId, version, epoch} = keySession || {};
+  if (![id, identityId, credentialId, serviceLinkId, accountId, household].every(value => typeof value === 'string' && value)
+    || ![version, epoch, rolloutGeneration, directoryGeneration].every(Number.isSafeInteger)) return null;
+  return b64(await crypto.subtle.digest('SHA-256', encode(['diary-photo-read/1', id, identityId,
+    credentialId, serviceLinkId, accountId, version, epoch, household, rolloutGeneration, directoryGeneration])));
+}
+
+export const validPhotoEtag = value => typeof value === 'string' && /^"[A-Za-z0-9_-]{1,128}"$/.test(value);
+
 const vaultBinding=(accountId,recipientId,vault)=>b64(encode({accountId,recipientId,publicKey:vault.publicKey,signPublicKey:vault.signPublicKey,privateEnvelope:vault.privateEnvelope}));
 // Reuse only the non-extractable keys already unlocked by this login's
 // preparation. The carrier is memory-only and consumed exactly once. Trust,

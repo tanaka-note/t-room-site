@@ -6,6 +6,7 @@ import { verifyDirectory,DIARY_READER_PROTOCOL } from './crypto.mjs';
 import { createStore } from './store.mjs';
 import { readRollout,READ_FORMATS } from './rollout.mjs';
 import {PHOTO_PREFIX} from './photo-crypto.mjs';
+import {PHOTO_CONTEXT_HEADER, photoReadContext, photoSessionClaims} from './session.mjs';
 import {handlePhotoMigration} from './photo-migration-store.mjs';
 import {recordSecurityAudit} from '../../assets/security-audit-worker.js';
 
@@ -34,6 +35,7 @@ export async function handleEncryptedApi(request,env,url,path,session,{json,read
   const photoAsset=/^\/api\/photos\/[0-9a-f-]{36}\/(original|display|thumbnail)$/.test(path);
   if(!path.startsWith('/api/encryption/')&&!photoAsset)return null;
   if(!encryptionEnabled(env))fail(404,'EncryptionDisabled');
+  const expectedPhotoContext = photoAsset ? request.headers.get(PHOTO_CONTEXT_HEADER) : null;
   let control;
   if(photoAsset) {
     control=await readRollout(env.DB);
@@ -63,13 +65,28 @@ export async function handleEncryptedApi(request,env,url,path,session,{json,read
   }
   if(control.evidence?.photoMigration)fail(423,'PhotoMigrationChecking');
   const visible=async response=>{
-    if(photoMigrationEnabled(env)&&(await readRollout(env.DB)).evidence?.photoMigration)fail(423,'PhotoMigrationChecking');
+    if(photoMigrationEnabled(env)||expectedPhotoContext!==null) {
+      const current=await readRollout(env.DB);
+      const error=current.evidence?.photoMigration ? [423,'PhotoMigrationChecking']
+        : expectedPhotoContext!==null&&current.generation!==control.generation ? [401,'PhotoSessionChanged'] : null;
+      if(error) {
+        await response.body?.cancel();
+        fail(...error);
+      }
+    }
     return response;
   };
   const {actor,bundle,directory,registry,store}=await encryptedContext(env,session);
   actor.activeHouseholdId=session.activeHouseholdId;
   if(bundle.rekeyRequired&&request.method!=='GET')fail(423,'DiaryRekeyRequired');
-  const media=await handleEncryptedMedia(request,env,url,path,actor,{json,readJson,readMultipartForm,store});if(media)return photoAsset?visible(media):media;
+  let photoSession;
+  if(expectedPhotoContext!==null) {
+    const context=await photoReadContext(photoSessionClaims(session), actor.activeHouseholdId, control.generation, directory.generation);
+    if(!context||context!==expectedPhotoContext)fail(401,'PhotoSessionChanged');
+    photoSession={context,expiresAt:session.exp};
+  }
+  const media=await handleEncryptedMedia(request,env,url,path,actor,{json,readJson,readMultipartForm,store,photoSession});
+  if(media)return photoAsset?visible(media):media;
   if(path==='/api/encryption/profile'&&request.method==='GET')return json({protocol:DIARY_READER_PROTOCOL,profile:{actor,household:session.activeHouseholdId,displayName:session.accountName,directory:bundle.directory,epochs:directory.epochs,vault:bundle.vault,grants:bundle.grants,recordGrants:bundle.recordGrants,webAuthnCredentialId:bundle.webAuthnCredentialId},minimumGeneration:bundle.generation,rekeyRequired:bundle.rekeyRequired,rollout:{phase:control.phase,generation:control.generation}});
   if(path==='/api/encryption/investment'&&request.method==='GET') {
     if(!actor.canViewInvestment)fail(403,'AccessDenied');
