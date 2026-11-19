@@ -14,6 +14,34 @@ import { normalizeTextForHash } from './web-app-registry.mjs';
 test('Diary sealed trust and backup protocol changes also verify their Backup Worker consumer',()=>{
   for(const path of ['diary-worker/e2ee/trust.mjs','diary-worker/e2ee/backup.mjs'])assert.ok(affected([path]).includes('backup'),path);
 });
+test('shared backup schema changes verify every generated browser restore consumer',()=>{
+  for(const path of ['backup-worker/src/registry.js','backup-worker/src/schema-guard.js'])
+    for(const consumer of ['backup','security','diary','billing'])assert.ok(affected([path]).includes(consumer),`${path}: ${consumer}`);
+  assert.ok(affected(['security-worker/tools/build-billing-restore.mjs']).includes('billing'));
+});
+test('Ubuntu browser setup normalizes regional mirrors while preserving suites, signatures and other repositories',()=>{
+  const workflow=readFileSync(resolve(root,'.github/workflows/verify.yml'),'utf8');
+  const command=workflow.match(/sudo sed -i -E 's#([^#]+)#([^#]+)#g'/);
+  assert.ok(command,'the configured APT source transformation must be tested');
+  const transform=text=>text.replace(new RegExp(command[1],'g'),command[2]);
+  const sources=workflow.match(/for source in ([^;\n]+); do/)[1].trim().split(/\s+/);
+  assert.ok(sources.includes('/etc/apt/apt-mirrors.txt'),'indirect mirror+file sources must normalize their actual mirror list');
+  const mirrorList='http://us-east-2.ec2.archive.ubuntu.com/ubuntu/\nhttp://archive.ubuntu.com/ubuntu/\n';
+  const normalizedMirrors='https://archive.ubuntu.com/ubuntu/\nhttps://archive.ubuntu.com/ubuntu/\n';
+  assert.equal(transform(mirrorList),normalizedMirrors);
+  const indirect='Types: deb\nURIs: mirror+file:/etc/apt/apt-mirrors.txt\nSuites: noble noble-updates noble-backports\nComponents: main universe\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n';
+  assert.equal(transform(indirect),indirect,'keep the configured indirect source and its trust settings');
+  if(process.platform!=='win32')assert.equal(execFileSync('sed',['-E',`s#${command[1]}#${command[2]}#g`],{input:mirrorList,encoding:'utf8'}),normalizedMirrors);
+  for(const host of ['azure.archive.ubuntu.com','us-east-2.ec2.archive.ubuntu.com','eu-west-1.ec2.archive.ubuntu.com','us.archive.ubuntu.com','archive.ubuntu.com']) {
+    const source=`deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] http://${host}/ubuntu noble main restricted\n`;
+    assert.equal(transform(source),'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu noble main restricted\n');
+  }
+  const deb822='Types: deb\nURIs: http://us-east-2.ec2.archive.ubuntu.com/ubuntu/\nSuites: noble noble-updates\nComponents: main universe\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n';
+  assert.equal(transform(deb822),deb822.replace('http://us-east-2.ec2.archive.ubuntu.com','https://archive.ubuntu.com'));
+  const other='deb http://security.ubuntu.com/ubuntu noble-security main\ndeb https://packages.microsoft.com/ubuntu/24.04/prod noble main\ndeb https://archive.ubuntu.com.example.test/ubuntu stable main\n';
+  assert.equal(transform(other),other);
+  assert.equal(transform(transform(deb822)),transform(deb822));
+});
 
 test('the retired Health Worker has a route and no data or shared-service bindings', () => {
   const config = JSON.parse(readFileSync(resolve(root, 'health-worker/wrangler.jsonc'), 'utf8'));
@@ -73,6 +101,19 @@ test('Downloader 2 components select only Downloader 2 while unknown files remai
   assert.equal(downloader2NativeAffected(['downloader2-native/src/Program.cs']), true);
   assert.equal(downloader2NativeAffected(['downloader2-extension/service-worker.js']), false);
   assert.equal(downloader2NativeAffected(['docs/downloader2.md']), false);
+});
+
+test('T-Cloud Windows is verified on Windows without selecting a production Worker', () => {
+  assert.deepEqual(affected(['tcloud-windows/src/TCloud.Sync.Core/SyncPlanner.cs']), ['tcloud-windows']);
+  assert.deepEqual(affected(['tools/verify-tcloud-windows.mjs']), ['tooling', 'tcloud-windows']);
+  assert.deepEqual(affected(['tools/build-tcloud-shell-probe.mjs']), ['tooling', 'tcloud-windows']);
+  assert.deepEqual(affected(['tools/build-tcloud-windows.mjs']), ['tooling','tcloud-windows']);
+  assert.ok(affected(['cloud-worker/public/crypto-vault.js']).includes('tcloud-windows'));
+  assert.deepEqual(affected(['tcloud-windows/README.md']), []);
+  assert.deepEqual(commands('tcloud-windows'), [{cwd:'.',args:['tools/verify-tcloud-windows.mjs']}]);
+  const workflow = readFileSync(resolve(root, '.github/workflows/verify.yml'), 'utf8');
+  assert.match(workflow, /tcloud-windows:\r?\n\s+needs: plan\r?\n\s+if: needs\.plan\.outputs\.tcloud_windows == 'true'\r?\n\s+runs-on: windows-latest/);
+  assert.match(workflow, /TCLOUD_WINDOWS: \$\{\{ needs\.tcloud-windows\.result \}\}/);
 });
 
 test('Inventory changes have an isolated verify and deployment profile', () => {

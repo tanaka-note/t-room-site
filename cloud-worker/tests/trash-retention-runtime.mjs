@@ -49,7 +49,7 @@ test("workerd: Worker-first cutover preserves R2 on old schema and while migrati
     const db = await mf.getD1Database("DB"), r2 = await mf.getR2Bucket("FILES");
     const names = readdirSync(new URL("../migrations/", import.meta.url)).filter(n => n.endsWith(".sql")).sort();
     const apply = async name => { for (const sql of migrationStatements(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"))) await db.prepare(sql).run(); };
-    for (const name of names.filter(n => !n.startsWith("0013"))) await apply(name);
+    for (const name of names.filter(n => n < "0013")) await apply(name);
     await db.prepare(`INSERT INTO cloud_files(id,object_key,original_name,mime_type,media_kind,size_bytes,status,created_by,deleted_at)
       VALUES(1,'originals/cutover','fixture','image/jpeg','image',4,'ready','admin',CURRENT_TIMESTAMP)`).run();
     await r2.put("originals/cutover", "test");

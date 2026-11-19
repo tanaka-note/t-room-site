@@ -288,6 +288,13 @@ export const SERVICES = {
       }
     ],
     "knownTables": [
+      "cloud_windows_devices",
+      "cloud_windows_challenges",
+      "cloud_windows_access",
+      "cloud_windows_catalog_control",
+      "cloud_windows_changes",
+      "cloud_windows_heads",
+      "cloud_windows_uploads",
       "cloud_folders",
       "cloud_files",
       "cloud_audit_logs",
@@ -492,6 +499,7 @@ export const SERVICES = {
       }
     ],
     "knownTables": [
+      "security_windows_authority_versions",
       "security_identities",
       "security_invitations",
       "security_credentials",
@@ -1063,8 +1071,17 @@ export const SERVICES = {
 };
 
 // Older generations keep their archived columns and tables for recovery.
+export const CLOUD_VERSIONS_MIGRATION='0016_windows_file_updates.sql';
+const versionColumns=['file_id','source_file_id','source_revision','operation_id','content_version','restore_metadata','restore_iv','restore_name','restore_display_name','created_at','restored_at'];
+export function cloudVersionsSpec() {
+  const spec=SERVICES.cloud;
+  return {...spec,migration:CLOUD_VERSIONS_MIGRATION,
+    tables:[...spec.tables,{name:'cloud_file_versions',columns:versionColumns,sourceColumns:versionColumns.join(',')}],
+    knownTables:[...spec.knownTables,'cloud_file_versions']};
+}
 export function archiveSpec(service,migration) {
   const spec=SERVICES[service];
+  if(service==='cloud'&&migration===CLOUD_VERSIONS_MIGRATION)return cloudVersionsSpec();
   if (service === 'cloud' && migration === '0012_favorites.sql') {
     const legacyColumn = column => column !== 'trash_operation_id' && column !== 'purge_id';
     const legacyTable = name => !name.startsWith('cloud_trash_');

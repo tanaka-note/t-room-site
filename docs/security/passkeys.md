@@ -61,6 +61,8 @@ CloudflareのSecret変更とD1更新は単一トランザクションにでき�
 
 ## T-Cloud鍵解除
 
+Windowsの外付けHDD同期は、利用者の明示指定により初回の既存パスキー認証で端末を登録し、以降は端末専用の認可でバックグラウンド同期を継続する。通常のWebパスキーの招待・承認・PRF・handoff・12時間rolling sessionを変更・無期限化しない。端末認可のAPIと保存先は分離し、Identity・credential・連携・root scope・epoch・鍵の指紋・認可世代を現在照合する。保存済みのHDD平文は再ログインなしで利用でき、端末認可の失効時も消さない。実装・公開状況と受入条件は[Windows同期設計](../tcloud-windows-design.md#windowsの認証と秘密鍵保護)を正本とする。
+
 既存ファイル・folder key・file keyは交換しない。T-CloudのログインはPasskey専用とし、Security Centerの復旧に必要なPW由来の鍵解除と内部本人確認だけを維持する。WebAuthn署名鍵を暗号鍵として流用しない。
 
 第一管理者は現在のPW由来account keyで既存RSA管理者秘密鍵PKCS#8を端末内復号し、WebAuthn PRF出力からHKDFで導出したAES-GCM鍵で再暗号化する。一般IdentityはcredentialごとにRSA-OAEP鍵ペアを1組だけ端末で生成し、秘密鍵を同じPRF由来鍵で暗号化する。第一管理者の端末が各folder keyを復号し、そのcredential共通の公開鍵へRSA-OAEPでwrapして承認する。公開鍵・暗号化済み秘密鍵はcredential単位、暗号化済みfolder keyはcredentialとservice linkの組単位で保存する。Cloud link自体のactive状態とcredentialごとの復号準備状態は分離し、使用中credentialに必要なvaultとfolder envelopeがあるlinkだけをログイン候補にする。サーバー側に同じcredentialの公開鍵が存在する通常retryでは鍵を作り直さず、異なる鍵への置換は拒否する。

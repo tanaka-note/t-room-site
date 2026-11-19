@@ -30,6 +30,27 @@ export function reviewedSchemaMatches(service, baseline, actual) {
     (REVIEWED[service]?.[0] === baseline && REVIEWED[service][1] === actual));
 }
 export async function assertSchema(service, rows) {
+  const versions=service==='cloud'?rows.filter(row=>row.tbl_name==='cloud_file_versions'||row.name==='cloud_version_restore_name'):[];
+  if(service==='cloud'&&Boolean(versions.length)!==rows.some(row=>row.name==='cloud_windows_uploads'))throw new Error('SchemaReviewRequired');
+  if(versions.length) {
+    const shape=versions.map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
+    if(await digest(new TextEncoder().encode(JSON.stringify(shape)))!=='78a6cd859c5ede6044f7ab9b7531bb26da704d8aa4cdcc2dc66a5c974a1cd986')throw new Error('SchemaReviewRequired');
+    rows=rows.filter(row=>!versions.includes(row));
+  }
+  // Optional Windows authorization schema; both the old production baseline
+  // and this exact additive extension are supported during Worker-first rollout.
+  // These are authorization records, excluded from automatic data restoration.
+  const windows = service==='security' ? row=>row.tbl_name==='security_windows_authority_versions'||row.name.startsWith('windows_')
+    : service==='cloud' ? row=>row.name.startsWith('cloud_windows_') : ()=>false;
+  const windowsRows=rows.filter(windows);
+  if(windowsRows.length) {
+    const expected=service==='security'?['953eaa6945a4f7dd167e467de9d500ff32c5ac304dce6d829683ccfcad088a8d']
+      :['1daa6b05da32595f44478904b056c787f3c0cd6ac6cbb1551840f79d495d90e9','7ff775cfcf278592dc53ed51bbca522ec6731468ce57f5de17f1bd354606c0e4',
+        '14ae18e007e8ff1dc2973098c2e93b3f34ca531544837a983db88cbb9c6ab31b'];
+    const shape=windowsRows.map(r=>[r.type,r.name,r.tbl_name,r.sql.replace(/\r\n?/g,'\n')]);
+    if(!expected.includes(await digest(new TextEncoder().encode(JSON.stringify(shape)))))throw new Error('SchemaReviewRequired');
+    rows=rows.filter(row=>!windows(row));
+  }
   const extension = service==='billing' ? name => /^billing_(encryption|candidate|freeze)_/.test(name)
     : service==='security' ? name => name === 'security_billing_vaults'
       : service==='diary' ? name=>name.startsWith('diary_photo_migration_') : () => false;

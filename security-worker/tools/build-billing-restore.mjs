@@ -9,7 +9,10 @@ const result = await build({
   absWorkingDir:fileURLToPath(root),
   entryPoints:["billing-worker/restore-checkpoint.mjs"],
   bundle:true,loader:{".sql":"text"},platform:"browser",format:"esm",target:"es2022",write:false,legalComments:"inline",
-  nodePaths:[fileURLToPath(new URL("security-worker/node_modules",root))]
+  nodePaths:[fileURLToPath(new URL("security-worker/node_modules",root))],
+  plugins:[{name:"normalized-trusted-sql",setup(build){
+    build.onLoad({filter:/\.sql$/},async args=>({contents:(await readFile(args.path,"utf8")).replace(/\r\n?/g,"\n"),loader:"text"}));
+  }}]
 });
 const output = new URL("billing-worker/public/billing-checkpoint-restore.mjs",root);
 if (process.argv.includes("--check")) {

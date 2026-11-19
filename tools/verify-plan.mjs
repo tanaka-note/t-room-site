@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 export const root = fileURLToPath(new URL('../', import.meta.url));
 export const services = ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments', 'household', 'calendar', 'portfolio'];
 export const android = ['android-tcloud', 'android-tcloud-twa', 'android-diary-twa', 'android-ai-chat', 'android-calendar'];
-export const targets = ['tooling', 'site', ...services, 'backup', 'auth', 'container-unit', ...android];
+export const targets = ['tooling', 'site', ...services, 'backup', 'auth', 'container-unit', 'tcloud-windows', ...android];
 const registry = JSON.parse(readFileSync(new URL('../web-apps.json', import.meta.url), 'utf8'));
 const node = (cwd, ...args) => ({ cwd, args });
 const files = (dir, pattern) => readdirSync(new URL(`../${dir}/`, import.meta.url)).filter(f => pattern.test(f)).sort();
@@ -29,7 +29,7 @@ export function commands(target) {
       { cwd: '.', script: 'browser-policy:test' }
     ],
     cloud: tests('cloud-worker', ...[
-      'trash-retention', 'trash-retention-runtime', 'folder-trash', 'subadmin-trash', 'retired-player', 'photo-navigation', 'photo-loading', 'photo-viewer-assets', 'search-input', 'folder-scroll-position', 'folder-listing-api', 'diary-backup-mount',
+      'windows-sync', 'windows-updates', 'trash-retention', 'trash-retention-runtime', 'folder-trash', 'subadmin-trash', 'retired-player', 'photo-navigation', 'photo-loading', 'photo-viewer-assets', 'search-input', 'folder-scroll-position', 'folder-listing-api', 'diary-backup-mount',
       'listing-model', 'listing-boundary', 'selection-state', 'selection-boundary', 'bulk-delete', 'bulk-delete-boundary', 'selection-move', 'selection-history', 'selection-toolbar-stability', 'search-delete-stability', 'transfer-progress', 'upload-view-boundary', 'folder-transfer', 'search-result-ranking', 'upload-live-progress', 'upload-differential', 'transfer-cancel', 'crypto-roundtrip', 'member-api-boundary', 'passkey-session-resume', 'passkey-rolling', 'vault-cache', 'session-refresh', 'permission-guards', 'password-session-lifetime',
       'manual-thumbnail-api', 'encrypted-thumbnail-policy', 'favorites-api', 'share-isolation',
       'media-format', 'media-remux-race', 'media-range', 'media-prefetch', 'media-long-range', 'offline-storage', 'file-safety', 'display-cache', 'startup-view', 'preview-sorting', 'player-stability', 'desktop-seek', 'sort-preferences-preview-cleanup', 'passkey-performance'
@@ -57,6 +57,7 @@ export function commands(target) {
     inventory: [{ cwd: 'inventory-worker', script: 'test' }],
     health: [{ cwd: 'health-worker', script: 'test' }],
     'container-unit': [node('downloader-worker', 'test/run-python.mjs', '-m', 'unittest', 'discover', '-s', 'container/tests', '-p', 'test_*.py')],
+    'tcloud-windows': [node('.', 'tools/verify-tcloud-windows.mjs')],
     auth: [node('.', '--test', 'tools/test-session-secret.mjs', 'tools/test-password-auth.mjs', 'tools/test-passkey-rolling.mjs'),
       node('security-worker', '--test', 'test/service-passkey-session.test.js', 'test/security-contract.test.js', 'test/primary-admin-setup.test.js'),
       ...tests('cloud-worker', 'tests/passkey-session-resume.mjs', 'tests/password-session-lifetime.mjs', 'tests/permission-guards.mjs'),
@@ -88,6 +89,8 @@ export function affected(paths) {
   for (const raw of paths) {
     const path = raw.replaceAll('\\', '/');
     if (/^(docs\/|README\.md$|AGENTS\.md$)/.test(path) || /\.md$/.test(path)) continue;
+    if (path.startsWith('tcloud-windows/')) { add('tcloud-windows'); continue; }
+    if (['tools/verify-tcloud-windows.mjs', 'tools/build-tcloud-shell-probe.mjs','tools/build-tcloud-windows.mjs'].includes(path)) { add('tooling', 'tcloud-windows'); continue; }
     if (path === 'site-worker/retired-services.mjs') { add('site', 'health'); continue; }
     if (['tools/web-app-registry.mjs', 'tools/test-web-app-build-freshness.mjs'].includes(path)) { add('tooling', 'site'); continue; }
     if (/^(tools\/(verify|install-verify|check-cloud-infrastructure|test-cloud-infrastructure|test-development|test-release|test-browser|browser-|local-dev|release|worker-logs)|\.github\/|\.node-version$)/.test(path)) { add('tooling'); continue; }
@@ -109,6 +112,8 @@ export function affected(paths) {
       || /^assets\/(passkey|password-auth|session-policy|session-secret|security-audit|account-display)/.test(path)
       || /^tools\/password-auth/.test(path)) add('auth');
     if (/^cloud-worker\/public\/(crypto-vault|vendor\/argon2)/.test(path)) add('security', 'auth');
+    if (path === 'cloud-worker/public/crypto-vault.js') add('tcloud-windows');
+    if (['cloud-worker/src/windows-sync.js', 'cloud-worker/src/windows-catalog.js', 'cloud-worker/src/windows-updates.js', 'security-worker/src/windows-device-context.js'].includes(path)) add('tcloud-windows');
     // Registry build dependencies are the authoritative cross-service asset map.
     for (const app of registry.apps) {
       if ((app.buildFiles || []).includes(path) || (app.buildRoots || []).some(d => path.startsWith(`${d}/`))) {

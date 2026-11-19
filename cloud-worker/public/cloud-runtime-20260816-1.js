@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-883da984e370";
+const APP_BUILD_ID = "cloud-1f41e08c843c";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -4577,7 +4577,7 @@ function offlineSelectionContext(files = []) {
 
 function attachOfflineStorageIdentity(file, context = currentOfflineContext()) {
   if (!file || !context || !globalThis.TCloudOffline?.supported()) return file;
-  const version = String(file.updatedAt || file.createdAt || "1");
+  const version = String(file.contentVersion || file.updatedAt || file.createdAt || "1");
   file.offlineAccountScope = context.accountScope;
   file.offlineRootFolderId = context.rootFolderId;
   file.offlineStorageId = TCloudOffline.createStorageId(context.accountScope, context.rootFolderId, file.id, version);
@@ -4594,7 +4594,9 @@ async function offlineStorageRecord(file, context) {
     rootFolderId: context.rootFolderId,
     folderId: Number(file.folderId),
     fileId: Number(file.id),
-    version: String(file.updatedAt || file.createdAt || "1"),
+    version: String(file.contentVersion || file.updatedAt || file.createdAt || "1"),
+    contentVersion: file.contentVersion || null,
+    sourceUpdatedAt: String(file.updatedAt || file.createdAt || "1"),
     cryptoVersion: Number(file.cryptoVersion || 1),
     encryptedMetadata: file.encryptedMetadata,
     metadataIv: file.metadataIv,
@@ -7329,7 +7331,9 @@ async function prepareDeviceCacheEntry(file) {
     accountScope: context.accountScope,
     rootFolderId: context.rootFolderId,
     fileId: Number(file.id),
-    version: String(file.updatedAt || file.createdAt || "1"),
+    version: String(file.contentVersion || file.updatedAt || file.createdAt || "1"),
+    contentVersion: file.contentVersion || null,
+    sourceUpdatedAt: String(file.updatedAt || file.createdAt || "1"),
     chunkCount: Number(file.chunkCount || Math.ceil(Number(file.sizeBytes || 0) / Number(file.chunkSizeBytes || 8 * 1024 * 1024))),
     chunkSizeBytes: Number(file.chunkSizeBytes || 8 * 1024 * 1024),
     encryptedSizeBytes: Number(file.encryptedSizeBytes || file.sizeBytes || 0),
@@ -9429,8 +9433,9 @@ async function syncOfflineSourceRecords(entries, context) {
     try {
       const data = await api(`/files/${Number(entry.fileId)}`);
       const source = data.file;
-      const sourceVersion = String(source?.updatedAt || source?.createdAt || "1");
-      if (!source || source.deletedAt || sourceVersion !== String(entry.version)) {
+      const sourceVersion = String(entry.contentVersion ? source?.contentVersion || "" : source?.updatedAt || source?.createdAt || "1");
+      const metadataChanged=entry.contentVersion&&String(source?.updatedAt||source?.createdAt||"1")!==String(entry.sourceUpdatedAt);
+      if (!source || source.deletedAt || sourceVersion !== String(entry.version) || metadataChanged) {
         await TCloudOffline.removeEntry(entry.id);
       } else {
         remaining.push(entry);
@@ -9468,7 +9473,8 @@ async function hydrateOfflineEntry(entry, context) {
       encryptedMetadata: entry.encryptedMetadata,
       metadataIv: entry.metadataIv,
       fileKey,
-      updatedAt: entry.version,
+      updatedAt: entry.sourceUpdatedAt || entry.version,
+      contentVersion: entry.contentVersion || null,
       createdAt: entry.completedAt,
       offlineOnly: true,
       offlineAccountScope: entry.accountScope,

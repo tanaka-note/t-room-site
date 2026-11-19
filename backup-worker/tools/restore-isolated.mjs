@@ -133,6 +133,23 @@ export async function restoreIsolated(bucket, key, service, {anchor,minimumGener
     if(service==='diary') db.exec('UPDATE diary_accounts SET active=0,session_version=session_version+1,must_change_password=1');
     if(service==='ai') db.exec("UPDATE ai_accounts SET status='disabled'; UPDATE ai_request_claims SET status='failed',error_code='isolated_restore' WHERE status='processing'");
     if(encryptedDiary)db.exec("UPDATE diary_e2ee_control SET phase='paused',ever_encrypted=1,evidence=json_remove(evidence,'$.photoMigration')");
+    // Rebuild only derived Windows state in this new, isolated database. Device
+    // grants are excluded from the durable allowlist and never become active.
+    if(service==='cloud'&&db.prepare("SELECT 1 FROM sqlite_schema WHERE name='cloud_windows_catalog_control' AND type='table'").get()) {
+      db.exec(`DELETE FROM cloud_windows_heads; DELETE FROM cloud_windows_changes;
+        UPDATE cloud_windows_catalog_control SET epoch=lower(hex(randomblob(16))),history_floor=0 WHERE id=1;
+        INSERT INTO cloud_windows_changes(kind,entity_id,parent_id,state,ancestors,payload)
+          SELECT 'folder',entity_id,parent_id,state,ancestors,payload FROM cloud_windows_folder_projection;
+        INSERT INTO cloud_windows_changes(kind,entity_id,parent_id,state,ancestors,payload)
+          SELECT 'file',entity_id,parent_id,state,ancestors,payload FROM cloud_windows_file_projection;
+        INSERT INTO cloud_windows_heads(kind,entity_id,seq) SELECT kind,entity_id,seq FROM cloud_windows_changes;`);
+    }
+    if(service==='security'&&db.prepare("SELECT 1 FROM sqlite_schema WHERE name='security_windows_authority_versions' AND type='table'").get()) {
+      db.exec(`DELETE FROM security_windows_authority_versions;
+        INSERT INTO security_windows_authority_versions(kind,entity_id,revision) SELECT 'identity',id,1 FROM security_identities;
+        INSERT INTO security_windows_authority_versions(kind,entity_id,revision) SELECT 'credential',credential_id,1 FROM security_credentials;
+        INSERT INTO security_windows_authority_versions(kind,entity_id,revision) SELECT 'link',id,1 FROM security_service_links;`);
+    }
     for(const t of triggers) db.exec(t.sql);
     if(legacyHousehold)for(const file of migrations.filter(f=>f>verified.payload.expectedMigration))db.exec(readFileSync(new URL(file,dir),'utf8'));
     // 0006 creates an additional Household account. Quarantine after all

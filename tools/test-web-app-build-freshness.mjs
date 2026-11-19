@@ -159,6 +159,18 @@ test("SQL schemas normalize checkout line endings but still invalidate builds on
   } finally { await rm(directory, {recursive:true, force:true}); }
 });
 
+test('copied license text has the same build on Windows and Linux while content changes invalidate it',async()=>{
+  const directory=await createFixture(),app=fixtureApp('site-app','t-room-site');
+  app.buildFiles=['license.txt'];const path=resolve(directory,'license.txt'),source='Synthetic fixture license\nSecond line\n';
+  try {
+    await writeFile(path,source);const original=await expectedBuild(app,contract,directory);
+    await writeFile(path,source.replaceAll('\n','\r\n'));
+    assert.equal(await expectedBuild(app,contract,directory),original);
+    await writeFile(path,source+'Changed terms\n');
+    assert.notEqual(await expectedBuild(app,contract,directory),original);
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
+
 test("JSONC configuration keeps build and freshness stable across LF, CRLF and mixed line endings", async () => {
   const directory = await createFixture();
   const app = fixtureApp("site-app", "t-room-site");

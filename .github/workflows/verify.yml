@@ -23,6 +23,7 @@ jobs:
       node: ${{ steps.plan.outputs.node }}
       android: ${{ steps.plan.outputs.android }}
       downloader2_native: ${{ steps.plan.outputs.downloader2_native }}
+      tcloud_windows: ${{ steps.plan.outputs.tcloud_windows }}
       production: ${{ steps.plan.outputs.production }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -50,7 +51,8 @@ jobs:
           const {selected,native}=manual ? {selected:manualVerification(requested),native:false} : ciPlan({event:process.env.VERIFY_EVENT,ref:process.env.VERIFY_REF,base:process.env.BASE_SHA,head:process.env.HEAD_SHA});
           const production=productionPlan(selected,{event:process.env.VERIFY_EVENT,ref:process.env.VERIFY_REF,requested,enabled:process.env.PRODUCTION_ENABLED==='true'});
           appendFileSync(process.env.GITHUB_OUTPUT,`production=${JSON.stringify(production)}\n`);
-          appendFileSync(process.env.GITHUB_OUTPUT,`node=${JSON.stringify(selected.filter(t=>!android.includes(t)))}\nandroid=${JSON.stringify(selected.filter(t=>android.includes(t)))}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT,`node=${JSON.stringify(selected.filter(t=>!android.includes(t) && t!=='tcloud-windows'))}\nandroid=${JSON.stringify(selected.filter(t=>android.includes(t)))}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT,`tcloud_windows=${selected.includes('tcloud-windows')}\n`);
           appendFileSync(process.env.GITHUB_OUTPUT,`downloader2_native=${native}\n`);
           appendFileSync(process.env.GITHUB_STEP_SUMMARY,`## Verify plan\n${selected.join(', ') || 'Documentation only: no tests required'}\n`);
           appendFileSync(process.env.GITHUB_STEP_SUMMARY,`## Production plan\n${production.join(', ') || 'No production deployment selected (or production disabled)'}\n`);
@@ -83,11 +85,12 @@ jobs:
       - name: Keep Ubuntu browser dependency downloads bounded
         if: contains(fromJSON('["tooling","site","cloud","security","diary","billing","health","payments","household","portfolio","inventory"]'), matrix.target)
         run: |
-          # The Azure mirror stalled installs past the job limit. Preserve suites,
+          # Regional Azure/EC2 mirrors stalled installs past the job limit. Preserve suites,
           # components and Signed-By; use the official archive over HTTPS.
-          for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+          # New runner images use mirror+file:/etc/apt/apt-mirrors.txt in deb822.
+          for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources /etc/apt/apt-mirrors.txt; do
             [ -f "$source" ] || continue
-            sudo sed -i -E 's#https?://azure\.archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$source"
+            sudo sed -i -E 's#https?://([a-z0-9-]+\.)*archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$source"
           done
           printf '%s\n' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' 'Acquire::Retries "1";' | sudo tee /etc/apt/apt.conf.d/99troom-network >/dev/null
       - name: Install Chromium only when used
@@ -335,9 +338,26 @@ jobs:
       - name: Build isolated E2E profile
         shell: pwsh
         run: dotnet build downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj --configuration Release -warnaserror -p:Downloader2Profile=E2E -p:Downloader2PairingEndpoint=https://isolated-preview.example.invalid/downloader2/api/pairing/redeem -p:Downloader2PairingAllowedHosts=isolated-preview.example.invalid --output downloader2-native/artifacts/e2e-host
+  tcloud-windows:
+    needs: plan
+    if: needs.plan.outputs.tcloud_windows == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d # v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build and validate T-Cloud Windows with isolated local files
+        run: node tools/verify-tcloud-windows.mjs
   verify:
     if: always()
-    needs: [plan, node, inventory-webkit-macos, household-webkit-macos, cloud-webkit-macos, android, downloader2-native]
+    needs: [plan, node, inventory-webkit-macos, household-webkit-macos, cloud-webkit-macos, android, downloader2-native, tcloud-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Require selected jobs to succeed
@@ -349,7 +369,8 @@ jobs:
           INVENTORY_MACOS: ${{ needs.inventory-webkit-macos.result }}
           ANDROID: ${{ needs.android.result }}
           DOWNLOADER2_NATIVE: ${{ needs.downloader2-native.result }}
-        run: test "$PLAN" = success && [[ "$NODE" =~ ^(success|skipped)$ ]] && [[ "$HOUSEHOLD_MACOS" =~ ^(success|skipped)$ ]] && [[ "$INVENTORY_MACOS" =~ ^(success|skipped)$ ]] && [[ "$MACOS" =~ ^(success|skipped)$ ]] && [[ "$ANDROID" =~ ^(success|skipped)$ ]] && [[ "$DOWNLOADER2_NATIVE" =~ ^(success|skipped)$ ]]
+          TCLOUD_WINDOWS: ${{ needs.tcloud-windows.result }}
+        run: test "$PLAN" = success && [[ "$NODE" =~ ^(success|skipped)$ ]] && [[ "$HOUSEHOLD_MACOS" =~ ^(success|skipped)$ ]] && [[ "$INVENTORY_MACOS" =~ ^(success|skipped)$ ]] && [[ "$MACOS" =~ ^(success|skipped)$ ]] && [[ "$ANDROID" =~ ^(success|skipped)$ ]] && [[ "$DOWNLOADER2_NATIVE" =~ ^(success|skipped)$ ]] && [[ "$TCLOUD_WINDOWS" =~ ^(success|skipped)$ ]]
   production:
     needs: [plan, verify]
     if: ${{ !cancelled() && github.repository == 'tanaka-note/t-room-site' && github.ref == 'refs/heads/main' && needs.verify.result == 'success' && needs.plan.outputs.production != '[]' }}

@@ -5,7 +5,7 @@ const root=new URL('../../',import.meta.url),security=new URL('security-worker/'
 const require=createRequire(new URL('package.json',security));
 const {build}=createRequire(require.resolve('wrangler/package.json'))('esbuild');
 const dir=new URL('diary-worker/migrations/',root),names=(await readdir(dir)).filter(name=>name.endsWith('.sql')).sort();
-const ddl=(await Promise.all([...names.map(name=>new URL(name,dir)),new URL('diary-worker/e2ee/schema.sql',root),new URL('diary-worker/e2ee/legacy-fences.sql',root)].map(path=>readFile(path,'utf8')))).join('\n').replace(/\r\n/g,'\n');
+const ddl=(await Promise.all([...names.map(name=>new URL(name,dir)),new URL('diary-worker/e2ee/schema.sql',root),new URL('diary-worker/e2ee/legacy-fences.sql',root)].map(async path=>(await readFile(path,'utf8')).replace(/\r\n?/g,'\n')))).join('\n');
 const result=await build({absWorkingDir:fileURLToPath(root),entryPoints:[fileURLToPath(new URL('diary-restore.mjs',security))],bundle:true,platform:'browser',format:'esm',target:'es2022',write:false,minify:false,legalComments:'inline',plugins:[{name:'trusted-ddl',setup(build){build.onResolve({filter:/^diary-trusted-ddl$/},()=>({path:'ddl',namespace:'trusted'}));build.onLoad({filter:/.*/,namespace:'trusted'},()=>({contents:'export default '+JSON.stringify(ddl),loader:'js'}));}}]});
 const output=new URL('public/diary-restore.mjs',security),diary=new URL('diary-worker/public/',root);
 if(process.argv.includes('--check')) {

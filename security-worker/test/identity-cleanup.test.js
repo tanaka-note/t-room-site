@@ -62,6 +62,20 @@ test("only old disabled non-admin identities are deleted, with bounded anonymous
   } finally { f.db.close(); }
 });
 
+test('Identity cleanup retains authority tombstones so recreating a retired ID cannot revive Windows grants',async()=>{
+  const f=fixture();try {
+    f.identity('retired');f.credential('old-credential');f.link('old-link');
+    const before=f.db.prepare("SELECT revision FROM security_windows_authority_versions WHERE kind='identity' AND entity_id='retired'").get().revision;
+    assert.equal((await f.cleanup()).deleted,1);
+    assert.equal(f.exists(),false);
+    const after=f.db.prepare("SELECT revision FROM security_windows_authority_versions WHERE kind='identity' AND entity_id='retired'").get().revision;
+    assert.ok(after>before);f.identity('retired','active');
+    assert.ok(f.db.prepare("SELECT revision FROM security_windows_authority_versions WHERE kind='identity' AND entity_id='retired'").get().revision>after);
+    f.db.exec('DROP TRIGGER windows_link_delete');
+    assert.equal((await f.cleanup()).skipped,'schema','partial Windows schema remains fail-closed');
+  } finally {f.db.close();}
+});
+
 const blockers = {
   "audit even if retention deletion has not run": (f) => f.audit(),
   "audit target": (f) => f.audit({ identity_id: null, target_id: "retired" }),

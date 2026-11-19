@@ -12,6 +12,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { sessionCookieValue, sessionPolicyForAuthMethod } from "../../assets/session-policy.mjs";
 import { rollingSessionInput, foregroundSessionActivity, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
 import { trackedPasskeySession } from "./rolling-sessions.js";
+import { cloudWindowsDeviceContext } from "./windows-device-context.js";
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -147,6 +148,10 @@ export default class SecurityWorker extends WorkerEntrypoint {
 
   async cloudPasskeySession(input) {
     return cloudPasskeySession(this.env, input);
+  }
+
+  async cloudWindowsDeviceContext(input) {
+    return cloudWindowsDeviceContext(this.env, input, validatePasskeySession);
   }
 
   async passkeyRollingSession(input) {
@@ -2212,6 +2217,7 @@ function identityActivityStatements(env, event) {
 function activeSessionStatements(env, event) {
   if (!event.sessionIdHash || event.outcome !== "success") return [];
   if (event.eventType === "logout") return [endActiveSessionsStatement(env, "logout", { sessionIdHash: event.sessionIdHash })];
+  if (!['password','passkey'].includes(event.authMethod)) return [];
   if (!ACTIVE_SESSION_START_EVENTS.has(event.eventType) && event.eventType !== "session_resume") return [];
   if (!event.identityId || !event.authMethod || !Number.isSafeInteger(event.expiresAt) || event.expiresAt <= nowSeconds() || !event.sessionVersion) return [];
   // NOT NULL storage uses an empty string for unknown starts; a resume is not a login.
@@ -2262,7 +2268,7 @@ function endActiveSessionsStatement(env, reason, filter) {
 function normalizeAuditEvent(input) {
   const service = ["security", "cloud", "diary", "billing", "ai", "downloader", "downloader2", "inventory", "health", "payments", "household", "calendar", "portfolio"].includes(input?.service) ? input.service : "security";
   const outcome = ["success", "failure", "blocked", "cancelled", "info"].includes(input?.outcome) ? input.outcome : "info";
-  const authMethod = ["password", "passkey", "system"].includes(input?.authMethod) ? input.authMethod : null;
+  const authMethod = ["password", "passkey", "system", "windows-device"].includes(input?.authMethod) ? input.authMethod : null;
   return {
     eventId: normalizeId(input?.eventId) || crypto.randomUUID(), occurredAt: validIso(input?.occurredAt) || new Date().toISOString(),
     service, eventType: normalizeText(input?.eventType, 80) || "unknown", outcome,

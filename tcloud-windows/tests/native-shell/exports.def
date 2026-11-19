@@ -1,0 +1,4 @@
+LIBRARY TCloud.ShellProbe
+EXPORTS
+    DllGetClassObject
+    DllCanUnloadNow

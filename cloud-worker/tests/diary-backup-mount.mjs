@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {fileContentVersion} from '../src/file-version.js';
 import { test } from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
@@ -89,7 +90,7 @@ function fixture() {
   }
   let snapshotCalls = 0;
   const env = { DB: { prepare: statement, async batch(statements) { return Promise.all(statements.map(s => s.all())); } }, SESSION_SECRET: randomBytes(32).toString("hex"), DIARY_BACKUP_MOUNT_FOLDER_ID: "2850", DIARY_BACKUPS: { async getSnapshot() { snapshotCalls++; return snapshot; } } };
-  const context = { isValidSessionSecret, requireSessionSecret, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console, setTimeout, clearTimeout, enqueueSecurityAudit() {} };
+  const context = {fileContentVersion,isValidSessionSecret, requireSessionSecret, WorkerEntrypoint: class {}, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, crypto, atob, btoa, console, setTimeout, clearTimeout, enqueueSecurityAudit() {} };
   const source = readFileSync(new URL("../src/index.js", import.meta.url), "utf8").replace(/^import .*;\r?\n/gm, "").replace("export class SecurityIntegration", "class SecurityIntegration").replace("export default {", "globalThis.worker = {");
   vm.runInNewContext(source, context);
   // Isolate the authenticated API boundary; existing member-api-boundary tests

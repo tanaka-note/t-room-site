@@ -333,6 +333,9 @@
         "billing-worker/src/legacy-cleanup.js",
         "billing-worker/src/migration-candidate.js",
         "billing-worker/src/migration-source.js",
+        "security-worker/tools/build-billing-restore.mjs",
+        "backup-worker/src/registry.js",
+        "backup-worker/src/schema-guard.js",
         "tools/shared/tlain-login.css",
         "tools/shared/tlain-login.js"
       ],
@@ -377,6 +380,8 @@
       "buildFiles": [
         "assets/session-secret.mjs",
         "security-worker/src/index.js",
+        "security-worker/src/windows-device-context.js",
+        "security-worker/migrations/0033_windows_device_authority.sql",
         "security-worker/src/billing-vaults.js",
         "security-worker/src/security-domain.js",
         "security-worker/src/security-headers.js",
@@ -534,7 +539,7 @@
       "publicUrls": ["https://tanaka-note.com/cloud/", "https://tanaka-note.com/cloud/share/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"],
       "entrypoints": ["cloud-worker/public/index.html", "cloud-worker/public/share.html"],
       "buildRoots": ["cloud-worker/public"],
-      "buildFiles": ["assets/session-secret.mjs", "assets/session-policy.mjs", "cloud-worker/src/index.js", "cloud-worker/src/youtube-search.js", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js",
+      "buildFiles": ["assets/session-secret.mjs", "assets/session-policy.mjs", "cloud-worker/src/index.js", "cloud-worker/src/windows-sync.js", "cloud-worker/src/windows-catalog.js", "cloud-worker/migrations/0014_windows_device_grants.sql", "cloud-worker/migrations/0015_windows_sync_catalog.sql", "cloud-worker/src/youtube-search.js", "assets/passkey-session-validation.mjs", "assets/security-audit-worker.js", "assets/account-display.mjs", "security-worker/public/passkey-client.js",
         "tools/shared/tlain-login.css",
         "tools/shared/tlain-login.js"
       ],

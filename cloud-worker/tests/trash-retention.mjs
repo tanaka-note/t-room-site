@@ -11,7 +11,9 @@ const productionVars = productionConfig.vars;
 const admin = { role: "admin", canDelete: true };
 function fixture(options = {}, migrated = true) {
   const db = new DatabaseSync(":memory:");
-  for (const name of readdirSync(new URL("../migrations/", import.meta.url)).filter(n => n.endsWith(".sql") && (migrated || !n.startsWith("0013"))).sort())
+  // Pre-cutover means the actual ordered migration baseline before 0013;
+  // later migrations may legitimately depend on the trash schema.
+  for (const name of readdirSync(new URL("../migrations/", import.meta.url)).filter(n => n.endsWith(".sql") && (migrated || n < "0013")).sort())
     db.exec(readFileSync(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
   if (migrated) db.exec("UPDATE cloud_trash_control SET cutover_ready=1 WHERE id=1");
   const hooks = {};

@@ -1,4 +1,4 @@
-import { SERVICES,archiveSpec } from './registry.js';
+import { SERVICES,archiveSpec,cloudVersionsSpec } from './registry.js';
 import { assertSchema } from './schema-guard.js';
 import { reportRun } from './monitor.js';
 
@@ -6,8 +6,9 @@ import { snapshotStatement, snapshotTables } from './snapshot.js';
 import { compress, decode, digest, publishGeneration, verifiedGeneration, withBackupLock } from './integrity.js';
 export { compress, decode, digest, verifiedPut, objectBytes } from './integrity.js';
 export async function capture(db, service, now = Date.now()) {
-  const spec = SERVICES[service];
+  let spec = SERVICES[service];
   if (!spec || !db) throw new Error('SourceUnavailable');
+  if(service==='cloud'&&await db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='cloud_file_versions'").first())spec=cloudVersionsSpec();
   const startedAt = new Date().toISOString();
   const result = await db.batch([
     snapshotStatement(db, spec.tables),

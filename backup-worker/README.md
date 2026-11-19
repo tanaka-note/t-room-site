@@ -15,6 +15,8 @@
 - AI ChatとDownloader利用集計は定期保存とBackup-dataの対象から除外する。既存2範囲の削除手順は[サービス終了手順](../docs/history/2026-11-19-downloader-ai-retirement.md#既存バックアップの削除)を参照。
 - 体調管理の定期保存とBackup-dataへの表示は終了する。旧世代と復元仕様の参照先は[サービス終了の記録](../docs/history/2026-11-18-service-retirement.md)に記載する。
 - Password hashやサービスの一時セッション、challenge、handoff、Downloaderの処理中ジョブ・一時ファイルは対象外。AIの利用実績と料金予約・再送状態は照合に必要なため保持するが、復旧時に処理を再実行しない。
+- Windows HDD同期の端末認可・nonce・access token hash・認可世代は認証状態として自動データ復元の対象外とする。Windowsの追加DDLは既存baselineと分離した厳密なfingerprintで検査し、部分適用・未知のtrigger変更は拒否する。認証状態を失うサーバー復旧後は端末の初回登録が必要だが、既にHDDへ保存した平文本体は認証なしで利用できる。
+- Windows用catalogも原本とは別の再構築可能な状態とする。0014のみ／0014+0015の追加DDLをそれぞれ厳密照合し、現行のCloud baseline 0013と併用する。隔離復元では原本の管理情報から新しい世代のcatalogを組み立て直し、Windows端末認可は復元しない。Securityの認可世代も復元後の失効済みIdentityを基準に作り直す。Windowsの追加fragment照合で未知のschema差分を無視しない。
 - 日記D1は専用R2・03:25 JSTを維持し、写真処理と完全に独立する。写真の未処理・破損・R2障害はD1保存・検証・保持の成否に参加しない。写真本体は日記用R2に保存し、別バケットへの画像バックアップは廃止する。D1の成功だけで日記全体を復元可能と表示しない。
 
 ## D1 exportによる保存
