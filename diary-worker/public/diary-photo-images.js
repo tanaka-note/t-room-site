@@ -30,6 +30,7 @@ export function createPhotoImages(runtime) {
     URL.revokeObjectURL(url);
     urls.delete(image);
     image.removeAttribute('src');
+    delete image.dataset.photoState;
   }
   const mutations=new MutationObserver(()=>{
     for(const [image,task] of tasks)if(task.image&&!image.isConnected)release(image);
@@ -50,8 +51,12 @@ export function createPhotoImages(runtime) {
     if(document.hidden)return;
     const candidates=[...tasks.values()]
       .filter(task=>!task.started&&(!task.readyAt||task.readyAt<=performance.now())&&(task.eager||task.near)&&(!task.image||task.image.isConnected))
-      .map(task => ({ task, distance: distanceFromViewport(task) }));
-    candidates.sort((a, b) => Number(b.task.eager) - Number(a.task.eager) || a.distance - b.distance);
+      .map(task => ({ task, distance: distanceFromViewport(task) }))
+      .filter(({ task, distance }) => !task.visibleOnly || distance === 0);
+    candidates.sort((a, b) => Number(b.task.eager) - Number(a.task.eager)
+      || Number(a.distance > 0) - Number(b.distance > 0)
+      || Number(Boolean(a.task.visibleOnly)) - Number(Boolean(b.task.visibleOnly))
+      || a.distance - b.distance);
     while(active<4&&candidates.length){
       const { task } = candidates.shift();
       const version=generation;task.started=true;active++;
@@ -77,12 +82,12 @@ export function createPhotoImages(runtime) {
       });
     }
   }
-  function bind(image,photo,kind,{eager=false,root=null}={}) {
+  function bind(image,photo,kind,{eager=false,root=null,visibleOnly=false}={}) {
     release(image);
     if(!runtime||photo.previewUrl&&!photo[`${kind}Url`]){image.src=photo[`${kind}Url`]||photo.previewUrl;return;}
     image.decoding='async';
     const observer = observerFor(root);
-    const task={image,photo,kind,eager,root,observer,near:!observer,started:false,attempts:0};
+    const task={image,photo,kind,eager,root,visibleOnly,observer,near:!observer,started:false,attempts:0};
     tasks.set(image,task);observer?.observe(image);schedule();
   }
   function release(image) {
@@ -110,17 +115,18 @@ export function createPhotoImages(runtime) {
     for(const url of downloads)URL.revokeObjectURL(url);downloads.clear();
   }
   window.addEventListener('scroll',schedule,{passive:true,capture:true});
+  window.addEventListener('resize',schedule,{passive:true});
   document.addEventListener('visibilitychange',schedule);
   let suspended=[];
   window.addEventListener('pagehide', event => {
     suspended = event.persisted ? [...tasks.values()].filter(task => task.image)
-      .map(({ image, photo, kind, eager, root }) => ({ image, photo, kind, eager, root })) : [];
+      .map(({ image, photo, kind, eager, root, visibleOnly }) => ({ image, photo, kind, eager, root, visibleOnly })) : [];
     reset();
   });
   window.addEventListener('pageshow', event => {
     if (!event.persisted) return;
-    for (const { image, photo, kind, eager, root } of suspended) {
-      if (image.isConnected) bind(image, photo, kind, { eager, root });
+    for (const { image, photo, kind, eager, root, visibleOnly } of suspended) {
+      if (image.isConnected) bind(image, photo, kind, { eager, root, visibleOnly });
     }
     suspended = [];
   });
