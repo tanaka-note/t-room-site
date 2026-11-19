@@ -35,7 +35,7 @@ export async function systemFixture({recoveryBits=3072,recoveryExtractable=false
       const link=`fixture-link-${accountId}`;
       central.sqlite.prepare("INSERT INTO security_service_links(id,identity_id,service,service_account_id,display_label,status) VALUES(?,?,'diary',?,'Synthetic diary','active')").run(link,person.identityId,accountId);
       const recipientId=await diaryRecipientId(person.credentialId,link),vault=await createVault(prf,recipientId),claims=await integration.describeEncryptionAccount({accountId});
-      users[accountId]={...person,serviceLinkId:link,serviceAccountId:accountId,recipientId,prf,claims,vault,sessionId:crypto.randomUUID(),active:true};
+      users[accountId]={...person,serviceLinkId:link,serviceAccountId:accountId,recipientId,prf,claims,vault,active:true};
       const response=await handleDiaryKeys('/api/diary/vault',new Request('https://fixture.test/security/api/diary/vault',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({serviceLinkId:link,vault})}),centralEnv,{...person,authenticatedAt:Date.now()/1000},helpers);
       if(response.status!==200)throw new Error('FixtureVaultFailure');
       members.push({...claims,identityId:person.identityId,credentialId:recipientId,webAuthnCredentialId:person.credentialId,serviceLinkId:link,publicKey:vault.publicKey,signPublicKey:vault.signPublicKey});

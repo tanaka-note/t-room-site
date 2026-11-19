@@ -27,11 +27,12 @@ test('real upload adapter: mixed photos, immutable legacy objects, retries, old 
   const f=await systemFixture();globalThis.location=new URL(f.env.DIARY_ENCRYPTION_ORIGIN);
   let account='main-admin',cookieOverride,puts=0,reads=0,bodies=0,loseReply=false,holdReply,badContext=false;
   const requests=[];
+  const sessionId=crypto.randomUUID();
   const put=f.env.MEDIA.put,get=f.env.MEDIA.get;
   f.env.MEDIA.put=async(...args)=>{puts++;return put(...args);};
   f.env.MEDIA.get=async(...args)=>{reads++;const object=await get(...args);if(object?.body)bodies++;return object;};
   const call=async(path,init={})=>{
-    const headers=new Headers(init.headers);headers.set('Cookie',cookieOverride||f.cookie(account));
+    const headers=new Headers(init.headers);headers.set('Cookie',cookieOverride||f.cookie(account,{...f.users[account],sessionId}));
     requests.push({path,headers});
     if(init.method&&init.method!=='GET'){headers.set('Origin',location.origin);headers.set('X-Diary-Request','1');}
     let body=init.body;if(body&&!(body instanceof FormData)&&typeof body!=='string'){headers.set('Content-Type','application/json');body=JSON.stringify(body);}
