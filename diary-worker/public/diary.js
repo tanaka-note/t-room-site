@@ -1933,18 +1933,18 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function watchPhotoLoad(image, placeholder, showError = true) {
     image.addEventListener("load", () => {
       image.dataset.photoState = "ready";
-      placeholder.textContent = "写真を読み込み中…";
+      delete placeholder.dataset.photoState;
     });
     if (showError) image.addEventListener("error", () => {
       delete image.dataset.photoState;
-      placeholder.textContent = "写真を表示できません";
+      placeholder.dataset.photoState = "error";
     });
   }
 
   function createPhotoPlaceholder() {
     const placeholder = document.createElement("span");
     placeholder.className = "diary-photo-placeholder";
-    placeholder.textContent = "写真を読み込み中…";
+    placeholder.setAttribute("aria-hidden", "true");
     return placeholder;
   }
 

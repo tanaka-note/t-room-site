@@ -1340,6 +1340,15 @@ button:disabled {
   text-align: center;
   white-space: normal;
   pointer-events: none;
+  user-select: none;
+}
+
+.diary-photo-placeholder::before {
+  content: "写真を読み込み中…";
+}
+
+.diary-photo-placeholder[data-photo-state="error"]::before {
+  content: "写真を表示できません";
 }
 
 .entry-photo-frame > img[data-photo-state="ready"][src],

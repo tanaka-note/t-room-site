@@ -150,7 +150,7 @@ try{
     const tile = page.locator(`#camera-roll-grid [data-photo-id="${newId}"]`);
     const placeholder = tile.locator('.diary-photo-placeholder');
     await placeholder.waitFor({state:'visible'});
-    assert.equal(await placeholder.textContent(), '写真を読み込み中…');
+    assert.equal(await placeholder.evaluate(element => getComputedStyle(element,'::before').content), '"写真を読み込み中…"');
     releaseAlbumThumbnail();
     await tile.locator('img[data-photo-state="ready"]').waitFor();
     await placeholder.waitFor({state:'hidden'});
