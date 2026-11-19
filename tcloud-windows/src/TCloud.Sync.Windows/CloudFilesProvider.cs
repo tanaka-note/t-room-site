@@ -66,6 +66,7 @@ public sealed class CloudFilesProvider : IDisposable
             CloudFilesLocalStorage.HydrateAndKeep(handle);
         }));
         try{await task.WaitAsync(token);}
+        catch(COMException error){throw new IOException("原本の取得を完了できませんでした。再試行します。",error);}
         finally{if(task.IsCompleted)hydrationTasks.TryRemove(new KeyValuePair<string,Task>(path,task));}
     }
     private static CloudFilesNative.OperationInfo Operation(in CloudFilesNative.CallbackInfo info,int type)=>new()

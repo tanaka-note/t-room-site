@@ -51,6 +51,7 @@
   },
   "ratelimits": [{ "name": "PASSWORD_AUDIT_RATE_LIMITER", "namespace_id": "1101", "simple": { "limit": 30, "period": 60 } }],
   "vars": {
+    "WINDOWS_SYNC_ENABLED": "true",
     "DIARY_BACKUP_MOUNT_FOLDER_ID": "2850",
     "SESSION_TTL_SECONDS": "43200",
     "SUBADMIN_SESSION_TTL_SECONDS": "43200",

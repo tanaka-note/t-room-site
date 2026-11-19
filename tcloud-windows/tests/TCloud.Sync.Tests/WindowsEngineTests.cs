@@ -38,7 +38,7 @@ internal static class WindowsEngineTests
             var pending=new Dictionary<string,(JsonElement Body,List<byte[]> Parts,object? Result)>();int committed=0,deleteCalls=0;long nextFile=18;bool loseCompletion=true,retryPart=true;
             var createdFolders=new Dictionary<string,long>();var publicKey=rsa.ExportParameters(false);
             object Ack(string op,long target)=>new{operationId=op,uploadId=100,fileId=target,state="committed",revision,archiveId=(long?)100,contentVersion};
-            var gate=new object();
+            var gate=new object();bool backlogBlocked=false;int deferredReads=0;
             using var handler=new DeviceClientTests.DeviceHandler(registration){Data=request=>{
                 lock(gate) {
                     var route=request.RequestUri!.AbsoluteUri[WindowsDeviceClient.BaseUrl.Length..];
@@ -56,7 +56,9 @@ internal static class WindowsEngineTests
                     }
                     if(request.Method==HttpMethod.Delete)deleteCalls++;
                     if(route.StartsWith("content/",StringComparison.Ordinal)) {
-                        var id=long.Parse(route[8..]);var bytes=bodies[id];var range=request.Headers.Range!.Ranges.Single();var from=range.From!.Value;var to=range.To!.Value;
+                        var id=long.Parse(route[8..]);
+                        if(id==999&&backlogBlocked){deferredReads++;return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable){Content=new StringContent("synthetic unavailable original")};}
+                        var bytes=bodies[id];var range=request.Headers.Range!.Ranges.Single();var from=range.From!.Value;var to=range.To!.Value;
                         var response=new HttpResponseMessage(HttpStatusCode.PartialContent){Content=new ByteArrayContent(bytes.AsSpan((int)from,(int)(to-from+1)).ToArray())};
                         response.Headers.ETag=new("\"body-"+id+"-"+remote[id].Revision+"\"");response.Content.Headers.ContentRange=new ContentRangeHeaderValue(from,to,bytes.Length);return response;
                     }
@@ -82,6 +84,8 @@ internal static class WindowsEngineTests
                     }
                     if(route.StartsWith("data/files/",StringComparison.Ordinal)&&request.Method==HttpMethod.Patch) {
                         var id=long.Parse(route.Split('/')[2]);using var doc=JsonDocument.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+                        if(remote[id].State!="present")return new HttpResponseMessage(HttpStatusCode.NotFound){Content=JsonContent.Create(new{error="synthetic trashed file"})};
+                        if(remote[id].Revision!=doc.RootElement.GetProperty("windowsExpectedRevision").GetInt64())return new HttpResponseMessage(HttpStatusCode.Conflict){Content=JsonContent.Create(new{error="synthetic changed head"})};
                         Console.WriteLine("ENGINE fixture: patching "+id+" at revision "+revision);
                         var body=doc.RootElement;var dict=remote[id].Value!.Value.Deserialize<Dictionary<string,JsonElement>>()!;
                         dict["encryptedMetadata"]=body.GetProperty("encryptedMetadata").Clone();dict["metadataIv"]=body.GetProperty("metadataIv").Clone();
@@ -118,6 +122,16 @@ internal static class WindowsEngineTests
                 await Wait(()=>File.Exists(path)&&(CloudFilesLocalStorage.PlaceholderState(path)&0x30)==0,"initial retained download");
                 Check(await File.ReadAllTextAsync(path)=="initial original","download retains the original");
                 Console.WriteLine("ENGINE fixture: initial retained");
+                var backlogPath=Path.Combine(directory,"saved","backlog.txt");
+                var backlogMetadata=CloudFileCrypto.EncryptMetadata(fileKey,new("backlog.txt","text/plain","document",1));
+                lock(gate) {
+                    var current=remote[17];remote.Clear();backlogBlocked=true;
+                    bodies[999]=EncryptedChunks.Encrypt(fileKey,initial,0);
+                    remote[999]=FileEntry(999,JsonSerializer.SerializeToElement(new{sizeBytes=initial.Length,chunkSizeBytes=8*1024*1024,chunkCount=1,encryptedSizeBytes=initial.Length+32,
+                        encryptedMetadata=backlogMetadata.Ciphertext,metadataIv=backlogMetadata.Iv,wrappedFileKey=wrap.Ciphertext,fileKeyIv=wrap.Iv}),++revision,new string('b',64));
+                    remote[17]=current;
+                }
+                await Wait(()=>File.Exists(backlogPath)&&Volatile.Read(ref deferredReads)>0,"initial mirror has an unavailable original ahead of existing files");
                 await File.WriteAllTextAsync(path,"saved revision");
                 await Wait(()=>committed==1,"saved edit upload");
                 await Wait(()=>!Directory.EnumerateFiles(Path.Combine(outer,"pc","uploads"),"*.json").Any(),"lost completion reply recovers and acknowledges");
@@ -141,6 +155,10 @@ internal static class WindowsEngineTests
                 await File.WriteAllTextAsync(Path.Combine(childDirectory,"literal~003F.txt"),"child original");
                 await Wait(()=>committed==3,"child folder creation and encrypted file upload");
                 await Wait(()=>!Directory.EnumerateFiles(Path.Combine(outer,"pc","uploads"),"*.json").Any(),"child original baseline");
+                Check((CloudFilesLocalStorage.PlaceholderState(backlogPath)&0x30)!=0,"overwrites, names and new uploads never wait for the initial mirror to finish");
+                lock(gate){backlogBlocked=false;}
+                await Wait(()=>(CloudFilesLocalStorage.PlaceholderState(backlogPath)&0x30)==0,"background originals resume after local uploads");
+                Check(await File.ReadAllTextAsync(backlogPath)=="initial original","deferred original bytes remain intact");
                 Check(remote[19].Value!.Value.GetProperty("folderId").GetInt64()==8,"child files use the new inherited folder key");
                 var renamedChild=Path.Combine(directory,"saved","renamed-child");Directory.Move(childDirectory,renamedChild);
                 await Wait(()=>remoteFolders[8].Value!.Value.GetProperty("name").GetString()=="renamed-child","folder rename uses the existing display name");
