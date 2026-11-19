@@ -46,6 +46,8 @@ public sealed class CloudContentSource : IEncryptedRangeSource
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(5));
         var token = timeout.Token;
+        if(device is not null)await device.ContentReads.WaitAsync(token);
+        try {
         using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
         void Configure(HttpRequestMessage message)
         {
@@ -72,5 +74,6 @@ public sealed class CloudContentSource : IEncryptedRangeSource
         await body.ReadExactlyAsync(ciphertext, token);
         if (await body.ReadAsync(new byte[1], token) != 0) throw new IOException("暗号化ファイルの応答が指定範囲を超えています。");
         return new(ciphertext, entityTag!, encryptedLength);
+        }finally{device?.ContentReads.Release();}
     }
 }

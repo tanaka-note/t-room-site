@@ -15,7 +15,7 @@ public static class OriginalStager
         ReadOnlyMemory<byte> fileKey,IEncryptedRangeSource source,IProgress<long>? progress=null,CancellationToken token=default,bool retain=false)
     {
         layout.Validate();
-        await using var reader=new EncryptedFileReader(layout,fileKey.Span,source);
+        await using var reader=new EncryptedFileReader(layout,fileKey.Span,source,prefetch:true);
         return await Stage(ownedStagingDirectory,layout.SizeBytes,async(offset,buffer,ct)=>await reader.ReadAsync(offset,buffer,ct),progress,token,retain);
     }
 

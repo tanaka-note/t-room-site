@@ -18,6 +18,7 @@ public sealed class WindowsDeviceClient : IDisposable
     private readonly WindowsDeviceRegistration registration;
     private readonly SemaphoreSlim renewal = new(1,1);
     private readonly CancellationTokenSource lifetime = new();
+    internal SemaphoreSlim ContentReads {get;}=new(2,2);
     private string? accessToken;
     private long expiresAt;
     private bool disposed;
@@ -44,6 +45,7 @@ public sealed class WindowsDeviceClient : IDisposable
         {
             await EnsureAccessAsync(attempt!=0, token);
             using var request = new HttpRequestMessage(method, BaseUrl + route) { Content=content?.Invoke() };
+            if(route.StartsWith("content/",StringComparison.Ordinal)){request.Version=HttpVersion.Version20;request.VersionPolicy=HttpVersionPolicy.RequestVersionOrLower;}
             configure?.Invoke(request);
             ValidateDestination(request.RequestUri, route.Split('/')[0]+(route.Contains('/')?"/":""));
             request.Headers.Authorization=new AuthenticationHeaderValue("Bearer",accessToken);
