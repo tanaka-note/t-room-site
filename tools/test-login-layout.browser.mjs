@@ -55,6 +55,10 @@ try {
       assert.equal(await card.evaluate(el => el.querySelector('h1').nextElementSibling === el.querySelector('.tlain-login-guidance')), true, `${app.id}: service name must precede guidance without an introduction`);
       assert.equal(await guidance.evaluate(el => Boolean(el.compareDocumentPosition(el.closest('.tlain-login-card').querySelector('.passkey-login-button')) & Node.DOCUMENT_POSITION_FOLLOWING)), true, `${app.id}: guidance must precede login button`);
       assert.deepEqual(await card.locator('p:not(.tlain-login-guidance):not(.eyebrow):not(.tlain-login-brand):not(.step-label):not([role="status"]):not([role="alert"])').allTextContents().then(texts => texts.map(text => text.trim()).filter(Boolean)), [], `${app.id}: no service introduction in login card`);
+      const securityLinks = await card.locator('a[href]').evaluateAll(links => links
+        .filter(link => /^\/security(?:\/|$)/.test(new URL(link.href).pathname))
+        .map(link => link.textContent.trim()));
+      assert.deepEqual(securityLinks, [], `${app.id}: no Security Center link on the regular login card`);
       const metrics = await card.evaluate(el => {
         const rect = el.getBoundingClientRect(), style = getComputedStyle(el);
         const b = el.querySelector('.passkey-login-button'), br = b.getBoundingClientRect(), bs = getComputedStyle(b);
