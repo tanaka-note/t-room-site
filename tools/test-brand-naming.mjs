@@ -157,6 +157,7 @@ const allowed = {
   "diary-worker/e2ee/tcloud-recovery.mjs": /context='T-ROOM Cloud Storage passkey admin private key v1'/,
   "diary-worker/public/crypto/e2ee/tcloud-recovery.mjs": /context='T-ROOM Cloud Storage passkey admin private key v1'/,
   "diary-worker/tests/e2ee/passkey-trust.test.mjs": /context='T-ROOM Cloud Storage admin private key v1'/,
+  "diary-worker/tests/e2ee/online-photo-migration.browser.mjs": /context='T-ROOM Cloud Storage passkey admin private key v1'/,
   "diary-worker/tests/e2ee/real-passkey.browser.mjs": /additionalData:new TextEncoder\(\)\.encode\('T-ROOM Cloud Storage admin private key v1'\)/,
   "diary-worker/tests/e2ee/recovery.browser.mjs": /additionalData:new TextEncoder\(\)\.encode\('T-ROOM Cloud Storage admin private key v1'\)/,
   "cloud-worker/public/crypto-vault.js": /const \w+_CONTEXT = "T-ROOM Cloud Storage [^"]+";/,
