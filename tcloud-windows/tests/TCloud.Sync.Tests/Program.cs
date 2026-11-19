@@ -33,7 +33,7 @@ if(args.Contains("--engine-probe"))
 }
 if(args.Contains("--root-probe"))
 {
-    try {await RootRegistrationTests.Persistence();Console.WriteLine("PASS persisted root ownership and registration recovery");return 0;}
+    try {await RootRegistrationTests.Persistence();await RootRegistrationTests.FreshVolume();Console.WriteLine("PASS persisted root ownership, fresh volume bootstrap and registration recovery");return 0;}
     catch(Exception error){Console.Error.WriteLine(error);return 1;}
 }
 if(args.Contains("--replacement-probe"))
@@ -120,6 +120,7 @@ if (args.Contains("--native"))
     tests.Add(("PC-protected registration resumes and renews without a Web cookie or another passkey", DeviceClientTests.PersistentDevice));
     tests.Add(("local upload snapshots reject saves made during the copy and isolate later edits", LocalSnapshotTests.Capture));
     tests.Add(("persistent sync roots resume only their owner and unlink without deleting originals", RootRegistrationTests.Persistence));
+    tests.Add(("fresh NTFS volume bootstrap preserves existing root ownership and populated folders",RootRegistrationTests.FreshVolume));
     tests.Add(("operational CFAPI transport keeps verified originals and permits only in-root rename", ProviderTests.Transfer));
     tests.Add(("device renewal, catalog, vault decryption, disk staging and CFAPI retain one verified original", OriginalTransferTests.Pipeline));
     tests.Add(("resident engine uploads, renames, resumes interrupted commits and follows verified online trash",WindowsEngineTests.RoundTrip));

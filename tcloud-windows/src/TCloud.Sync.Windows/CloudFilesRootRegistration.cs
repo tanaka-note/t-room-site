@@ -11,6 +11,7 @@ namespace TCloud.Sync.Windows;
 /// <summary>Persistent registration. Stopping the application never unregisters or removes originals.</summary>
 public sealed class CloudFilesRootRegistration
 {
+    internal delegate int RootInfoQuery(string path,int infoClass,nint buffer,uint length,out uint returned);
     private const string ProviderName="T-Cloud";
     private readonly byte[] identity;
     private readonly VolumeBinding volume;
@@ -21,6 +22,9 @@ public sealed class CloudFilesRootRegistration
     {Root=root;this.volume=volume;this.identity=identity;}
 
     public static CloudFilesRootRegistration Attach(WindowsDeviceRegistration registration,IEnumerable<string> otherSyncRoots,bool initialize=false)
+        =>Attach(registration,otherSyncRoots,initialize,CloudFilesNative.CfGetSyncRootInfoByPath);
+
+    internal static CloudFilesRootRegistration Attach(WindowsDeviceRegistration registration,IEnumerable<string> otherSyncRoots,bool initialize,RootInfoQuery initialQuery)
     {
         var root=ResolveDestination(registration);
         var actual=VolumeInspector.ValidateDestination(root,otherSyncRoots);
@@ -32,7 +36,13 @@ public sealed class CloudFilesRootRegistration
         if(registration.RootFileId is { } expected && (!Directory.Exists(root)||DirectoryFileId(root)!=expected))
             throw new IOException("保存先フォルダが移動または置換されています。自動で作り直しません。");
         Directory.CreateDirectory(root);
-        var existing=ReadInfo(root);
+        RootInfo? existing;
+        try{existing=ReadInfo(root,initialQuery);}
+        catch(COMException error)when(error.HResult==unchecked((int)0x80070001)&&registration.RootFileId is null&&!Directory.EnumerateFileSystemEntries(root).Any()) {
+            // A fresh NTFS volume can reject the query before its first registration.
+            // Register WITHOUT UPDATE; the platform still refuses overlapping roots.
+            existing=null;
+        }
         if(existing is not null)
         {
             result.ValidateOwner(existing);
@@ -92,11 +102,14 @@ public sealed class CloudFilesRootRegistration
     }
     private sealed record RootInfo(long FileId,string Provider,ushort HydrationPrimary,ushort HydrationModifier,ushort PopulationPrimary,byte[] Identity);
     private static RootInfo? ReadInfo(string root)
+        =>ReadInfo(root,CloudFilesNative.CfGetSyncRootInfoByPath);
+
+    private static RootInfo? ReadInfo(string root,RootInfoQuery query)
     {
         const int capacity=4096;var memory=Marshal.AllocHGlobal(capacity);
         try
         {
-            var result=CloudFilesNative.CfGetSyncRootInfoByPath(root,1 /* STANDARD */,memory,capacity,out var returned);
+            var result=query(root,1 /* STANDARD */,memory,capacity,out var returned);
             if(result is unchecked((int)0x80070186) or unchecked((int)0x80070195) or unchecked((int)0x80070178))return null;
             CloudFilesNative.Check(result);
             // Win64 STANDARD: 8-byte file ID, policies/status (20), two WCHAR[256], length, identity.
