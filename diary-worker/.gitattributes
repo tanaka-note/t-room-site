@@ -1,0 +1,2 @@
+# Preserve the bytes used by the Diary build hash on every checkout.
+public/vendor/sqlite-license.txt text eol=lf
