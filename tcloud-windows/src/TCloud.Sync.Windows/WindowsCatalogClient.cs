@@ -9,7 +9,13 @@ public sealed record WindowsCatalogStart(string Epoch,long Cursor);
 public sealed record WindowsCatalogPage(string Epoch,long Until,long Next,bool Complete,WindowsCatalogEntry[] Items);
 public sealed class WindowsCatalogResetException():IOException("オンラインの差分記録が切り替わりました。全件を再確認します。");
 
-public sealed class WindowsCatalogClient(WindowsDeviceClient device)
+public interface IWindowsCatalogSource
+{
+    Task<WindowsCatalogStart> StartAsync(CancellationToken token=default);
+    Task<WindowsCatalogPage> PageAsync(WindowsCatalogStart start,long after,bool snapshot,CancellationToken token=default);
+}
+
+public sealed class WindowsCatalogClient(WindowsDeviceClient device):IWindowsCatalogSource
 {
     private static readonly JsonSerializerOptions Json=new(JsonSerializerDefaults.Web);
     public async Task<WindowsCatalogStart> StartAsync(CancellationToken token=default)

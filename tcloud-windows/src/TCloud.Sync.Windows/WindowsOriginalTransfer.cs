@@ -18,6 +18,10 @@ public sealed class WindowsOriginalTransfer
     private readonly Func<OriginalDescriptor,string,CancellationToken,Task> checkpoint;
     private readonly ConcurrentDictionary<string,(WindowsCatalogEntry Entry,OriginalDescriptor Descriptor)> entries=new(StringComparer.Ordinal);
     public WindowsOriginalTransfer(WindowsDeviceClient device,CloudFilesRootRegistration root,CloudOriginalResolver resolver,
+        WindowsDeviceRegistration registration,string staging,LocalSyncCatalog catalog)
+        :this(device,root,resolver,registration,staging,async(descriptor,hash,token)=>
+            {await catalog.RecordStagedOriginalAsync(descriptor,hash,token);}) { }
+    public WindowsOriginalTransfer(WindowsDeviceClient device,CloudFilesRootRegistration root,CloudOriginalResolver resolver,
         WindowsDeviceRegistration registration,string staging,Func<OriginalDescriptor,string,CancellationToken,Task> checkpoint)
     {
         this.device=device;this.root=root;this.resolver=resolver;this.registration=registration;this.staging=Path.GetFullPath(staging);this.checkpoint=checkpoint;

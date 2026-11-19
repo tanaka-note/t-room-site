@@ -47,16 +47,11 @@ internal static class OriginalTransferTests
             using(var transport=new HttpClient(handler))
             using(var device=new WindowsDeviceClient(transport,registration))
             {
-                var api=new WindowsCatalogClient(device);var start=await api.StartAsync();var page=await api.PageAsync(start,0,true);
-                using var resolver=new CloudOriginalResolver(rsa,page.Items,await device.ReadKeysAsync());
                 var catalog=new LocalSyncCatalog(Path.Combine(outer,"pc-catalog.json"),registration);
-                var state=LocalSyncCatalog.ApplyPage(catalog.Empty(),start,page);
-                var transfer=new WindowsOriginalTransfer(device,root,resolver,registration,Path.Combine(outer,"staging"),async(descriptor,hash,token)=>
-                {
-                    state=state with {Originals=[new(descriptor.Id,descriptor.Revision,descriptor.RelativePath,descriptor.Identity,descriptor.SizeBytes,hash,false)]};
-                    await catalog.SaveAsync(state,token);
-                });
-                var descriptor=transfer.Register(page.Items.Single(i=>i.Kind=="file"));
+                var state=await new WindowsCatalogSynchronizer(new WindowsCatalogClient(device),catalog).RefreshAsync();
+                using var resolver=new CloudOriginalResolver(rsa,state.Remote,await device.ReadKeysAsync());
+                var transfer=new WindowsOriginalTransfer(device,root,resolver,registration,Path.Combine(outer,"staging"),catalog);
+                var descriptor=transfer.Register(state.Remote.Single(i=>i.Kind=="file"));
                 using(var provider=new CloudFilesProvider(root,transfer.OpenAsync))
                 {
                     provider.Add(descriptor.RelativePath,descriptor.SizeBytes,descriptor.Identity);
@@ -65,7 +60,7 @@ internal static class OriginalTransferTests
                     Check(handler.Proofs==2,"an expired access grant renews without another passkey during the real CFAPI download");
                     Check(provider.Errors.IsEmpty,"the integrated provider completed without callback errors");
                     Check((await catalog.LoadAsync()).Originals.Single().Sha256==Convert.ToHexString(SHA256.HashData(plain)),"the baseline is checkpointed before foreground access");
-                    state=state with {Originals=[state.Originals.Single() with {Complete=true}]};await catalog.SaveAsync(state);
+                    await catalog.MarkOriginalRetainedAsync(descriptor);
                 }
             }
             Check((await HydrationProbe.ReadAsync(Path.Combine(directory,"saved","fixture.bin"),plain)).Succeeded,
