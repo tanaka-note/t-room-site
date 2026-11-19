@@ -32,7 +32,7 @@ test('album month filter retains selection and the total/monthly photo counts', 
 
 function albumFixture({ total = 5001, pageMs = 0, overReturn = 0, emptyPage = false } = {}) {
   const state = { photos: [], photoOffset: 0, photoHasMore: false, photoLoading: false, photoRequestId: 0 };
-  const node = () => ({ children: [], dataset: {}, setAttribute() {},
+  const node = () => ({ children: [], dataset: {}, setAttribute() {}, addEventListener() {},
     append(...children) { this.children.push(...children); },
     replaceChildren(...children) { this.children = children; } });
   const elements = { cameraRollMore: {}, cameraRollGrid: node(), cameraRollStatus: {} };
@@ -50,7 +50,8 @@ function albumFixture({ total = 5001, pageMs = 0, overReturn = 0, emptyPage = fa
     return { photos, hasMore: emptyPage || offset + photos.length < total };
   };
   const constants = [...source.matchAll(/  const CAMERA_ROLL_\w+ = \d+;/g)].map(match => match[0]).join('\n');
-  const functions = ['cancelCameraRollLoad', 'loadPhotos', 'renderCameraRoll', 'renderCameraRollStatus'].map(body).join('\n');
+  const functions = ['cancelCameraRollLoad', 'loadPhotos', 'renderCameraRoll', 'renderCameraRollStatus',
+    'createPhotoPlaceholder', 'watchPhotoLoad'].map(body).join('\n');
   const loaded = new Function('state', 'elements', 'api', 'performance', 'document', 'window', `
     ${constants}
     const photoImages = { bind() {} };
