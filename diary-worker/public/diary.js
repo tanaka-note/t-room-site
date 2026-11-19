@@ -1929,14 +1929,62 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     return span;
   }
 
+  function watchPhotoLoad(image, placeholder, showError = true) {
+    image.addEventListener("load", () => {
+      image.dataset.photoState = "ready";
+      placeholder.textContent = "写真を読み込み中…";
+    });
+    if (showError) image.addEventListener("error", () => {
+      delete image.dataset.photoState;
+      placeholder.textContent = "写真を表示できません";
+    });
+  }
+
+  function createPhotoPlaceholder() {
+    const placeholder = document.createElement("span");
+    placeholder.className = "diary-photo-placeholder";
+    placeholder.textContent = "写真を読み込み中…";
+    return placeholder;
+  }
+
   function createEntryPhoto(photo, photos) {
+    const frame = document.createElement("div");
+    frame.className = "entry-photo-frame";
+    const width = Number(photo.width);
+    const height = Number(photo.height);
+    if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      frame.style.setProperty("--entry-photo-aspect", `${width} / ${height}`);
+    }
+
     const image = document.createElement("img");
     image.className = "entry-photo";
-    photoImages.bind(image, photo, "display");
     image.alt = photo.fileName || "日記の写真";
     image.loading = "lazy";
     image.addEventListener("click", () => openPhotoViewer(photos, photos.findIndex((candidate) => candidate.id === photo.id)));
-    return image;
+
+    const root = elements.entryDialog;
+    const placeholder = createPhotoPlaceholder();
+    const progressive = Boolean(photo.crypto && photo.thumbnailUrl);
+    watchPhotoLoad(image, placeholder, !progressive);
+    frame.append(image);
+    if (progressive) {
+      const display = document.createElement("img");
+      display.className = "entry-photo-display";
+      display.alt = "";
+      display.setAttribute("aria-hidden", "true");
+      watchPhotoLoad(display, placeholder);
+      const requestDisplay = () => {
+        image.removeEventListener("load", requestDisplay);
+        image.removeEventListener("error", requestDisplay);
+        photoImages.bind(display, photo, "display", { root, visibleOnly: true });
+      };
+      image.addEventListener("load", requestDisplay);
+      image.addEventListener("error", requestDisplay);
+      frame.append(display);
+    }
+    frame.append(placeholder);
+    photoImages.bind(image, photo, progressive ? "thumbnail" : "display", { root });
+    return frame;
   }
 
   async function handlePhotoSelection() {
@@ -3240,10 +3288,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         button.dataset.photoIndex = String(index);
         button.dataset.photoId = photo.id;
         button.setAttribute("aria-label", `${formatDate(photo.entryDate)}「${photo.entryTitle || "無題"}」の写真を開く`);
+        const frame = document.createElement("span");
+        frame.className = "camera-roll-thumbnail";
         const image = document.createElement("img");
-        photoImages.bind(image, photo, "thumbnail", { root: elements.cameraRollDialog });
         image.alt = photo.fileName;
         image.loading = "lazy";
+        const placeholder = createPhotoPlaceholder();
+        watchPhotoLoad(image, placeholder);
+        frame.append(image, placeholder);
+        photoImages.bind(image, photo, "thumbnail", { root: elements.cameraRollDialog });
         const caption = document.createElement("span");
         caption.className = "camera-roll-caption";
         const date = document.createElement("time");
@@ -3254,7 +3307,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         title.className = "camera-roll-title";
         title.textContent = photo.entryTitle || "無題";
         caption.append(date, title);
-        button.append(image, caption);
+        button.append(frame, caption);
         return button;
       });
       elements.cameraRollGrid.append(...cards);

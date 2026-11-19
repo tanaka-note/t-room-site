@@ -99,9 +99,51 @@ test('one bootstrap sync, complete album data and unchanged ciphertext cache reu
     x.reader.transport.snapshot=async(...args)=>{snapshots++;return native(...args);};
     const api=createEncryptedDiaryApi(x.reader,{session:{authenticated:true},nativeApi:async()=>({households:[]})});
     const result=await api('/bootstrap?limit=5');assert.equal(result.entries.entries.length,5);assert.equal(snapshots,1);assert.equal(writes,1);
-    const album=await api('/photos');assert.equal(album.photos.length,1);assert.equal(album.photos[0].fileName,'synthetic-private-photo.jpg');assert.equal([...x.reader.records.values()].filter(r=>r.entry).length,48);
+    const album=await api('/photos');assert.equal(album.photos.length,1);assert.equal(album.photos[0].fileName,'synthetic-private-photo.jpg');
     await x.reader.startBackground();x.reader.lock();await x.reader.unlock(new Uint8Array(prepared.secrets.ownerA.prf));await x.reader.sync();assert.equal(writes,1,'unchanged cache is not rewritten');
   }finally{x.close();}
+});
+test('album hydrates the requested days and retains the full-list order across pages', async () => {
+  const x = await setup(8);
+  try {
+    const photo = (fileName) => {
+      const id = crypto.randomUUID();
+      x.f.registry.photos[id] = {household:'A', accountId:'ownerA'};
+      return {id, fileName, contentType:'image/jpeg', originalSize:1234};
+    };
+    const [first, second, later, latest] = ['first', 'second', 'later', 'latest'].map(photo);
+    for (const [id, date, hour, photos] of [
+      [2, '2026-01-05', '09', [first, second]],
+      [3, '2026-01-05', '20', [later]],
+      [4, '2026-02-01', '12', [latest]]
+    ]) {
+      await x.writer.commit(entry({entryDate:date, lastPublishedAt:date+'T'+hour+':00:00Z',
+        photos, content:photos.map(({id}) => `[[写真:${id}]]`).join('\n')}),
+        {id:String(id), current:x.writer.records.get(String(id)).row}, {refresh:false});
+    }
+    const api = createEncryptedDiaryApi(x.reader, {session:{authenticated:true}});
+    const ids = result => result.photos.map(photo => photo.id);
+    const preparedIds = () => [...x.reader.records.values()].filter(record => record.entry).map(record => record.row.id);
+    const firstPage = await api('/photos?limit=1');
+    assert.deepEqual(ids(firstPage), [latest.id]);
+    assert.equal(firstPage.hasMore, true);
+    assert.deepEqual(preparedIds(), ['4']);
+
+    const tiePage = await api('/photos?limit=2&offset=2');
+    assert.deepEqual(ids(tiePage), [second.id, first.id]);
+    assert.equal(tiePage.hasMore, true);
+    assert.deepEqual(preparedIds().sort(), ['2','3','4']);
+    const monthPage = await api('/photos?month=2026-01&order=oldest&limit=3&offset=1');
+    assert.deepEqual(ids(monthPage), [first.id, second.id, later.id]);
+    assert.equal(monthPage.hasMore, false);
+
+    const full = await api('/photos');
+    assert.deepEqual(ids(full).slice(0, 4), [latest.id, later.id, second.id, first.id]);
+    assert.deepEqual(ids(await api('/photos?entryQuery=OLDEST_UNIQUE_CANARY')), [full.photos.at(-1).id]);
+    assert.deepEqual(ids(await api('/photos/save-list?dateFrom=2026-01-05&dateTo=2026-01-05')), [first.id, second.id, later.id]);
+  } finally {
+    x.close();
+  }
 });
 test('a valid deletion delta during background decryption does not lock the current session',async()=>{
   const x=await setup(3),decrypt=crypto.subtle.decrypt;let release,started;
