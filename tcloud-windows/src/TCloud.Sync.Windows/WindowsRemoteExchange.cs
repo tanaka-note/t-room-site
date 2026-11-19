@@ -29,8 +29,8 @@ internal sealed class WindowsRemoteExchange(CloudFilesRootRegistration root,Clou
         var staged=PathIn(intent.StagedName);var backup=PathIn(intent.BackupName);
         // The staging copy was completely authenticated and flushed before the intent.
         if(File.Exists(staged)) {
-            await using(var verify=await LocalOriginalSnapshot.CaptureAsync(staged,directory,token:token))
-                if(verify.Sha256!=intent.Baseline.Sha256)throw new InvalidDataException("取得済み原本の検証に失敗しました。");
+            var verify=await LocalOriginalSnapshot.VerifyAsync(staged,token:token);
+            if(verify.Sha256!=intent.Baseline.Sha256)throw new InvalidDataException("取得済み原本の検証に失敗しました。");
             root.VerifyPresent();Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             if(File.Exists(target)) {
                 if((CloudFilesLocalStorage.PlaceholderState(target)&0x30)!=0) {
@@ -44,9 +44,8 @@ internal sealed class WindowsRemoteExchange(CloudFilesRootRegistration root,Clou
         if((CloudFilesLocalStorage.PlaceholderState(target)&1)==0)CloudFilesLocalStorage.ConvertSavedBody(target,intent.Baseline.PlaceholderIdentity);
         // Capture a new identity stamp only while a stable copy still matches the uploaded/downloaded bytes.
         WindowsFileState? stamp=WindowsFileState.Read(target);
-        await using(var verify=await LocalOriginalSnapshot.CaptureAsync(target,directory,token:token)) {
-            if(verify.Sha256!=intent.Baseline.Sha256||verify.SourceFileId!=stamp.Id||verify.SourceUsn!=stamp.Usn)stamp=null;
-        }
+        var verified=await LocalOriginalSnapshot.VerifyAsync(target,token:token);
+        if(verified.Sha256!=intent.Baseline.Sha256||verified.SourceFileId!=stamp.Id||verified.SourceUsn!=stamp.Usn)stamp=null;
         await catalog.UpdateAsync(value=>value with {Originals=[..value.Originals.Where(e=>e.Id!=intent.Baseline.Id),intent.Baseline with {Complete=true,LocalState=stamp,LocalFileId=WindowsFileState.Read(target).Id}]},token);
         if(File.Exists(backup))_=await WindowsRecovery.DeleteIfUnchangedAsync(backup,intent.PreviousSha256,root.VerifyPresent,token);
         if(File.Exists(backup))await WindowsRecovery.RetainAsync(directory,backup,intent.Baseline.RelativePath,"原本の更新直前に行われた編集",token);

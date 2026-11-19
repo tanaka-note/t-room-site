@@ -7,6 +7,36 @@ using TCloud.Sync.Windows;
 
 internal static class DeviceClientTests
 {
+    public static async Task ContentBound()
+    {
+        var key=Convert.ToHexString(RandomNumberGenerator.GetBytes(32));WindowsDeviceKey.Create(key);
+        try {
+            var registration=new WindowsDeviceRegistration(1,Guid.NewGuid().ToString("N"),new string('a',64),key,new string('b',64),Path.GetTempPath(),new("fixture",1,"saved"));
+            int active=0,peak=0;var entered=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);var release=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var handler=new DeviceHandler(registration){Data=request=>{
+                if(!request.RequestUri!.AbsolutePath.Contains("/content/",StringComparison.Ordinal))return null;
+                Check(request.Version==HttpVersion.Version20&&request.VersionPolicy==HttpVersionPolicy.RequestVersionOrLower,"content prefers HTTP/2 with compatible fallback");
+                var response=new HttpResponseMessage(HttpStatusCode.PartialContent){Content=new StreamContent(new GatedBody(release.Task,()=>{
+                    var count=Interlocked.Increment(ref active);int old;do{old=peak;if(old>=count)break;}while(Interlocked.CompareExchange(ref peak,count,old)!=old);
+                    if(count>=2)entered.TrySetResult();
+                },()=>Interlocked.Decrement(ref active)))};
+                response.Content.Headers.ContentRange=new System.Net.Http.Headers.ContentRangeHeaderValue(0,7,128);response.Content.Headers.ContentLength=8;
+                response.Headers.ETag=new("\"fixture\"");return response;
+            }};
+            using var transport=new HttpClient(handler);using var client=new WindowsDeviceClient(transport,registration);
+            using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var reads=Task.WhenAll(Enumerable.Range(0,4).Select(async i=>await new CloudContentSource(client,17+i,128,91).ReadAsync(0,8,"\"fixture\"",deadline.Token)));
+            await entered.Task.WaitAsync(deadline.Token);await Task.Delay(50,deadline.Token);
+            Check(peak==2,"the shared limit covers response body reads, across multiple originals");release.TrySetResult();await reads;
+            Check(active==0&&handler.Proofs==1,"all bodies settle using the same device proof");
+        }finally{WindowsDeviceKey.Delete(key);}
+    }
+    private sealed class GatedBody(Task release,Action entered,Action exited):MemoryStream(new byte[8])
+    {
+        private bool started,closed;
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer,CancellationToken token=default){if(!started){started=true;entered();await release.WaitAsync(token);}return await base.ReadAsync(buffer,token);}
+        protected override void Dispose(bool disposing){if(!closed){closed=true;if(started)exited();}base.Dispose(disposing);}
+    }
     public static async Task PersistentDevice()
     {
         var directory=Path.Combine(Path.GetTempPath(),"tcloud-device-test-"+Guid.NewGuid().ToString("N"));

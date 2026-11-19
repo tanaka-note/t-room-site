@@ -24,6 +24,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
     private readonly WindowsFileUploader uploader;
     private readonly WindowsRemoteExchange exchange;
     private readonly CloudFilesProvider provider;
+    private readonly WindowsOriginalPrefetch prefetch;
     private readonly IProgress<WindowsTransferStatus>? progress;
     private readonly Action<string>? protectFolder;
     private readonly ConcurrentDictionary<string,(WindowsCatalogEntry Entry,WindowsCatalogEntry[] Catalog,string Path)> downloads=new();
@@ -54,6 +55,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
         if(!VolumeInspector.Inspect(staging).Matches(registration.Volume))throw new IOException("同期用の保全領域が登録したHDDと一致しません。");
         metadataPath=Path.Combine(pcDirectory,"metadata.json");
         uploads=new(Path.Combine(pcDirectory,"uploads"),staging,registration);uploader=new(device,registration,root,uploads,staging);
+        prefetch=new(DownloadOriginalAsync,lifetime.Token);
         provider=new(root,OpenOriginalAsync);exchange=new(root,provider,catalog,registration,staging,Path.Combine(pcDirectory,"exchange.json"));
         watcher=new(root.Root){IncludeSubdirectories=true,NotifyFilter=NotifyFilters.FileName|NotifyFilters.DirectoryName|NotifyFilters.LastWrite|NotifyFilters.Size};
         watcher.Changed+=LocalChanged;watcher.Created+=LocalChanged;watcher.Deleted+=LocalChanged;watcher.Renamed+=LocalChanged;
@@ -84,6 +86,8 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
         "TCloud.Windows.Original.v1\n"+registration.ScopeHash+"\n"+entry.Id+"\n"+entry.Revision)));
     private static string? Version(WindowsCatalogEntry entry)=>entry.Value is {} v&&v.TryGetProperty("contentVersion",out var p)?p.GetString():null;
     private async Task<Stream> OpenOriginalAsync(string identity,IProgress<long> progress,CancellationToken token)
+        =>await (prefetch.Claim(identity,progress,token)??DownloadOriginalAsync(identity,progress,token));
+    private async Task<Stream> DownloadOriginalAsync(string identity,IProgress<long> progress,CancellationToken token)
     {
         if(!downloads.TryGetValue(identity,out var item))throw new IOException("原本の取得情報を確認しています。同期後にもう一度開いてください。");
         using var resolver=new CloudOriginalResolver(key,item.Catalog,keys);
@@ -113,10 +117,11 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                     failures=Math.Min(failures+1,5);
                     progress?.Report(new(error is IOException?error.Message:"接続・保存処理の完了を待って再試行します。",0,0));
                 }
-                finally{lock(passGate)currentPass=null;}
+                finally{lock(passGate)currentPass=null;await prefetch.ClearAsync();}
                 await wake.WaitAsync(TimeSpan.FromSeconds(Math.Min(60,2*Math.Pow(2,failures))),token);
             }
         }catch(OperationCanceledException)when(token.IsCancellationRequested) { }
+        finally{await prefetch.ClearAsync();}
     }
     private void LocalChanged(object sender,FileSystemEventArgs args)
     {
@@ -157,6 +162,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
             if(!cached){remaining=checked(remaining+size);largest=Math.Max(largest,size);}
         }
         var needed=checked(remaining+largest+64L*1024*1024);var available=VolumeInspector.Inspect(root.Root).AvailableBytes;
+        var allowPrefetch=available>=checked(needed+2*largest);
         if(available<needed)throw new IOException($"HDDの空き容量が不足しています。必要: {Math.Ceiling(needed/1073741824d):N0} GB、空き: {Math.Floor(available/1073741824d):N0} GB。保存済みの原本は保持しています。");
         var tree=ScanTree();
         ignoreLocalEvents=true;
@@ -227,7 +233,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                 var verified=verifiedLocal.TryGetValue(stamp.Id,out var proof)&&proof.State==stamp&&proof.Path==full&&proof.Change==change&&proof.Sha256==old.Sha256;
                 var changed=!stamp.SameSavedBytes(old.LocalState)&&!verified;bool dirty=false;
                 if(changed) {
-                    await using var check=await LocalOriginalSnapshot.CaptureAsync(full,staging,token:token);
+                    var check=await LocalOriginalSnapshot.VerifyAsync(full,token:token);
                     dirty=check.Sha256!=old.Sha256;
                     if(!dirty&&stamp.Id==check.SourceFileId&&stamp.Usn==check.SourceUsn) {
                         old=old with {Complete=true,LocalState=stamp,LocalFileId=stamp.Id};
@@ -317,7 +323,8 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
         if(waiting.Any(e=>e.State.Size>0&&folders.ContainsKey(Path.GetDirectoryName(e.Path)??""))) {
             progress?.Report(new("保存の完了を待ってアップロードします。",done,total));return;
         }
-        foreach(var neededBody in bodiesNeeded) {
+        for(int bodyIndex=0;bodyIndex<bodiesNeeded.Count;bodyIndex++) {
+            var neededBody=bodiesNeeded[bodyIndex];
             progress?.Report(new("原本をHDDへ保存しています。",done,total));
             var (entry,path,hydrate)=neededBody;token.ThrowIfCancellationRequested();root.VerifyPresent();
             var full=LocalPaths.ResolveUnderRoot(root.Root,path);
@@ -328,10 +335,16 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                 lock(passGate)activeHydrationPath=full;
                 try {
                     await provider.HydrateAsync(path,token);
+                    token.ThrowIfCancellationRequested();
+                    if(allowPrefetch&&bodyIndex+1<bodiesNeeded.Count&&bodiesNeeded[bodyIndex+1] is var following&&following.Hydrate) {
+                        var identity=Identity(following.Entry);
+                        downloads[identity]=(following.Entry,snapshot.Remote,following.Path);
+                        prefetch.Start(identity);
+                    }
                     BeforeHydrationValidation?.Invoke(full);
                     var retained=(await catalog.LoadAsync(token)).Originals.Single(e=>e.Id==entry.Id);
                     var stamp=WindowsFileState.Read(full);var change=localChanges.GetValueOrDefault(full);
-                    await using var check=await LocalOriginalSnapshot.CaptureAsync(full,staging,token:token);
+                    var check=await LocalOriginalSnapshot.VerifyAsync(full,token:token);
                     // Never mistake a save made as soon as the file opens for
                     // provider traffic. Compare actual bytes and a stable stamp.
                     if(check.Sha256!=retained.Sha256||stamp.Id!=check.SourceFileId||stamp.Usn!=check.SourceUsn

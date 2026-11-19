@@ -239,11 +239,12 @@ internal static class WindowsEngineTests
                     wrappedFileKey=wrap.Ciphertext,fileKeyIv=wrap.Iv,contentVersion=Convert.ToHexString(SHA256.HashData(body)).ToLowerInvariant()}),null,null));
             }
             var keys=new{scopeHash=registration.ScopeHash,folderKeys=new[]{new{rootFolderId=7,wrappedKey=Encode(rsa.Encrypt(folderKey,RSAEncryptionPadding.OaepSHA256))}}};
-            int contentReads=0;
+            int contentReads=0;var requestedIds=new System.Collections.Concurrent.ConcurrentDictionary<long,byte>();
             using var handler=new DeviceClientTests.DeviceHandler(registration){Data=request=>{
                 var route=request.RequestUri!.AbsoluteUri[WindowsDeviceClient.BaseUrl.Length..];if(route=="keys")return Json(keys);
                 if(!route.StartsWith("content/",StringComparison.Ordinal))throw new InvalidOperationException("Unexpected bulk fixture mutation");
                 Interlocked.Increment(ref contentReads);
+                requestedIds.TryAdd(long.Parse(route[8..]),0);
                 var bytes=bodies[long.Parse(route[8..])];var range=request.Headers.Range!.Ranges.Single();var from=range.From!.Value;var to=range.To!.Value;
                 var response=new HttpResponseMessage(HttpStatusCode.PartialContent){Content=new ByteArrayContent(bytes.AsSpan((int)from,(int)(to-from+1)).ToArray())};
                 response.Headers.ETag=new("\"bulk-"+route[8..]+"\"");response.Content.Headers.ContentRange=new ContentRangeHeaderValue(from,to,bytes.Length);return response;
@@ -252,6 +253,7 @@ internal static class WindowsEngineTests
             var catalog=new LocalSyncCatalog(Path.Combine(outer,"pc","catalog.json"),registration);var snapshot=catalog.Empty() with {Remote=entries.ToArray(),RemotePosition=new(new string('a',32),17+count)};await catalog.SaveAsync(snapshot);
             var complete=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             await using(var engine=new WindowsSyncEngine(device,registration,root,catalog,Path.Combine(outer,"pc"),new TransferProgress(s=>{if(s.Message.StartsWith("同期済み",StringComparison.Ordinal))complete.TrySetResult();}))) {
+                engine.BeforeHydrationValidation=full=>{if(Path.GetFileName(full)=="bulk-0.txt")Check(requestedIds.ContainsKey(18),"the next original starts before validating the current body");};
                 await engine.ReconcileAsync(snapshot,CancellationToken.None);
                 var finished=await Task.WhenAny(complete.Task,engine.Completion,Task.Delay(TimeSpan.FromSeconds(45)));
                 if(finished!=complete.Task)throw new InvalidOperationException("Bulk hydration did not settle: "+string.Join(";",engine.Errors.Select(e=>e.Message)));

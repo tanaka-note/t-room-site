@@ -5,11 +5,23 @@ using Microsoft.Win32.SafeHandles;
 
 namespace TCloud.Sync.Windows;
 
+public sealed record VerifiedLocalHash(string Sha256,long SourceFileId,long SourceUsn);
+
 /// <summary>Copies a local save before network upload; concurrent writes invalidate the snapshot.</summary>
 public static class LocalOriginalSnapshot
 {
-    public static async Task<VerifiedOriginal> CaptureAsync(string path,string ownedStagingDirectory,
+    public static Task<VerifiedOriginal> CaptureAsync(string path,string ownedStagingDirectory,
         IProgress<long>? progress=null,CancellationToken token=default,bool retain=false)
+        =>ReadStableAsync(path,ownedStagingDirectory,progress,token,retain);
+
+    public static async Task<VerifiedLocalHash> VerifyAsync(string path,IProgress<long>? progress=null,CancellationToken token=default)
+    {
+        await using var verified=await ReadStableAsync(path,null,progress,token,false);
+        return new(verified.Sha256,verified.SourceFileId,verified.SourceUsn);
+    }
+
+    private static async Task<VerifiedOriginal> ReadStableAsync(string path,string? ownedStagingDirectory,
+        IProgress<long>? progress,CancellationToken token,bool retain)
     {
         var source=Path.GetFullPath(path);
         _=VolumeInspector.ValidateDestination(source,[]);
@@ -35,11 +47,14 @@ public static class LocalOriginalSnapshot
             if(!GetFileSizeEx(raw,out var size))throw new Win32Exception(Marshal.GetLastWin32Error());
             if(size<1||size>64L*1024*1024*10000)throw new IOException("送信対象のサイズが不正です。");
             owned.Dispose();
-            var full=Path.GetFullPath(ownedStagingDirectory);_=VolumeInspector.ValidateDestination(full,[]);Directory.CreateDirectory(full);
-            if(new DriveInfo(Path.GetPathRoot(full)!).AvailableFreeSpace<size+16L*1024*1024)
-                throw new IOException("送信用の保存領域が不足しています。原本は削除しません。");
-            var output=new FileStream(Path.Combine(full,Guid.NewGuid().ToString("N")+".upload"),FileMode.CreateNew,
-                FileAccess.ReadWrite,retain?FileShare.Read|FileShare.Delete:FileShare.None,1024*1024,FileOptions.Asynchronous|FileOptions.WriteThrough|(retain?FileOptions.None:FileOptions.DeleteOnClose));
+            Stream output=Stream.Null;
+            if(ownedStagingDirectory is not null) {
+                var full=Path.GetFullPath(ownedStagingDirectory);_=VolumeInspector.ValidateDestination(full,[]);Directory.CreateDirectory(full);
+                if(new DriveInfo(Path.GetPathRoot(full)!).AvailableFreeSpace<size+16L*1024*1024)
+                    throw new IOException("送信用の保存領域が不足しています。原本は削除しません。");
+                output=new FileStream(Path.Combine(full,Guid.NewGuid().ToString("N")+".upload"),FileMode.CreateNew,
+                    FileAccess.ReadWrite,retain?FileShare.Read|FileShare.Delete:FileShare.None,1024*1024,FileOptions.Asynchronous|FileOptions.WriteThrough|(retain?FileOptions.None:FileOptions.DeleteOnClose));
+            }
             var buffer=new byte[(int)Math.Min(size,1024*1024)];
             try
             {
@@ -57,10 +72,10 @@ public static class LocalOriginalSnapshot
                 using(var current=Protect())
                     if(!GetFileSizeEx(Raw(),out var after)||after!=size||WindowsFileState.Read(source)!=before)
                         throw new IOException("コピー中に原本が変わりました。");
-                await output.FlushAsync(token);output.Flush(flushToDisk:true);output.Position=0;
-                return new(output,Convert.ToHexString(hash.GetHashAndReset()),retain?output.Name:null,before.Id,before.Usn);
+                if(output is FileStream saved){await saved.FlushAsync(token);saved.Flush(flushToDisk:true);saved.Position=0;}
+                return new(output,Convert.ToHexString(hash.GetHashAndReset()),retain?((FileStream)output).Name:null,before.Id,before.Usn);
             }
-            catch {await output.DisposeAsync();if(retain)File.Delete(output.Name);throw;}
+            catch {await output.DisposeAsync();if(retain&&output is FileStream saved)File.Delete(saved.Name);throw;}
             finally {CryptographicOperations.ZeroMemory(buffer);}
         }
         finally {if(shared is null)CfCloseHandle(handle);else shared.Dispose();}

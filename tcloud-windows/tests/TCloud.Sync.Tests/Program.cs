@@ -88,6 +88,8 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("changed versions and damaged chunks never expose mixed plaintext", EncryptedReadTests.ChangedOrDamaged),
     ("Cloud ciphertext requests enforce origin, session, range, version and body length", EncryptedReadTests.HttpRanges),
     ("ending a reader cancels pending transfers and prevents further decryption", EncryptedReadTests.Cancellation),
+    ("bounded adaptive prefetch authenticates ordered chunks and cancels abandoned reads", PrefetchTests.Reads),
+    ("next-original prefetch transfers ownership and releases unclaimed staging", PrefetchTests.Ownership),
     ("whole-original staging never publishes late corruption or canceled transfers", ProviderTests.FailedStage),
     ("ciphertext integrity and chunk identity are authenticated", Integrity),
     ("random reads cross encrypted chunks and stop at EOF", Ranges),
@@ -120,6 +122,7 @@ if (args.Contains("--native"))
     tests.Add(("DPAPI session protection rejects modified cookies and another session binding", NativeAccountProtection));
     tests.Add(("persistent device signatures interoperate without exporting private keys or reusing cookie protection", NativeDeviceKey));
     tests.Add(("PC-protected registration resumes and renews without a Web cookie or another passkey", DeviceClientTests.PersistentDevice));
+    tests.Add(("HTTP/2 original reads share a two-body limit across background and foreground work",DeviceClientTests.ContentBound));
     tests.Add(("local upload snapshots reject saves made during the copy and isolate later edits", LocalSnapshotTests.Capture));
     tests.Add(("persistent sync roots resume only their owner and unlink without deleting originals", RootRegistrationTests.Persistence));
     tests.Add(("fresh NTFS volume bootstrap preserves existing root ownership and populated folders",RootRegistrationTests.FreshVolume));

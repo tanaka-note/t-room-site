@@ -11,6 +11,8 @@ internal static class LocalSnapshotTests
         try
         {
             await File.WriteAllBytesAsync(original,plain);
+            var proof=await LocalOriginalSnapshot.VerifyAsync(original);
+            Check(proof.Sha256==Convert.ToHexString(SHA256.HashData(plain))&&!Directory.Exists(staging),"verification hashes the protected original without creating a staging directory");
             await using(var copy=await LocalOriginalSnapshot.CaptureAsync(original,staging))
             {
                 Check(copy.Sha256==Convert.ToHexString(SHA256.HashData(plain)),"local snapshot hashes one complete save");
@@ -34,6 +36,16 @@ internal static class LocalSnapshotTests
             }
             catch(IOException) { }
             Check(changed,"the synthetic writer actually ran during the snapshot");
+            await File.WriteAllBytesAsync(original,plain);changed=false;
+            try {
+                _=await LocalOriginalSnapshot.VerifyAsync(original,new InlineProgress(_=>{
+                    if(changed)return;changed=true;
+                    using var writer=new FileStream(original,FileMode.Open,FileAccess.Write,FileShare.ReadWrite|FileShare.Delete);
+                    writer.Write("changed during verification"u8);writer.Flush(true);
+                }));
+                throw new InvalidOperationException("A racing save was accepted by hash-only verification");
+            }catch(IOException){ }
+            Check(changed,"hash-only verification actually encountered the writer");
             await File.WriteAllBytesAsync(original,plain);
             using(var existingReader=new FileStream(original,FileMode.Open,FileAccess.Read,FileShare.ReadWrite|FileShare.Delete))
             {
