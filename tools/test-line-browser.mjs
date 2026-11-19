@@ -114,6 +114,7 @@ test("all seven production entrypoints reject LINE before any DB, authentication
 });
 test("Calendar passkeys associate the production package and certificate with both Android relations", () => {
   const statements = JSON.parse(readFileSync(".well-known/assetlinks.json", "utf8"));
+  assert(!statements.some(entry => entry.target?.package_name === "jp.tanaka.troom.ai"), "Retired AI Chat must have no Android association");
   const calendar = statements.find(entry => entry.target?.package_name === "jp.tanaka.troom.calendar");
   assert(calendar, "Calendar needs a domain association");
   assert.equal(calendar.target.namespace, "android_app");

@@ -28,11 +28,7 @@ const diary = await readFile(new URL("../../diary-worker/src/index.js", import.m
 const billing = await readFile(new URL("../../billing-worker/src/index.js", import.meta.url), "utf8");
 const ai = await readFile(new URL("../../ai-worker/src/index.js", import.meta.url), "utf8");
 const downloader = await readFile(new URL("../../downloader-worker/src/index.js", import.meta.url), "utf8");
-const downloader2 = await readFile(new URL("../../downloader2-worker/src/index.js", import.meta.url), "utf8");
-const aiServiceMigration = await readFile(new URL("../migrations/0009_ai_chat_service_and_budgets.sql", import.meta.url), "utf8");
 const activeSessionMigration = await readFile(new URL("../migrations/0010_active_service_sessions.sql", import.meta.url), "utf8");
-const downloaderServiceMigration = await readFile(new URL("../migrations/0011_downloader_service.sql", import.meta.url), "utf8");
-const downloader2ServiceMigration = await readFile(new URL("../migrations/0020_downloader2_service.sql", import.meta.url), "utf8");
 const sessionValidator = await readFile(new URL("../../assets/passkey-session-validation.mjs", import.meta.url), "utf8");
 const globalSwitchTool = await readFile(new URL("../tools/global-passkey-switch.mjs", import.meta.url), "utf8");
 const securityConfig = await readFile(new URL("../wrangler.jsonc", import.meta.url), "utf8");
@@ -220,7 +216,7 @@ test("administrator Identity disable is atomic, fail-closed, and keeps historica
     "client vaults and key envelopes remain immutable history");
   assert.match(securityUi, /過去の履歴を表示/);
   assert.match(securityUi, /data\.credentials\.filter\(\(item\) => \["pending", "active"\]\.includes\(item\.status\)\)/);
-  assert.match(securityUi, /const serviceLinks = data\.links\.filter\(\(item\) => item\.service !== "health"\)/);
+  assert.match(securityUi, /const serviceLinks = data\.links\.filter\(\(item\) => !\["health", "ai", "downloader", "downloader2"\]/);
   assert.match(securityUi, /serviceLinks\.filter\(\(item\) => \["pending", "active"\]\.includes\(item\.status\)\)/);
   assert.match(securityUi, /ユーザーを停止/);
 });
@@ -237,8 +233,7 @@ test("service links come from an explicit provider registry and never from free-
   assert.match(worker, /CLOUD_AUTH/);
   assert.match(worker, /DIARY_AUTH/);
   assert.match(worker, /BILLING_AUTH/);
-  assert.match(worker, /AI_AUTH/);
-  assert.match(worker, /DOWNLOADER_AUTH/);
+  assert.doesNotMatch(worker, /AI_AUTH|DOWNLOADER2?_AUTH/);
   for (const source of [cloud, diary, billing]) {
     assert.match(source, /async listLinkTargets\(\)/);
     assert.match(source, /async describeAccount\(input\)/);
@@ -261,46 +256,6 @@ test("service links come from an explicit provider registry and never from free-
     "a single T-Cloud link is selected automatically without combining scopes");
   assert.match(client, /chooseLinkDialog/);
   assert.match(client, /利用するT-Cloudの範囲を選択/);
-});
-
-test("AI Chat is a Passkey-only Security service with server-owned budget policy", () => {
-  assert.match(worker, /ai: Object\.freeze\(\{ displayName: "AI Chat", binding: "AI_AUTH" \}\)/);
-  assert.match(worker, /downloader: Object\.freeze\(\{ displayName: "T-lain Downloader", binding: "DOWNLOADER_AUTH" \}\)/);
-  assert.match(worker, /"ai\\u0000owner\\u0000"/);
-  assert.match(worker, /getAiBudgetPolicy/);
-  assert.match(aiServiceMigration, /security_ai_budget_policies/);
-  assert.match(aiServiceMigration, /3000, 2700, 2850/);
-  assert.doesNotMatch(aiServiceMigration, /PRAGMA foreign_keys\s*=\s*OFF/i);
-  assert.match(aiServiceMigration, /CREATE TABLE security_handoffs_next[\s\S]*REFERENCES security_service_links_next/);
-  assert.match(aiServiceMigration, /CREATE TABLE security_tcloud_key_envelopes_next[\s\S]*REFERENCES security_service_links_next/);
-  assert.match(worker, /insertDefaultAiBudgetPolicyStatement/);
-  assert.match(worker, /links\.some\(\(link\) => link\.service === "ai"\)/);
-  assert.match(ai, /redeemHandoff\(String\(body\.handoffToken \|\| ""\), "ai"\)/);
-  assert.match(ai, /validatePasskeySession\(\{/);
-  assert.doesNotMatch(ai, /password_login|PASSWORD_HASH/);
-});
-
-test("Downloader is a Passkey-only service with an idempotent primary-admin link", () => {
-  assert.match(worker, /downloader: Object\.freeze\(\{ displayName: "T-lain Downloader", binding: "DOWNLOADER_AUTH" \}\)/);
-  assert.match(worker, /"downloader\\u0000owner\\u0000"/);
-  assert.match(downloader, /redeemHandoff\(String\(body\.handoffToken \|\| ""\), "downloader"\)/);
-  assert.match(downloader, /validatePasskeySession\(\{/);
-  assert.doesNotMatch(downloader, /password_login|PASSWORD_HASH/);
-  assert.match(downloaderServiceMigration, /service IN \('cloud', 'diary', 'billing', 'ai', 'downloader'\)/);
-  assert.match(downloaderServiceMigration, /NOT EXISTS \([\s\S]*link\.service = 'downloader'/);
-  assert.doesNotMatch(downloaderServiceMigration, /PRAGMA foreign_keys\s*=\s*OFF/i);
-});
-
-test("Downloader 2 is a separate owner-only Passkey service", () => {
-  assert.match(worker, /downloader2: Object\.freeze\(\{ displayName: "T-lain Downloader 2", binding: "DOWNLOADER2_AUTH" \}\)/);
-  assert.match(worker, /"downloader2\\u0000owner\\u0000"/);
-  assert.match(downloader2, /redeemHandoff\(String\(body\.handoffToken \|\| ""\), SERVICE\)/);
-  assert.match(downloader2, /identityId !== "primary-admin"/);
-  assert.match(downloader2, /validatePasskeySession/);
-  assert.doesNotMatch(downloader2, /password_login|PASSWORD_HASH/);
-  assert.match(downloader2ServiceMigration, /service IN \('cloud', 'diary', 'billing', 'ai', 'downloader', 'downloader2'\)/);
-  assert.match(downloader2ServiceMigration, /link\.service = 'downloader2'/);
-  assert.doesNotMatch(downloader2ServiceMigration, /PRAGMA foreign_keys\s*=\s*OFF/i);
 });
 
 test("privileged, exclusive, Cloud-admin and root-folder policies are server enforced", () => {
@@ -456,7 +411,7 @@ test("all service passkey sessions carry revocable Security identifiers and vali
 test("member registration remains retryable and primary-admin registration requires Cloud preparation", () => {
   assert.match(client, /obtainPrfSafely/);
   assert.match(client, /prfPreparationFailed/);
-  assert.match(worker, /UPDATE security_service_links SET status = 'active'.*service NOT IN \('cloud', 'health'\)/);
+  assert.match(worker, /UPDATE security_service_links SET status = 'active'.*service NOT IN \('cloud', 'health', 'ai', 'downloader', 'downloader2'\)/);
   assert.match(worker, /envelopeType === "admin_private_prf"[\s\S]*UPDATE security_service_links SET status = 'active'/);
   assert.match(worker, /security_setup_sessions/);
   assert.match(worker, /last_user_verification_at/);

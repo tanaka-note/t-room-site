@@ -56,18 +56,16 @@ test("overview reads one JST aggregate row while other overview reads remain par
     const dashboard = handler(worker, "dashboard", {
       currentJstDayBounds: () => ({ start, end }), LOGIN_SUCCESS_EVENTS, LOGIN_FAILURE_EVENTS,
       activeSessionState: async () => { started.push("sessions"); await waiting.promise; return { users: [{ identityId: "active", services: ["cloud"] }] }; },
-      readDefinitionStatus: async () => { started.push("definitions"); await waiting.promise; return { result: "success" }; },
       json: (body) => body
     });
     const pending = dashboard(env);
     await turn();
-    assert.deepEqual(started, ["audit", "identities", "sessions", "definitions"], "independent reads start together");
+    assert.deepEqual(started, ["audit", "identities", "sessions"], "independent reads start together");
     waiting.release();
     const result = await pending;
     assert.deepEqual([result.loginSuccess, result.loginFailure, result.lockouts, result.sessionResume, result.critical], [2, 3, 1, 1, 2]);
     assert.deepEqual([result.pendingApproval, result.invited, result.noPasskey], [1, 1, 1]);
     assert.equal(result.activeUsers[0].identityId, "active");
-    assert.equal(result.clamavDefinitions.result, "success");
     assert.ok(auditPlan.some((row) => /SEARCH security_audit_daily.*day=/.test(row.detail)), JSON.stringify(auditPlan));
     db.exec("DELETE FROM security_audit_events");
     assert.equal((await dashboard(env)).loginSuccess, 0, "empty sums remain zero");
@@ -75,7 +73,7 @@ test("overview reads one JST aggregate row while other overview reads remain par
 });
 
 test("all service candidates start together, preserve registry order, and still report provider failure", async () => {
-  const ids = ["cloud", "diary", "billing", "ai", "downloader", "downloader2"];
+  const ids = ["cloud", "diary", "billing", "inventory", "payments"];
   const waiting = gate(), calls = [];
   let failing = false;
   class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
@@ -105,7 +103,8 @@ test("parallel runtime reads deduplicate accounts while retaining version, revoc
     row("stale-version", { session_version: "old" }), row("stale-epoch", { passkey_session_epoch: 8 }),
     row("revoked-credential", { credential_status: "revoked" }), row("disabled-link", { link_status: "disabled" }),
     row("disabled-provider", { service: "billing", service_account_id: "owner" }),
-    row("unavailable", { service: "ai", service_account_id: "owner" }),
+    row("unavailable", { service: "inventory", service_account_id: "owner" }),
+    row("retired", { service: "ai", service_account_id: "owner" }),
     row("folders", { service: "cloud", service_account_id: "folder-member", cloud_folder_scopes: '[{"rootFolderId":7}]', service_link_id: "anchor" }),
     row("revoked-folder", { service: "cloud", service_account_id: "folder-member", cloud_folder_scopes: '[{"rootFolderId":9}]', service_link_id: "anchor" }),
     row("invalid-folder", { service: "cloud", service_account_id: "folder-member", cloud_folder_scopes: "invalid" }),
@@ -113,10 +112,10 @@ test("parallel runtime reads deduplicate accounts while retaining version, revoc
   const env = { DB: { prepare: () => ({ bind: () => ({ all: async () => ({ results: rows }) }) }) } };
   const active = handler(worker, "activeSessionState", {
     nowSeconds: () => 100, observePasskeyRuntime: async () => globalRuntime, passkeysEnabled: () => true,
-    ACTIVE_SESSION_SERVICE_IDS: ["cloud", "diary", "billing", "ai", "downloader", "downloader2"],
+    ACTIVE_SESSION_SERVICE_IDS: ["cloud", "diary", "billing", "inventory", "payments"],
     serviceProvider: (_env, service) => ({ async getSessionRuntimeState({ serviceAccountId }) {
       calls.push(`${service}/${serviceAccountId}`); await waiting.promise;
-      if (service === "ai") throw new Error("offline");
+      if (service === "inventory") throw new Error("offline");
       return { sessionVersion: "v1", passkeyEnabled: service !== "billing" };
     } }), publicActiveSession: (session) => session.id, identityDisplayName: (_id, name) => name,
     parseJson: (value, fallback) => { try { return JSON.parse(value); } catch { return fallback; } },
@@ -124,12 +123,12 @@ test("parallel runtime reads deduplicate accounts while retaining version, revoc
     validCloudFolderScopes: async (_env, _identity, _credential, scopes) => { scopeCalls.push(scopes[0].rootFolderId); return scopes[0].rootFolderId === 7; }
   });
   const pending = active(env); await turn();
-  assert.deepEqual(calls, ["diary/main-user", "billing/owner", "ai/owner", "cloud/folder-member"]);
+  assert.deepEqual(calls, ["diary/main-user", "billing/owner", "inventory/owner", "cloud/folder-member"]);
   waiting.release();
   const result = await pending;
   assert.deepEqual(result.services.flatMap((service) => service.sessions).sort(), ["duplicate", "folders", "password", "valid"]);
   assert.deepEqual(scopeCalls, [7, 9]);
-  assert.equal(result.services.find((service) => service.service === "ai").available, false);
+  assert.equal(result.services.find((service) => service.service === "inventory").available, false);
   globalRuntime = { enabled: false, epoch: 10 };
   const disabled = await active(env);
   assert.deepEqual(disabled.services.flatMap((service) => service.sessions), ["password"]);

@@ -13,12 +13,11 @@ import { isValidSessionSecret } from "../assets/session-secret.mjs";
 
 registerHooks({ resolve(specifier, context, next) {
   if (specifier === "cloudflare:workers") return { url: "data:text/javascript,export class WorkerEntrypoint {}; export const waitUntil=()=>{};", shortCircuit: true };
-  if (specifier === "@cloudflare/containers") return { url: "data:text/javascript,export class Container {}; export class ContainerProxy {}; export const getContainer=()=>{throw Error('unexpected Container test call')};", shortCircuit: true };
   return next(specifier, context);
 } });
 const Security = (await import("../security-worker/src/index.js")).default;
 const workers = {};
-for (const service of ["diary", "billing", "ai", "downloader", "downloader2"]) workers[service] = (await import(`../${service}-worker/src/index.js`)).default;
+for (const service of ["diary", "billing"]) workers[service] = (await import(`../${service}-worker/src/index.js`)).default;
 const services = ["security", ...Object.keys(workers)];
 const credentialId = "Y3JlZGVudGlhbA";
 const origin = "https://example.test";
@@ -43,7 +42,7 @@ const issueSecurityCookies = new Function("helpers", `const { trackedPasskeySess
 function database(service) {
   const db = new DatabaseSync(":memory:");
   const dir = new URL(`../${service}-worker/migrations/`, import.meta.url);
-  if (service !== "downloader2") for (const file of readdirSync(dir).filter(f => f.endsWith(".sql")).sort()) db.exec(readFileSync(new URL(file, dir), "utf8"));
+  for (const file of readdirSync(dir).filter(f => f.endsWith(".sql")).sort()) db.exec(readFileSync(new URL(file, dir), "utf8"));
   function prepare(sql, args = []) {
     return { bind: (...values) => prepare(sql, values), first: async () => db.prepare(sql).get(...args) || null,
       all: async () => ({ results: db.prepare(sql).all(...args) }), run: async () => { const r = db.prepare(sql).run(...args); return { meta: { changes: Number(r.changes), last_row_id: Number(r.lastInsertRowid) } }; } };
@@ -66,7 +65,6 @@ function fixture(service) {
     passkeyRollingSession: input => security.passkeyRollingSession(input),
     validatePasskeySession: input => security.validatePasskeySession(input),
     recordAuditEvent: input => security.recordAuditEvent(input),
-    getAiBudgetPolicy: async () => ({ monthlyBudgetJpy: 1000, softStopJpy: 1000, hardStopJpy: 1000, reserveEnabled: false }),
     redeemHandoff: async token => { const handoff = handoffs.get(token); handoffs.delete(token); return handoff; }
   };
   const worker = service === "security" ? security : typeof workers[service] === "function" ? Object.assign(new workers[service](), { env, ctx: { waitUntil: p => pending.push(p) } }) : workers[service];
@@ -101,15 +99,14 @@ function withClock() {
   globalThis.Date = class extends OriginalDate { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } };
   return { advance: seconds => { now += seconds * 1000; }, restore: () => { globalThis.Date = OriginalDate; } };
 }
-const activityPaths = { security: "audit", diary: "households", billing: "accounts", ai: "characters", downloader: "jobs", downloader2: "pairing/challenge" };
-const optionsFor = service => service === "downloader2" ? { body: { deviceChallenge: Buffer.alloc(32, 7).toString("base64url") } } : {};
+const activityPaths = { security: "audit", diary: "households", billing: "accounts" };
 
 for (const service of services) test(`${service}: rolling crosses the original twelve hours; idle/status/errors cannot extend; logout stays ended`, async () => {
   const f = fixture(service), clock = withClock();
   try {
     let cookie = await f.login(); const original = payload(cookie);
     clock.advance(3600);
-    for (const [path, options] of [[service === "security" ? "status" : "session", { active: true }], [activityPaths[service], optionsFor(service)], ["missing-route", { active: true }]]) {
+    for (const [path, options] of [[service === "security" ? "status" : "session", { active: true }], [activityPaths[service], {}], ["missing-route", { active: true }]]) {
       const result = await f.request(path, cookie, options);
       assert.equal(result.status, path === "missing-route" ? 404 : 200, path);
       assert.equal(result.headers.get("X-Troom-Session-Expires"), null, path);
@@ -117,7 +114,7 @@ for (const service of services) test(`${service}: rolling crosses the original t
     }
     clock.advance(36000);
     for (let i = 0; i < 2; i++) {
-      const result = await f.request(activityPaths[service], cookie, { ...optionsFor(service), active: true });
+      const result = await f.request(activityPaths[service], cookie, { active: true });
       assert.equal(result.status, 200, JSON.stringify(result.body));
       assert.ok(result.cookie); cookie = result.cookie;
       const renewed = payload(cookie);
@@ -127,7 +124,7 @@ for (const service of services) test(`${service}: rolling crosses the original t
     }
     assert.ok((payload(cookie).exp ?? payload(cookie).expiresAt) > (original.exp ?? original.expiresAt) + 43200);
     const logout = await f.request("logout", cookie, { body: {}, active: true }); assert.equal(logout.status, 200);
-    const replay = await f.request(activityPaths[service], cookie, { ...optionsFor(service), active: true }); assert.equal(replay.status, 401);
+    const replay = await f.request(activityPaths[service], cookie, { active: true }); assert.equal(replay.status, 401);
     assert.equal(replay.cookie, undefined);
   } finally { clock.restore(); f.close(); }
 });
@@ -144,7 +141,7 @@ for (const service of services) test(`${service}: exact twelve-hour boundary and
       if (change === "ledger") f.securityDb.exec("UPDATE security_active_sessions SET ended_at=CURRENT_TIMESTAMP");
       if (change === "link") f.securityDb.exec("UPDATE security_service_links SET status='disabled'");
       if (change === "admin") f.securityDb.exec("UPDATE security_identities SET is_security_admin=0");
-      const result = await f.request(activityPaths[service], cookie, { ...optionsFor(service), active: true });
+      const result = await f.request(activityPaths[service], cookie, { active: true });
       assert.equal(result.status, 401, change); assert.equal(result.cookie, undefined, change);
     } finally { clock.restore(); f.close(); }
   }
@@ -164,7 +161,7 @@ test("Security ignores delayed audit expiry and never revives logged-out rolling
   for (const service of services) {
     const f = fixture(service), clock = withClock();
     try { const cookie = await f.login(), p = payload(cookie); clock.advance(3600);
-      const renewed = await f.request(activityPaths[service], cookie, { ...optionsFor(service), active: true });
+      const renewed = await f.request(activityPaths[service], cookie, { active: true });
       const input = await rollingSessionInput(f.env, service, p, "read");
       const before = f.securityDb.prepare("SELECT * FROM security_active_sessions WHERE session_id_hash=?").get(input.sessionIdHash);
       const event = { ...await rollingSessionInput(f.env, service, p, "read"), eventType: "session_resume", outcome: "success", authMethod: "passkey",
@@ -172,7 +169,7 @@ test("Security ignores delayed audit expiry and never revives logged-out rolling
       await f.security.recordAuditEvent(event);
       assert.equal(f.securityDb.prepare("SELECT expires_at FROM security_active_sessions WHERE session_id_hash=?").get(input.sessionIdHash).expires_at, before.expires_at);
       await f.request("logout", renewed.cookie, { body: {} }); await f.security.recordAuditEvent(event);
-      assert.equal((await f.request(activityPaths[service], renewed.cookie, { ...optionsFor(service), active: true })).status, 401);
+      assert.equal((await f.request(activityPaths[service], renewed.cookie, { active: true })).status, 401);
     } finally { clock.restore(); f.close(); }
   }
 });
@@ -182,7 +179,7 @@ test("Security rolling never grants another five minutes of privileged approval"
   try {
     const cookie = await f.login(); clock.advance(301);
     const renewed = await f.request("audit", cookie, { active: true }); assert.equal(renewed.status, 200);
-    const operation = await f.request("ai/budgets/primary-admin", renewed.cookie, { body: { monthlyBudgetJpy: 1000 }, active: true });
+    const operation = await f.request("household/grant", renewed.cookie, { body: {}, active: true });
     assert.equal(operation.status, 428);
     assert.equal(operation.cookie, undefined);
   } finally { clock.restore(); f.close(); }
@@ -199,10 +196,10 @@ test("legacy cookies retain their original expiry and never opt into rolling on 
         return `${cookie.split("=", 1)[0]}=${encoded}.${createHmac("sha256", f.env.SESSION_SECRET).update(encoded).digest("base64url")}`;
       }).join("; ");
       clock.advance(3600);
-      const result = await f.request(activityPaths[service], legacy, { ...optionsFor(service), active: true });
+      const result = await f.request(activityPaths[service], legacy, { active: true });
       assert.equal(result.status, 200, service); assert.equal(result.cookie, undefined, service);
       clock.advance(39600);
-      assert.equal((await f.request(activityPaths[service], legacy, { ...optionsFor(service), active: true })).status, 401, service);
+      assert.equal((await f.request(activityPaths[service], legacy, { active: true })).status, 401, service);
     } finally { clock.restore(); f.close(); }
   }
 });
@@ -215,7 +212,7 @@ test("rolling cannot adopt a new signed role, account/version/epoch or cross-ser
         const cookie = await f.login(), value = { ...payload(cookie), ...delta };
         const encoded = Buffer.from(JSON.stringify(value)).toString("base64url");
         const altered = `${cookie.split("=", 1)[0]}=${encoded}.${createHmac("sha256", f.env.SESSION_SECRET).update(encoded).digest("base64url")}`;
-        const result = await f.request(activityPaths[service], altered, { ...optionsFor(service), active: true });
+        const result = await f.request(activityPaths[service], altered, { active: true });
         assert.equal(result.status, 401, `${service}: ${JSON.stringify(delta)}`); assert.equal(result.cookie, undefined);
       } finally { f.close(); }
     }

@@ -1,5 +1,7 @@
 # AI Chat By T-lain (Android)
 
+> サービス終了の対象です。現行の公開・停止手順は [サービス終了手順](../docs/history/2026-11-19-downloader-ai-retirement.md) に記載しています。以下は終了前の仕様です。
+
 `jp.tanaka.troom.ai` のAndroidネイティブアプリです。Web版はありません。
 
 ## Phase 1

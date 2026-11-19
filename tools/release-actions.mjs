@@ -6,10 +6,9 @@ import { root, affected } from './verify-plan.mjs';
 import { loadWebAppRegistry } from './web-app-registry.mjs';
 import {serviceProductionPreflight} from './service-production-preflight.mjs';
 
-// Containers retain their signed, leased rollout workflow. No D1/R2 CRUD is needed here.
-export const productionTargets = ['site', 'cloud', 'security', 'diary', 'billing', 'downloader2', 'ai', 'inventory', 'health', 'payments', 'household', 'calendar'];
+export const productionTargets = ['site', 'cloud', 'security', 'diary', 'billing', 'inventory', 'health', 'payments', 'household', 'calendar'];
 export const workerName = target => {
-  if (![...productionTargets, 'downloader'].includes(target)) throw new Error('Unknown production target');
+  if (!productionTargets.includes(target)) throw new Error('Unknown production target');
   return `t-room-${target}`;
 };
 export function productionPlan(selected, { event, ref, requested = 'none', enabled = false }) {
@@ -19,7 +18,7 @@ export function productionPlan(selected, { event, ref, requested = 'none', enabl
     workerName(requested);
     return [requested];
   }
-  return event === 'push' ? [...productionTargets, 'downloader'].filter(t => selected.includes(t)) : [];
+  return event === 'push' ? productionTargets.filter(t => selected.includes(t)) : [];
 }
 export function manualVerification(target) {
   workerName(target);
@@ -99,7 +98,7 @@ export async function checkTokenScope({ env = process.env, read = api, request =
   // Establish this permission before any upload, not after creating an orphan version.
   await read(`/accounts/${account}/workers/subdomain`);
   log('[permissions] Workers account subdomain: readable');
-  for (const target of [...productionTargets, 'downloader']) {
+  for (const target of productionTargets) {
     await read(`/accounts/${account}/workers/scripts/${workerName(target)}/settings`);
     log(`[permissions] ${workerName(target)}: readable`);
   }
@@ -115,8 +114,7 @@ export async function checkTokenScope({ env = process.env, read = api, request =
   }
 }
 export async function releaseActions(target) {
-  const downloaderWorkerOnly = target === 'downloader' && process.env.TROOM_DOWNLOADER_WORKER_ONLY === 'true';
-  if (!productionTargets.includes(target) && !downloaderWorkerOnly) throw new Error('Downloader Container releases must use ClamAV daily definitions with release_code=true.');
+  const name = workerName(target);
   const git = args => execFileSync('git', ['-c', 'maintenance.auto=false', '-c', 'gc.auto=0', ...args], { cwd: root, encoding: 'utf8' }).trim();
   const head = git(['rev-parse', 'HEAD']);
   assertActionsRelease(process.env, head);
@@ -125,9 +123,8 @@ export async function releaseActions(target) {
   const registry = await loadWebAppRegistry();
   const app = registry.apps.find(a => a.id === target);
   const directory = resolve(root, target === 'site' ? '.' : `${target}-worker`);
-  const name = workerName(target);
   const config = JSON.parse(readFileSync(resolve(directory, 'wrangler.jsonc'), 'utf8'));
-  if (config.name !== name || (config.containers?.length && !downloaderWorkerOnly)) throw new Error('Worker configuration does not match the allowed production target.');
+  if (config.name !== name || config.containers?.length) throw new Error('Worker configuration does not match the allowed production target.');
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
   const baseline = process.env.GITHUB_EVENT_NAME === 'push' ? event.before : `${head}^`;
   if (!baseline || /^0+$/.test(baseline)) throw new Error('Initial infrastructure must be provisioned before automatic code releases.');
@@ -148,14 +145,12 @@ export async function releaseActions(target) {
   if (existsSync(output)) throw new Error('Refusing to reuse a previous upload result.');
   const cli = resolve(directory, 'node_modules/wrangler/bin/wrangler.js');
   // Version commands leave routes, domains, schedules and Container rollouts untouched.
-  const uploadArgs = downloaderWorkerOnly ? ['deploy', '--containers-rollout=none'] : ['versions', 'upload', '--message', `GitHub ${head}`, '--tag', head.slice(0, 12)];
+  const uploadArgs = ['versions', 'upload', '--message', `GitHub ${head}`, '--tag', head.slice(0, 12)];
   if(target==='calendar')uploadArgs.push('--var',`BUILD_ID:${head}`);
   run(directory, [cli, ...uploadArgs], { ...process.env, WRANGLER_OUTPUT_FILE_PATH: output });
-  const version = uploadedVersion(readFileSync(output, 'utf8'), name, downloaderWorkerOnly ? 'deploy' : 'version-upload');
-  if (!downloaderWorkerOnly) {
-    if (git(['ls-remote', 'origin', 'refs/heads/main']).split(/\s/)[0] !== head) throw new Error('main advanced during upload; version was not promoted.');
-    run(directory, [cli, 'versions', 'deploy', `${version}@100%`, '--yes']);
-  }
+  const version = uploadedVersion(readFileSync(output, 'utf8'), name);
+  if (git(['ls-remote', 'origin', 'refs/heads/main']).split(/\s/)[0] !== head) throw new Error('main advanced during upload; version was not promoted.');
+  run(directory, [cli, 'versions', 'deploy', `${version}@100%`, '--yes']);
   await waitForProductionVerification(async () => {
     const deployments = await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${name}/deployments`);
     assertDeployedVersion(deployments, version);

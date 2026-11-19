@@ -1,5 +1,7 @@
 # AI Chat By T-lain アーキテクチャ
 
+> サービス終了の対象です。現行の公開・停止手順は [サービス終了手順](history/2026-11-19-downloader-ai-retirement.md) に記載しています。以下は終了前の仕様です。
+
 ## 境界
 
 - Security Center: Identity、Passkey、AI service link、月額予算、安全停止、予備枠、管理監査の正本。

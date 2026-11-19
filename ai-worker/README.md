@@ -1,5 +1,7 @@
 # T-lain AI Worker
 
+> サービス終了の対象です。現行の公開・停止手順は [サービス終了手順](../docs/history/2026-11-19-downloader-ai-retirement.md) に記載しています。以下は終了前の仕様です。
+
 Android専用AI ChatのAPIです。Web UIは配信しません。
 
 - Security Workerのone-time handoff以外ではsessionを開始しない

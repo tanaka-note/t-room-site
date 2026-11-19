@@ -88,13 +88,18 @@ test('retired service URLs return 410 and other service paths fall through', asy
     '/investment-performance.html', '/learning.html', '/learning/index.html',
     '/learning/sharoushi/logs/001', '/thought', '/columns/music/002.html',
     '/transfer', '/transfer/index.html', '/health/api/records', '/%6cearning/',
+    '/downloader/', '/downloader/api/session', '/downloader2', '/downloader2/api/pairing/redeem',
+    '/ai', '/ai/api/conversations', '/%61i/api/passkey/handoff',
   ]) {
     const response = worker.fetch(new Request(`https://tanaka-note.com${path}`, { method: 'HEAD' }), env);
     assert.equal(response.status, 410, path);
     assert.match(response.headers.get('X-Robots-Tag'), /noindex/);
     assert.equal(await response.text(), '');
   }
-  for (const path of ['/', '/asset-report/', '/diary/investment/', '/learning-tools/', '/transfer-tools/']) {
+  const post = worker.fetch(new Request('https://tanaka-note.com/ai/api/conversations', { method: 'POST' }), env);
+  assert.equal(post.status, 410);
+  assert.equal(post.headers.get('Cache-Control'), 'no-store');
+  for (const path of ['/', '/asset-report/', '/diary/investment/', '/learning-tools/', '/transfer-tools/', '/downloader-tools/', '/ai-tools/']) {
     const response = worker.fetch(new Request(`https://tanaka-note.com${path}`), env);
     assert.equal(response.status, 200, path);
     assert.equal(await response.text(), path);

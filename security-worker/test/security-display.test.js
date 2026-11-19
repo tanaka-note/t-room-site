@@ -83,6 +83,8 @@ test("service, outcome and authentication values keep canonical values behind Ja
   assert.deepEqual(["security", "cloud", "diary", "billing", "ai", "downloader", "downloader2"].map(display.serviceLabel), ["Security Center", "T-Cloud", "日記", "請求書", "AI Chat", "T-lain Downloader", "T-lain Downloader 2"]);
   assert.deepEqual(["success", "failure", "blocked", "cancelled", "info"].map(display.outcomeLabel), ["成功", "失敗", "停止", "キャンセル", "情報"]);
   assert.deepEqual(["password", "passkey", "system"].map(display.authMethodLabel), ["パスワード", "パスキー", "システム"]);
+  assert.ok(display.eventGroups().every(({ label }) => !["AI Chat", "Downloader", "Downloader 2"].includes(label)));
+  assert.equal(display.eventLabel("ai_response_completed"), "AI回答を完了");
   const filterValues = display.eventGroups().flatMap((group) => group.options.map((item) => item.value));
   for (const value of Object.keys(currentAuditEvents)) assert.ok(filterValues.includes(value), `${value} is filterable by its canonical value`);
 });
