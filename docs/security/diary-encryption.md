@@ -11,7 +11,7 @@
 
 切替完了を確定したサーバー時刻から7日間を旧写真の保持期間として記録する。時間経過だけで削除しない。旧写真の整理には日記・旧バックアップの参照確認と別途の承認が必要である。移行中や復元失敗時の旧写真を保護するため、旧R2のprefixにLifecycle削除を設定しない。
 
-画面は `/diary/photo-encryption-migration/`（アルバムの「既存写真を暗号化」）。作業テーブルは [`photo-migration.sql`](../../diary-worker/e2ee/photo-migration.sql) のみで、本番の通常migrationへは追加していない。使用する環境に明示して適用し、Backup Workerが作業テーブルの正確なschemaを認識する状態と、旧画像アクセス・復旧のテストを確認してから `DIARY_PHOTO_MIGRATION_ENABLED=true` にする。候補のテーブルは通常バックアップの復元に含めず、切替対象の写真参照と鍵は既存v10の正本テーブルから復元できる。検証は `node diary-worker/tests/e2ee/online-photo-migration.browser.mjs` で行い、本番バインディングを使わない。
+第一管理者は `/diary/photo-encryption-migration/` に直接アクセスする。作業テーブルは [`photo-migration.sql`](../../diary-worker/e2ee/photo-migration.sql) のみで、本番の通常migrationへは追加していない。使用する環境に明示して適用し、Backup Workerが作業テーブルの正確なschemaを認識する状態と、旧画像アクセス・復旧のテストを確認してから `DIARY_PHOTO_MIGRATION_ENABLED=true` にする。候補のテーブルは通常バックアップの復元に含めず、切替対象の写真参照と鍵は既存v10の正本テーブルから復元できる。検証は `node diary-worker/tests/e2ee/online-photo-migration.browser.mjs` で行い、本番バインディングを使わない。
 
 ## 2026-11-12に確認した実装計画
 
