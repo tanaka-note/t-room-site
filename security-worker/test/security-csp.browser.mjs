@@ -613,7 +613,6 @@ async function verifyBrowser(browserType, name, origin) {
     await unsupported.getByRole("button", { name: "履歴", exact: true }).click();
     await unsupported.locator("#audit-list .audit-row").first().waitFor();
     assert.doesNotMatch(receivedAuditQueries.at(-1), /identityId=/, `${name}: all users remains the default audit filter`);
-    await unsupported.waitForFunction(() => !!document.querySelector('#audit-identity option[value="primary-admin"]'));
     assert.deepEqual(await unsupported.locator("#audit-identity option").allTextContents(),
       ["すべて", "田中宏知（オーナー）", ...(detailUiIdentityVisible ? ["詳細UIテスト"] : []), ...(cancelledInviteIdentityVisible ? ["取消テストユーザー"] : [])],
       `${name}: current and preparing users remain selectable while disabled identities are excluded`);
