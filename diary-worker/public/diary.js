@@ -765,7 +765,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.activeHouseholdId = session.activeHouseholdId || session.householdId;
     updateDiaryReturnNavigation();
     state.isGlobalOwner = Boolean(session.isGlobalOwner);
-    document.querySelector('#existing-photo-migration-link').hidden = !session.canMigratePhotos;
     state.canManageEntries = Boolean(session.canManageEntries);
     state.canViewTrash = Boolean(session.canViewTrash);
     state.canPermanentlyDelete = Boolean(session.canPermanentlyDelete);
