@@ -24,6 +24,20 @@ test(`${service} backup accepts only the exact optional Windows authorization sc
     await assert.rejects(assertSchema(service,schema()),/SchemaReviewRequired/);
   } finally {db.close();}
 });
+test('Security backup accepts the reviewed T-Cloud transfer table without restoring unfinished delivery', async () => {
+  const db = database('security');
+  try {
+    const schema = () => db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY type,name").all();
+    await assertSchema('security', schema());
+    db.exec(readFileSync(new URL('../../security-worker/migrations/0034_tcloud_admin_key_transfers.sql', import.meta.url), 'utf8'));
+    await assertSchema('security', schema());
+    const backup = await capture(d1(db), 'security');
+    assert.equal(Object.hasOwn(backup.tables, 'security_tcloud_admin_key_transfers'), false);
+    assert.equal(Object.hasOwn(backup.tables, 'security_tcloud_key_envelopes'), true);
+    db.exec("ALTER TABLE security_tcloud_admin_key_transfers ADD COLUMN unreviewed TEXT");
+    await assert.rejects(assertSchema('security', schema()), /SchemaReviewRequired/);
+  } finally { db.close(); }
+});
 test('catalog DDL remains exact alongside the reviewed trash backup and rebuilds without restoring device grants',async()=>{
   const db=database('cloud');
   try {
