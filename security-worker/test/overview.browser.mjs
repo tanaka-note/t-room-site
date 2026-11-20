@@ -24,8 +24,6 @@ const server = createServer(async (request, response) => {
   }
   const files = {
     "/security/": ["../public/index.html", "text/html"],
-    "/security/household-setup.mjs": ["../public/household-setup.mjs", "text/javascript"],
-    "/household/household-crypto.mjs": ["../../household-worker/public/household-crypto.mjs", "text/javascript"],
     "/security/security.js": ["../public/security.js", "text/javascript"],
     "/security/security-display.js": ["../public/security-display.js", "text/javascript"],
     "/security/security.css": ["../public/security.css", "text/css"],
@@ -176,6 +174,7 @@ try {
       credentials: [{ credential_id: "fixture-credential", label: "本人の端末", status: "active" }],
       links: [
         { id: "diary-link", service: "diary", display_label: "日記の既存連携", status: "active" },
+        { id: "household-link", service: "household", display_label: "家計簿の既存連携", role: "owner", status: "active" },
         { id: "health-link", service: "health", display_label: "体調管理", status: "active" },
         { id: "old-health-link", service: "health", display_label: "旧体調管理", status: "disabled" }
       ],
@@ -187,19 +186,22 @@ try {
     await page.locator('[data-view-identity="fixture-user"]').click();
     const detail = page.locator("#identity-detail");
     await detail.getByText("日記の既存連携").waitFor();
+    await detail.getByText("家計簿の既存連携").waitFor();
+    assert.equal(await detail.locator('[data-remove-link="household-link"]').textContent(), "連携解除");
+    assert.equal(await detail.getByRole("button", { name: /家計簿の鍵/ }).count(), 0);
     assert.equal(await detail.getByText("本人の端末").count(), 1);
     assert.equal(await detail.getByText(/体調管理/).count(), 0);
     await page.close();
   }
   {
     const page = await newPage();
-    await page.route('**/household/',route=>route.fulfill({contentType:'text/html',body:'<meta charset="utf-8"><title>家計簿</title>'}));
-    await page.goto(url+'#household-setup');await page.waitForURL('**/household/');
-    assert.equal(await page.title(),'家計簿');
+    const retiredUrl = url + "#household-setup";
+    await page.goto(retiredUrl); await ready(page);
+    assert.equal(page.url(), retiredUrl);
     await page.close();
   }
   assert.deepEqual(errors, []);
-  console.log("Security overview browser regressions passed (lazy reads, retries, retired Health links on desktop/mobile).");
+  console.log("Security overview browser regressions passed (lazy reads, retries, retired Health and Household controls).");
 } finally {
   await browser.close();
   await new Promise((resolve) => server.close(resolve));
