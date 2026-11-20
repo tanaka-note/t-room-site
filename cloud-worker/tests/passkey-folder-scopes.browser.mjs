@@ -51,6 +51,32 @@ try {
       assert.match(message, kind === "options" ? /再読み込み/ : /対応するブラウザ/);
       assert.doesNotMatch(message, /ID・パスワード/);
     }
+
+    await page.evaluate(() => {
+      globalThis.__passkeyCalls = 0;
+      globalThis.__keyStatusChecks = 0;
+      globalThis.__fixturePrf = crypto.getRandomValues(new Uint8Array(32));
+      globalThis.TRoomPasskeys = { ...TRoomPasskeys,
+        authenticate: async (service, choose, options) => {
+          if (service !== "cloud" || options.prepareCloudKeys !== true) throw new Error("Unexpected login flow");
+          __passkeyCalls++;
+          return { credentialId: "fixture", prfOutput: __fixturePrf, verified: { links: [] } };
+        },
+        api: async (path, body) => {
+          if (path !== "/tcloud/key-preparation" || body.credentialId !== "fixture" || body.action !== "status") throw new Error("Unexpected preparation request");
+          __keyStatusChecks++;
+          return { links: [], hasMember: true, memberVault: {}, recipients: { admin: [], folders: [] } };
+        }
+      };
+    });
+    await page.getByRole("button", { name: "パスキーでログイン", exact: true }).click();
+    const checkKeys = page.getByRole("button", { name: "鍵の受け取りを確認", exact: true });
+    await checkKeys.waitFor();
+    await page.locator("#login-passkey-status").waitFor();
+    assert.match(await page.locator("#login-passkey-status").textContent(), /ログイン済み.*管理者/);
+    await checkKeys.click();
+    await page.waitForFunction(() => !document.querySelector("#passkey-login").disabled);
+    assert.deepEqual(await page.evaluate(() => [__passkeyCalls, __keyStatusChecks, __fixturePrf.every(value => value === 0)]), [1, 2, true]);
     assert.deepEqual(errors, [], "startup/button binding must not reference deleted PW elements");
     await page.evaluate(() => {
       globalThis.__members = [

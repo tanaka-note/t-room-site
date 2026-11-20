@@ -6,6 +6,7 @@ const KNOWN_TABLES = new Set([
   "security_handoffs", "security_tcloud_client_vaults", "security_tcloud_key_envelopes",
   "security_active_sessions", "security_audit_events", "security_ai_budget_policies",
   "security_health_members", "security_health_config", "security_health_vaults", "security_health_grants",
+  "security_tcloud_admin_key_transfers",
   "security_runtime_state", "security_definition_events", "security_definition_updates", "security_audit_daily"
 ]);
 // Reviewed derived counts contain no Identity/link/credential/key references.

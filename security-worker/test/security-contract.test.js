@@ -225,7 +225,7 @@ test("Cloud Service Binding returns the aliased administrator wrap used by brows
   assert.match(cloud, /admin_wrapped_key AS adminWrappedKey/);
   assert.match(cloud, /adminWrappedKey: folder\.adminWrappedKey/);
   assert.doesNotMatch(cloud, /adminWrappedKey: folder\.admin_wrapped_key/);
-  assert.match(securityUi, /T-Cloudのフォルダ暗号鍵を読み込めませんでした。データを変更せず処理を中止しました。/);
+  assert.match(cloudClient, /TRoomCrypto\.unlockFolderAsAdmin\(target\.folder, privateKey\)/);
 });
 
 test("service links come from an explicit provider registry and never from free-form UI", () => {
@@ -408,7 +408,7 @@ test("all service passkey sessions carry revocable Security identifiers and vali
   assert.match(worker, /c\.status = 'active'[\s\S]*i\.status = 'active'[\s\S]*l\.status = 'active'/);
 });
 
-test("member registration remains retryable and primary-admin registration requires Cloud preparation", () => {
+test("invited credentials await approval while password recovery retains its separate Cloud preparation", () => {
   assert.match(client, /obtainPrfSafely/);
   assert.match(client, /prfPreparationFailed/);
   assert.match(worker, /UPDATE security_service_links SET status = 'active'.*service NOT IN \('cloud', 'health', 'ai', 'downloader', 'downloader2'\)/);
@@ -416,18 +416,16 @@ test("member registration remains retryable and primary-admin registration requi
   assert.match(worker, /security_setup_sessions/);
   assert.match(worker, /last_user_verification_at/);
   assert.match(worker, /security_tcloud_client_vaults/);
-  assert.match(securityUi, /日記・請求書のパスキー登録は完了しています。管理者の確認をお待ちください/);
   assert.match(securityHtml, /パスキーの登録が完了しました。/);
   assert.match(securityHtml, /管理者の確認後、利用できるようになります。しばらくお待ちください。/);
-  assert.match(securityUi, /T-Cloudの準備を再試行/);
+  assert.match(securityUi, /setup\.pendingApproval/);
+  assert.match(securityHtml, /id="invite-admin-login"/);
   assert.match(securityUi, /resumePrimaryAdminSetup/);
   assert.match(securityUi, /TRoomPasskeys\.obtainPrf\(setup\.credentialId\)/, "第一管理者の再開は既存credentialをWebAuthn getで再認証します");
   assert.match(securityUi, /第一管理者パスキー登録処理が未完了/);
   assert.doesNotMatch(securityUi, /if \(!setup\.prfEnabled\) throw/);
   assert.doesNotMatch(securityUi, /この端末では.*(?:非対応|対応していません)/);
-  assert.match(securityUi, /T-Cloudのパスキー利用準備は未確認/);
   assert.match(securityUi, /item\.prf_enabled \? "PRF確認済み" : "PRF未確認（現在のパスキーで再確認できます）"/);
-  assert.match(securityUi, /item\.prfEnabled \? "（PRF確認済み・T-Cloudの端末準備が未完了）" : "（T-Cloudのパスキー利用準備は未確認）"/);
   assert.match(securityHtml, /id="tcloud-setup-notice"/);
   assert.match(securityHtml, /セキュリティセンターを利用する/);
   assert.match(securityUi, /setup\/primary-admin\/verify-password/);

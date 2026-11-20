@@ -8,7 +8,7 @@ const [source, runtime] = await Promise.all([
 ]);
 
 assert.equal(runtime, source, "公開用とruntime用のCloudクライアントが一致していません。");
-assert.equal((source.match(/requirePasskeyPrf\(authentication\);/g) || []).length, 2,
+assert.equal((source.match(/requirePasskeyPrf\(authentication(?:, \{ allowUnprepared: true \})?\);/g) || []).length, 2,
   "初回ログインとsession再開が同じPRF判定を利用していません。");
 
 async function resumePasskeySession(accountId, prfOutput = null, returnedAccountId = accountId, chooseFromMultiple = false, cached = null, authenticated = true, vaultFails = false) {

@@ -500,6 +500,7 @@ export const SERVICES = {
     ],
     "knownTables": [
       "security_windows_authority_versions",
+      "security_tcloud_admin_key_transfers",
       "security_identities",
       "security_invitations",
       "security_credentials",
