@@ -152,3 +152,50 @@ test('a stale page cannot read, export, update, restore or clean up using anothe
     assert.equal((await f.chiharu.request('/api/data')).status,401);
   }finally{f.close();}
 });
+
+test('retiring the account preserves both households and rejects old cookies and handoffs', async () => {
+  const f = family();
+  const fresh = fixture('chiharu-admin', 'sample-chiharu');
+  const sql = readFileSync(new URL('../operations/retire-chiharu-account.sql', import.meta.url), 'utf8');
+  try {
+    fresh.env.DB = f.owner.env.DB;
+    await f.login();
+    assert.equal((await f.chiharu.mutate('transaction.save', entry('Retained fixture'))).status, 200);
+    const ownerState = await f.owner.state();
+    f.db.exec(`
+      INSERT INTO household_datasets(id, household_id, retired_at) VALUES ('retained', 'chiharu', CURRENT_TIMESTAMP);
+      INSERT INTO household_records VALUES ('retained', 'transactions', 'retained-entry', '{}');
+      INSERT INTO household_crypto_config VALUES ('chiharu', 'fixture-key', 'wrapped-fixture-key', '{}');
+      INSERT INTO household_crypto_vaults VALUES ('fixture-credential', 'sample-chiharu', '{}', 'iv', 'ciphertext');
+      INSERT INTO household_crypto_grants VALUES ('chiharu', 'fixture-credential', 'sample-chiharu', 'fixture-link', 'wrapped-fixture-grant');
+    `);
+    const tables = ['household_state', 'household_datasets', 'household_records', 'household_requests',
+      'household_crypto_config', 'household_crypto_vaults', 'household_crypto_grants'];
+    const snapshot = () => tables.map(table => f.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
+    const before = snapshot();
+    const oldAccount = f.db.prepare("SELECT * FROM household_accounts WHERE id='chiharu-admin'").get();
+    f.db.exec(sql);
+    f.db.exec(sql);
+
+    const provider = new household.SecurityIntegration({}, f.owner.env);
+    assert.deepEqual((await provider.listLinkTargets()).targets.map(target => target.accountId), ['owner', 'viewer']);
+    assert.deepEqual(await provider.describeAccount({ accountId: 'chiharu-admin' }), { valid: false });
+    assert.equal(await provider.getSessionRuntimeState({ serviceAccountId: 'chiharu-admin' }), null);
+    assert.equal((await fresh.request('/api/passkey/handoff', { handoffToken: 'fixture-handoff' })).status, 401);
+    for (const path of ['/api/session', '/api/data', '/api/backup', '/api/export.csv']) {
+      assert.equal((await f.chiharu.request(path)).status, 401, path);
+    }
+    assert.equal((await f.chiharu.request('/api/mutate', {})).status, 401);
+    assert.deepEqual(await f.owner.state(), ownerState);
+    assert.deepEqual((await f.viewer.state()).data, ownerState.data);
+    assert.deepEqual(snapshot(), before);
+    assert.deepEqual(f.db.prepare('PRAGMA foreign_key_check').all(), []);
+
+    f.db.prepare('INSERT INTO household_accounts (id, display_name, role, household_id, session_version) VALUES (?, ?, ?, ?, ?)')
+      .run(oldAccount.id, oldAccount.display_name, oldAccount.role, oldAccount.household_id, oldAccount.session_version + 1);
+    assert.equal((await f.chiharu.request('/api/session')).status, 401);
+  } finally {
+    fresh.close();
+    f.close();
+  }
+});
