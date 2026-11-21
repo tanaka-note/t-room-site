@@ -384,6 +384,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
           loadImage: (image, photo, kind) => photoImages.bind(image, photo, kind, { eager: true }),
           releaseImage: image => photoImages.release(image),
           prefetch: photo => photoImages.prefetch(photo),
+          isCached: (photo, kind) => photoImages.isCached(photo, kind),
           downloadPhoto: photoImages.download,
           canNavigate: () => !state.photoDeleteBusy
         });

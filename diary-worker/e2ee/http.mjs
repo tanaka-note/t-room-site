@@ -87,7 +87,7 @@ export async function handleEncryptedApi(request,env,url,path,session,{json,read
   }
   const media=await handleEncryptedMedia(request,env,url,path,actor,{json,readJson,readMultipartForm,store,photoSession});
   if(media)return photoAsset?visible(media):media;
-  if(path==='/api/encryption/profile'&&request.method==='GET')return json({protocol:DIARY_READER_PROTOCOL,profile:{actor,household:session.activeHouseholdId,displayName:session.accountName,directory:bundle.directory,epochs:directory.epochs,vault:bundle.vault,grants:bundle.grants,recordGrants:bundle.recordGrants,webAuthnCredentialId:bundle.webAuthnCredentialId},minimumGeneration:bundle.generation,rekeyRequired:bundle.rekeyRequired,rollout:{phase:control.phase,generation:control.generation}});
+  if(path==='/api/encryption/profile'&&request.method==='GET')return json({protocol:DIARY_READER_PROTOCOL,profile:{actor,household:session.activeHouseholdId,displayName:session.accountName,directory:bundle.directory,epochs:directory.epochs,vault:bundle.vault,grants:bundle.grants,recordGrants:bundle.recordGrants,webAuthnCredentialId:bundle.webAuthnCredentialId},minimumGeneration:bundle.generation,rekeyRequired:bundle.rekeyRequired,rollout:{phase:control.phase,generation:control.generation,photoReadsEncryptedOnly:env.DIARY_PHOTO_ENCRYPTED_READS_ONLY==='true'}});
   if(path==='/api/encryption/investment'&&request.method==='GET') {
     if(!actor.canViewInvestment)fail(403,'AccessDenied');
     const row=await store.get(investmentScope(investmentHousehold(directory)));
