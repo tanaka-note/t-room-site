@@ -18,7 +18,7 @@ export async function executeExportWorkflow(env, payload, step) {
   if(payload.checkpoint&&(service!=='diary'||!/^[a-f0-9-]{36}$/.test(payload.checkpoint)))throw new Error('InvalidBackupJob');
   // Avoid starting all database exports at once. Each job has durable retries
   // and an independent outcome; no SQL/body/URL is returned to Workflow state.
-  const offset = Object.keys(DATABASES).indexOf(service) * 30;
+  const offset = payload.checkpoint ? 0 : Object.keys(DATABASES).indexOf(service) * 30;
   if (offset) await step.sleep('stagger-exports', `${offset} seconds`);
   const runId = await step.do('run-id', () => crypto.randomUUID());
   await step.do('started', async () => {

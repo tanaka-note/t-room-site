@@ -195,6 +195,16 @@ for(const mode of ['success','success-audit-unavailable','retention-failed'])tes
   }finally{source.close();}
 });
 
+test('manual Diary checkpoints start immediately while scheduled backups keep their stagger',async()=>{
+  const firstStep=new Error('First export step reached'),sleeps=[];
+  const step={async sleep(name,delay){sleeps.push([name,delay]);},async do(){throw firstStep;}};
+  const job={service:'diary',scheduledTime:now};
+  await assert.rejects(executeExportWorkflow({}, {...job,checkpoint:crypto.randomUUID()},step),firstStep);
+  assert.deepEqual(sleeps,[]);
+  await assert.rejects(executeExportWorkflow({},job,step),firstStep);
+  assert.deepEqual(sleeps,[['stagger-exports','300 seconds']]);
+});
+
 test('queued AI and Downloader exports stop before opening any Workflow step', async () => {
   const step = { do() { assert.fail('retired job reached an export or audit step'); },
     sleep() { assert.fail('retired job was deferred'); } };
