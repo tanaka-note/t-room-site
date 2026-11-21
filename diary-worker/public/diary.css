@@ -2465,3 +2465,8 @@ mark.diary-search-match {
 }
 
 /* Keep the login action identical to the billing passkey button. */
+
+#existing-photo-migration-progress {
+  width: 100%;
+  accent-color: var(--teal);
+}

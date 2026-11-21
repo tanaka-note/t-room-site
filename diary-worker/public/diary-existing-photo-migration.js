@@ -15,6 +15,7 @@ const phase = (status,message) => Object.assign(new Error(message),{status});
 const retryDelays=[1000,2000,4000,8000,16000,32000,60000];
 const retryableConflicts=new Set(['PhotoMigrationBusy','PhotoMigrationLeaseLost','PhotoMigrationEntriesChanged']);
 const requiresAuthentication=error=>[401,403,428].includes(error.status);
+const transientRestoreError=error=>error instanceof TypeError||error.name==='TimeoutError'||[408,429,500,502,503,504].includes(error.status);
 
 export function migrationTransport(nativeFetch,token) {
   return async (path,{method='GET',body,signal,binary=false,optional=false,keepalive=false}={}) => {
@@ -39,6 +40,19 @@ function waitForRetry(delay,signal) {
     const timer=setTimeout(()=>{signal.removeEventListener('abort',abort);resolve();},delay);
     signal.addEventListener('abort',abort,{once:true});
   });
+}
+
+async function retryRestoreRequest(operation,signal,onRetry) {
+  for(const delay of [1000,2000,4000,8000,0]) {
+    signal.throwIfAborted();
+    try {return await operation();}
+    catch(error) {
+      signal.throwIfAborted();
+      if(!delay||!transientRestoreError(error))throw error;
+      onRetry();
+      await waitForRetry(delay,signal);
+    }
+  }
 }
 
 async function withMigrationLease(send,signal,operation) {
@@ -185,11 +199,12 @@ export async function preparePhotoMigrationRecord({row,advanceSource,media,kit,p
   return next;
 }
 
-export async function checkPhotoMigrationRestore({report,run,sequence,directory,privateKey,kit,send,signal}) {
+export async function checkPhotoMigrationRestore({report,run,sequence,directory,privateKey,kit,send,signal,onProgress=()=>{}}) {
   if(report.directoryGeneration!==directory.generation||report.sequence!==sequence)throw new Error('PhotoMigrationRestoreMismatch');
   const prefix=`${PHOTO_PREFIX}migration/${run}/`;
   const photos=new Map(report.media.filter(row=>row.original_key.startsWith(prefix)).map(row=>[row.id,row]));
   const restoredDescriptors=new Map(), testedHouseholds=new Set();
+  onProgress({phase:'photoProof',completed:0,total:photos.size});
   let after='';
   do {
     signal.throwIfAborted();
@@ -205,32 +220,49 @@ export async function checkPhotoMigrationRestore({report,run,sequence,directory,
       for(const kind of kinds) {
         const check=await open(scopeKey(kit,mediaBinding(row)),parts[kind].check,partBinding(row,run,kind));
         if(!testedHouseholds.has(row.household)) {
-          const reply=await send(`/proof-target/${row.id}/${kind}`,{binary:true});
-          const blob=await decryptPhotoPart(await reply.arrayBuffer(),photo.crypto,row.household,row.id,kind);
+          const buffer=await send(`/proof-target/${row.id}/${kind}`,{binary:true});
+          const blob=await decryptPhotoPart(buffer,photo.crypto,row.household,row.id,kind);
           if(await hash(blob)!==check.sourceDigest)throw new Error('PhotoMigrationRestoreMismatch');
         }
       }
       testedHouseholds.add(row.household);
       restoredDescriptors.set(item.id,photo.crypto);
+      onProgress({phase:'photoProof',completed:restoredDescriptors.size,total:photos.size});
     }
     after=page.next;
   } while(after);
   if(!photos.size||photos.size!==restoredDescriptors.size)throw new Error('PhotoMigrationRestoreMismatch');
-  for(const row of report.records) {
+  const records=report.records.map(row=>({row,affected:row.photoIds.filter(id=>photos.has(id))})).filter(({affected})=>affected.length);
+  onProgress({phase:'recordProof',completed:0,total:records.length});
+  let completed=0;
+  for(const {row,affected} of records) {
     signal.throwIfAborted();
-    const affected=row.photoIds.filter(id=>photos.has(id));
-    if(!affected.length)continue;
     const key=await recordKey(kit,privateKey,row);
     const {entry}=await open(key,row.envelope,{...bindingOf(row),kind:'document'});
     const refs=new Map(entry.photos.map(photo=>[photo.id,photo]));
     for(const id of affected)if(photos.get(id).household!==row.household||!equal(refs.get(id)?.crypto,restoredDescriptors.get(id)))
       throw new Error('PhotoMigrationRestoreMismatch');
+    onProgress({phase:'recordProof',completed:++completed,total:records.length});
   }
+}
+
+const restoreStages={
+  applying:['切替の準備中'],
+  backup:['復元用バックアップを準備中'],
+  restoring:['バックアップを復元中','行'],
+  photoProof:['写真を照合中','枚'],
+  recordProof:['日記と写真の参照を照合中','件'],
+  finish:['切替を確定中'],
+};
+function formatDuration(seconds) {
+  const rounded=Math.ceil(seconds);
+  const minutes=Math.floor(rounded/60);
+  return minutes ? `${minutes}分${rounded%60}秒` : `${rounded}秒`;
 }
 
 const labels={idle:'移行を開始できます。',photos:'写真を暗号化し、保存先から読み戻して確認しています。',
   records:'日記と写真の参照を照合しています。',ready:'準備が完了しました。次の復元確認が終わるまで日記の利用が一時停止します。',
-  checking:'復元確認中です。日記の利用は一時停止しています。',done:'両世帯の切替が完了しました。'};
+  checking:'復元確認の再開待ちです。日記の利用は一時停止しています。',done:'両世帯の切替が完了しました。'};
 const messages={PhotoMigrationBusy:'別の画面で移行中です。その画面を閉じた場合は約2分後に再開できます。',
   PhotoMigrationLeaseLost:'移行の操作権限が切れました。保存済みの進捗から再開できます。',
   PhotoMigrationEntriesChanged:'日記に変更があります。再開すると参照を照合し直します。',
@@ -245,6 +277,7 @@ export function mountPhotoMigration({authenticate=()=>globalThis.TRoomPasskeys.a
   const loginButton=document.querySelector('#passkey-login'), loginMessage=document.querySelector('#login-message');
   const start=box.querySelector('#existing-photo-migration-start'), stop=box.querySelector('#existing-photo-migration-stop');
   const status=box.querySelector('[role=status]'), summary=box.querySelector('#existing-photo-migration-summary');
+  const progress=box.querySelector('#existing-photo-migration-progress'), timing=box.querySelector('#existing-photo-migration-timing');
   const send=migrationTransport(fetch.bind(globalThis),crypto.randomUUID());
   let unlocked, active, last;
   document.querySelector('#boot-view').hidden=true;
@@ -260,6 +293,7 @@ export function mountPhotoMigration({authenticate=()=>globalThis.TRoomPasskeys.a
   const render=value=>{
     last=value;
     if(value.house)showCounts(value.house);
+    progress.hidden=timing.hidden=true;
     status.textContent=labels[value.phase]||labels.idle;
     if(value.phase==='done')status.textContent+=` 旧写真の保持期限は ${new Date(value.retainedUntil).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo'})}（日本時間）です。`;
     start.textContent=value.phase==='idle'?'両世帯の移行を開始':value.phase==='ready'?'復元確認と切替を開始':'保存済みの進捗から再開';
@@ -304,8 +338,52 @@ export function mountPhotoMigration({authenticate=()=>globalThis.TRoomPasskeys.a
     const epoch=unlocked,canApply=last.phase==='ready',canCheck=canApply||last.phase==='checking';
     let run=last.run,retry=0,retryUntil=0,checkingCutover=false;
     start.disabled=true;stop.hidden=false;
+    let currentProgress,stageStart,stageStatus;
+    const paintProgress=()=>{
+      if(!currentProgress)return;
+      const {phase,completed=0,total=0}=currentProgress;
+      const elapsed=(performance.now()-stageStart)/1000;
+      let detail=`経過 ${formatDuration(elapsed)}`;
+      if(total) {
+        progress.max=total;
+        progress.value=completed;
+        const percent=Math.floor(completed*100/total),unit=restoreStages[phase][1];
+        detail=`${completed.toLocaleString()} / ${total.toLocaleString()} ${unit}（${percent}%）　${detail}`;
+        if(completed>0&&elapsed>=3&&completed<total)detail+=`　残り約 ${formatDuration(elapsed*(total-completed)/completed)}`;
+      } else progress.removeAttribute('value');
+      timing.textContent=detail;
+    };
+    const showProgress=update=>{
+      const changed=currentProgress?.phase!==update.phase;
+      currentProgress=update;
+      if(changed) {
+        const [caption]=restoreStages[update.phase];
+        stageStart=performance.now();
+        stageStatus=caption+'です。'+(update.phase==='applying'?'':'日記の利用は一時停止しています。');
+        status.textContent=stageStatus;
+        progress.setAttribute('aria-label',caption);
+        progress.hidden=timing.hidden=false;
+      }
+      if(changed||update.total===update.completed)paintProgress();
+    };
+    const progressTimer=setInterval(paintProgress,1000);
     const runAttempt=async (job,api,attemptSignal)=>{
       if(run&&job.run!==run)throw phase(409,'PhotoMigrationGenerationChanged');
+      const restoreRequest=async (path,options)=>{
+        let retrying=false;
+        try {
+          return await retryRestoreRequest(async ()=>{
+            const timeout=AbortSignal.timeout(options?.binary?120_000:60_000);
+            const response=await api(path,{...options,signal:AbortSignal.any([attemptSignal,timeout])});
+            return options?.binary?response.arrayBuffer():response;
+          },attemptSignal,()=>{
+            retrying=true;
+            status.textContent=`${stageStatus} 通信エラーから自動で再試行しています。`;
+          });
+        } finally {
+          if(retrying)status.textContent=stageStatus;
+        }
+      };
       run=job.run;
       if(job.phase==='photos') {
         render(await api('/status'));
@@ -333,36 +411,55 @@ export function mountPhotoMigration({authenticate=()=>globalThis.TRoomPasskeys.a
         }
         if(!canApply) {render(await api('/status'));return;}
         checkingCutover=true;
-        job=await api('/apply',{method:'POST',body:{}});
+        showProgress({phase:'applying'});
+        try {job=await api('/apply',{method:'POST',body:{}});}
+        catch(error) {
+          if(!transientRestoreError(error))throw error;
+          job=await restoreRequest('/status');
+          if(job.phase!=='checking'||job.run!==run)throw error;
+        }
       }
       if(job.phase==='checking') {
         if(!canCheck) {render(await api('/status'));return;}
         checkingCutover=true;
         render({...last,...job});
-        const checkpoint=await api('/backup',{method:'POST',body:{}}),query='/backup?'+new URLSearchParams({checkpoint:checkpoint.checkpoint});
-        let manifest;
-        for(let attempt=0;attempt<200;attempt++) {
-          manifest=await api(query);if(manifest.ready)break;
-          await waitForRetry(2000,attemptSignal);
+        showProgress({phase:'backup'});
+        // The checkpoint id is derived from the fixed rollout generation and sequence.
+        const checkpoint=await restoreRequest('/backup',{method:'POST',body:{}});
+        const query='/backup?'+new URLSearchParams({checkpoint:checkpoint.checkpoint});
+        const deadline=performance.now()+15*60_000;
+        let manifest,delay=2000;
+        while(performance.now()<deadline) {
+          manifest=await restoreRequest(query);
+          if(manifest.ready)break;
+          showProgress({phase:'backup'});
+          await waitForRetry(delay,attemptSignal);
+          delay=Math.min(8000,delay*2);
         }
         if(!manifest?.ready)throw new Error('PhotoMigrationBackupPending');
+        showProgress({phase:'restoring'});
         const object=value=>({body:new Blob([unb64(value.bytes,24_000_000)]).stream(),customMetadata:{sha256:value.sha256}});
         let parts;
         const bucket={get:async key=>{
           if(key===checkpoint.key)return object(manifest);
           if(!parts)parts=(await new Response(object(manifest).body.pipeThrough(new DecompressionStream('gzip'))).json()).parts;
           const index=parts.findIndex(part=>part.key===key);if(index<0)throw new Error('PhotoMigrationRestoreMismatch');
-          return object(await api(query+'&part='+index));
+          return object(await restoreRequest(query+'&part='+index));
         }};
         const {restoreDiaryCheckpoint}=await import('./diary-restore.mjs');
-        const report=await restoreDiaryCheckpoint({bucket,key:checkpoint.key,trust:epoch.trust,includeRecovery:true,
+        const report=await restoreDiaryCheckpoint({bucket,key:checkpoint.key,trust:epoch.trust,includeRecovery:true,onProgress:showProgress,
           wasmUrl:new URL('./vendor/sql-wasm.wasm',import.meta.url).href});
         const recovered=await openRecoveryEnvelope({packet:report.recoveryEnvelope,recoveryPrivateKey:epoch.privateKey,
           anchor:epoch.trust.anchor,minimumGeneration:epoch.directory.generation});
         recovered.authority=null;
-        try {await checkPhotoMigrationRestore({report,...epoch,kit:recovered,run:job.run,sequence:job.sequence,send:api,signal:attemptSignal});}
+        try {await checkPhotoMigrationRestore({report,...epoch,kit:recovered,run:job.run,sequence:job.sequence,
+          send:restoreRequest,signal:attemptSignal,onProgress:showProgress});}
         finally {recovered.scopeKeys.clear();}
-        await api('/finish',{method:'POST',body:await signed({run:job.run,sequence:report.sequence,checkpoint:checkpoint.checkpoint,sha256:report.archiveSha256},epoch.signingKey)});
+        showProgress({phase:'finish'});
+        const proof=await signed({run:job.run,sequence:report.sequence,checkpoint:checkpoint.checkpoint,sha256:report.archiveSha256},epoch.signingKey);
+        const finished=await restoreRequest('/finish',{method:'POST',body:proof});
+        render({...last,...finished,locked:false});
+        return;
       }
       render(await api('/status'));
     };
@@ -385,10 +482,14 @@ export function mountPhotoMigration({authenticate=()=>globalThis.TRoomPasskeys.a
         }
       }
     }catch(error) {
+      progress.hidden=timing.hidden=true;
       if(requiresAuthentication(error)){lock();box.hidden=true;login.hidden=false;loginMessage.textContent='パスキーでログインすると、保存済みの進捗から再開できます。';}
       else status.textContent=error.name==='AbortError'?'中断しました。保存済みの進捗から再開できます。':
-        messages[error.message]||(error.message==='PhotoMigrationBackupPending'?'復元用バックアップを準備中です。再開して確認してください。':'移行を中断しました。保存済みの進捗を確認して再開してください。');
+        error.message==='PhotoMigrationBackupPending'?'復元用バックアップを準備中です。再開して確認してください。':
+        checkingCutover&&transientRestoreError(error)?`${stageStatus} 通信エラーが続きました。保存済みの進捗から再開してください。`:
+        messages[error.message]||'移行を中断しました。保存済みの進捗を確認して再開してください。';
     }finally {
+      clearInterval(progressTimer);
       await release();active=null;stop.hidden=true;start.disabled=false;
     }
   });

@@ -8,6 +8,8 @@ import { createEncryptionCheckpoint, readEncryptionCheckpoint } from './checkpoi
 const kinds = ['original', 'display', 'thumbnail'];
 const limits = {original:64, display:8, thumbnail:2};
 const leaseMs = 120_000;
+const proofPageSize = 200;
+const proofPageBytes = 256 * 1024;
 export const PHOTO_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[45][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value);
 const digest = value => typeof value === 'string' && /^[\w-]{43}$/.test(value);
@@ -22,19 +24,22 @@ const needsRecord = `(${affected} OR ${affectedDraft})`;
 const jobOf = db => db.prepare('SELECT * FROM diary_photo_migration_job WHERE id=1').first();
 const sequenceOf = async db => (await db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM diary_e2ee_changes').first()).seq;
 const publicJob = job => job ? {run:job.run,phase:job.phase,sequence:job.sequence,retainedUntil:job.retained_until} : {phase:'idle'};
-const targetKey = (job,row,kind) => `${PHOTO_PREFIX}migration/${job.run}/${row.household}/${row.id}/${kind}`;
+// The complete prefix exceeds D1's 50-byte LIKE/GLOB pattern limit.
+const migrationPrefix = job => `${PHOTO_PREFIX}migration/${job.run}/`;
+const targetKey = (job,row,kind) => `${migrationPrefix(job)}${row.household}/${row.id}/${kind}`;
+const heldByAnotherPage = (job,lease) => Boolean(job?.lease && job.lease!==lease && job.lease_until>Date.now());
 
 async function snapshot(env,job,lease) {
   const households = ['tanaka-household','chiharu-household'];
   if(['checking','done'].includes(job?.phase)) {
     const {results} = await env.DB.prepare(`SELECT m.household,COUNT(*) AS total FROM diary_e2ee_media m
-      JOIN diary_photo_migration_items i ON i.id=m.id WHERE i.verified=7 AND m.original_key LIKE ? GROUP BY m.household`)
-      .bind(`${PHOTO_PREFIX}migration/${job.run}/%`).all();
-    return {...publicJob(job), house:households.map(id=>({id,total:results.find(row=>row.household===id)?.total||0,verified:results.find(row=>row.household===id)?.total||0}))};
+      JOIN diary_photo_migration_items i ON i.id=m.id WHERE i.verified=7 AND instr(m.original_key,?)=1 GROUP BY m.household`)
+      .bind(migrationPrefix(job)).all();
+    return {...publicJob(job),locked:heldByAnotherPage(job,lease),house:households.map(id=>({id,total:results.find(row=>row.household===id)?.total||0,verified:results.find(row=>row.household===id)?.total||0}))};
   }
   const {results} = await env.DB.prepare(`SELECT m.household,COUNT(*) AS total, SUM(CASE WHEN i.verified=7 THEN 1 ELSE 0 END) AS verified
     FROM diary_e2ee_media m LEFT JOIN diary_photo_migration_items i ON i.id=m.id WHERE ${oldPhoto} GROUP BY m.household`).all();
-  return {...publicJob(job),locked:Boolean(job?.lease && job.lease!==lease && job.lease_until>Date.now()),house:households.map(id=>({id,total:results.find(row=>row.household===id)?.total||0,verified:results.find(row=>row.household===id)?.verified||0}))};
+  return {...publicJob(job),locked:heldByAnotherPage(job,lease),house:households.map(id=>({id,total:results.find(row=>row.household===id)?.total||0,verified:results.find(row=>row.household===id)?.verified||0}))};
 }
 
 function assertJob(job,directory,control,lease) {
@@ -131,7 +136,7 @@ async function applyCandidate(db,job,lease) {
       SELECT 1 FROM diary_photo_migration_records p WHERE p.id=r.id AND p.revision=r.revision))
     AND NOT EXISTS(SELECT 1 FROM diary_photo_migration_records p LEFT JOIN diary_e2ee_records r ON r.id=p.id WHERE r.id IS NULL OR r.revision<>p.revision)`;
   const pick = field => `(SELECT json_extract(payload,'$.${field}') FROM diary_photo_migration_records WHERE id=diary_e2ee_records.id)`;
-  const prefix = `${PHOTO_PREFIX}migration/${job.run}/`;
+  const prefix = migrationPrefix(job);
   await db.batch([
     db.prepare(`UPDATE diary_e2ee_control SET phase=CASE WHEN ${guard} THEN 'rekeying' ELSE 'invalid-photo-cutover' END,
       generation=generation+1,evidence=json_set(COALESCE(evidence,'{}'),'$.photoMigration',?) WHERE id=1`)
@@ -316,8 +321,17 @@ export async function handlePhotoMigration(request,env,url,path,{session,actor,b
     if(path==='/proof-rows'&&method==='GET') {
       const after=url.searchParams.get('after')||'';
       const {results}=await db.prepare(`SELECT m.id, m.household, i.parts FROM diary_e2ee_media m JOIN diary_photo_migration_items i ON i.id=m.id
-        WHERE m.id>? AND m.original_key LIKE ? ORDER BY m.id LIMIT 20`).bind(after,`${PHOTO_PREFIX}migration/${job.run}/%`).all();
-      return json({rows:results,next:results.length===20?results.at(-1).id:null});
+        WHERE m.id>? AND instr(m.original_key,?)=1 ORDER BY m.id LIMIT ?`).bind(after,migrationPrefix(job),proofPageSize+1).all();
+      const rows=[],encoder=new TextEncoder();
+      let bytes=0;
+      for(const row of results) {
+        const size=encoder.encode(JSON.stringify(row)).byteLength+1;
+        if(rows.length===proofPageSize||bytes+size>proofPageBytes)break;
+        rows.push(row);
+        bytes+=size;
+      }
+      if(results.length&&!rows.length)fail('PhotoMigrationProofTooLarge',413);
+      return json({rows,next:rows.length<results.length?rows.at(-1).id:null});
     }
     const proofTarget=path.match(/^\/proof-target\/([a-f0-9-]{36})\/(original|display|thumbnail)$/);
     if(proofTarget&&method==='GET') {

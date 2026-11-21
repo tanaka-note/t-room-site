@@ -23,7 +23,7 @@ const f=await systemFixture({phase:'legacy',recoveryExtractable:true}), owner=f.
 const trust=await publicTrustPackage(f.configuration),db=f.db.sqlite,media=new Map(),writes=new Map();
 const kinds=['original','display','thumbnail'],root=resolve(import.meta.dirname,'../../public');
 const source=new Map(),photoIds=[crypto.randomUUID(),crypto.randomUUID()];
-let origin, server, browser, lostPut=false, lostCheckpoint=false, copies=0, deleteCalls=0;
+let origin, server, browser, lostPut=false, lostCheckpoint=false, lostFinish=false, copies=0, deleteCalls=0;
 const errors=[];
 const digest=(algorithm,body)=>createHash(algorithm).update(body).digest();
 const migrationRoot='/diary/api/encryption/photo-migration';
@@ -78,13 +78,15 @@ try {
     },
     async delete(){deleteCalls++;throw new Error('Deletion must never run');},
   };
-  const bucket=new Bucket();f.env.BACKUP=bucket;
+  const bucket=new Bucket(),checkpoints=new Set();f.env.BACKUP=bucket;
   f.env.D1_BACKUPS={create:async value=>{
+    if(checkpoints.has(value.id))throw new Error('Duplicate fixture checkpoint');
     copies++;
     const mock=exportFetcher(db,'diary',{migration:'diary-e2ee-v1'});
     await saveExport({...exportEnv('diary',f.db,bucket),SECURITY_DB:f.central},'diary',Date.now(),{checkpoint:value.params.checkpoint,fetcher:mock.fetcher,sleep:async()=>{}});
+    checkpoints.add(value.id);
     return {id:value.id};
-  }};
+  },get:id=>({status:async()=>({status:checkpoints.has(id)?'complete':'unknown'})})};
   f.env.ASSETS={fetch:async request=>{
     const path=new URL(request.url).pathname, file=resolve(root,path==='/'?'index.html':path.slice(1));
     assert.ok(file.startsWith(root+sep));
@@ -101,6 +103,9 @@ try {
       if(response.ok&&req.method==='PUT'&&!lostPut){lostPut=true;res.writeHead(503,{'Content-Type':'application/json'});res.end('{"error":"SyntheticResponseLoss"}');return;}
       if(response.ok&&url.pathname===migrationRoot+'/backup'&&req.method==='POST'&&!lostCheckpoint){
         lostCheckpoint=true;res.writeHead(503,{'Content-Type':'application/json'});res.end('{"error":"SyntheticResponseLoss"}');return;
+      }
+      if(response.ok&&url.pathname===migrationRoot+'/finish'&&!lostFinish){
+        lostFinish=true;res.writeHead(503,{'Content-Type':'application/json'});res.end('{"error":"SyntheticResponseLoss"}');return;
       }
       const headers=Object.fromEntries(response.headers);
       if(response.headers.getSetCookie().length)headers['set-cookie']=response.headers.getSetCookie();
@@ -127,7 +132,6 @@ try {
     assert.equal(await page.evaluate(()=>window.testPrf.every(value=>value===0)),true);
     return {context,page};
   }
-  const run=async()=>{const client=await login();await client.page.click('#existing-photo-migration-start');return client;};
   const first=await login();
   const downloads=new Set(),uploads=new Set();
   const downloadWave=Promise.withResolvers(),uploadWave=Promise.withResolvers(),stopUploads=Promise.withResolvers();
@@ -238,8 +242,21 @@ try {
   await second.page.getByRole('button',{name:'復元確認と切替を開始'}).click();
   await second.page.getByText(/準備が完了しました。/).waitFor();
   assert.equal(db.prepare('SELECT phase FROM diary_e2ee_control').get().phase,'encrypted');
-  await second.page.getByRole('button',{name:'復元確認と切替を開始'}).click();
-  await second.page.getByText('移行を中断しました。保存済みの進捗を確認して再開してください。').waitFor();
+  const pauseProof=Promise.withResolvers();
+  await second.page.route('**/photo-migration/proof-rows?*',async route=>{
+    await pauseProof.promise;
+    await route.abort().catch(()=>{});
+  });
+  try {
+    const proofRequest=second.page.waitForRequest('**/photo-migration/proof-rows?*');
+    await second.page.getByRole('button',{name:'復元確認と切替を開始'}).click();
+    await second.page.getByText(/通信エラーから自動で再試行しています/).waitFor();
+    await proofRequest;
+    assert.match(await second.page.locator('#existing-photo-migration-timing').textContent(),/0 \/ 2 枚（0%）/);
+    await second.page.click('#existing-photo-migration-stop');
+    await second.page.getByText('中断しました。保存済みの進捗から再開できます。').waitFor();
+    await second.page.locator('#existing-photo-migration-stop').waitFor({state:'hidden'});
+  } finally {pauseProof.resolve();}
   assert.equal(lostCheckpoint,true);assert.equal(writes.size,6);assert.ok([...writes.values()].every(count=>count===1));
   const paused=db.prepare('SELECT * FROM diary_e2ee_control').get();assert.equal(paused.phase,'paused');assert.ok(JSON.parse(paused.evidence).photoMigration);
   const image=await f.worker.fetch(new Request(`${origin}/diary/api/photos/${photoIds[1]}/original`,{headers:{Cookie:f.cookie('chiharu-admin')}}),f.env,f.ctx);
@@ -247,9 +264,32 @@ try {
   await assert.rejects(saveExport({...exportEnv('diary',f.db,bucket),SECURITY_DB:f.central},'diary',Date.now(),
     {fetcher:async()=>{throw new Error('ordinary export must not run while checking');}}),/PhotoMigrationChecking/);
   await second.context.close();
-  const before=Date.now(),third=await run();
+  const before=Date.now(),third=await login();
+  await third.page.getByText(/復元確認の再開待ちです/).waitFor();
+  const secondSample=Promise.withResolvers();
+  const secondPhoto=[...photoIds].sort().at(-1);
+  let proofAttempts=0,partAttempts=0;
+  await third.page.route('**/photo-migration/proof-rows?*',async route=>{
+    if(++proofAttempts===1)await route.fulfill({status:503,json:{error:'PhotoMigrationUnavailable'}});
+    else await route.continue();
+  });
+  await third.page.route('**/photo-migration/backup?*',async route=>{
+    if(new URL(route.request().url()).searchParams.has('part')&&++partAttempts===1)
+      await route.fulfill({status:503,json:{error:'PhotoMigrationUnavailable'}});
+    else await route.continue();
+  });
+  await third.page.route(`**/photo-migration/proof-target/${secondPhoto}/original`,async route=>{
+    await secondSample.promise;
+    await route.continue().catch(()=>{});
+  });
+  try {
+    await third.page.getByRole('button',{name:'保存済みの進捗から再開'}).click();
+    await third.page.getByText(/1 \/ 2 枚（50%）.*残り約/).waitFor();
+    assert.equal(await third.page.getByRole('progressbar',{name:'写真を照合中'}).isVisible(),true);
+  } finally {secondSample.resolve();}
   await third.page.getByText(/両世帯の切替が完了しました。/).waitFor();
-  assert.equal(copies,2);assert.equal(deleteCalls,0);assert.equal(media.size,12);
+  assert.equal(proofAttempts,2);assert.ok(partAttempts>1);assert.equal(lostFinish,true);
+  assert.equal(copies,1);assert.equal(deleteCalls,0);assert.equal(media.size,12);
   for(const [key,bytes] of source)assert.deepEqual(media.get(key).bytes,bytes);
   const job=db.prepare('SELECT * FROM diary_photo_migration_job').get();assert.equal(job.phase,'done');
   assert.ok(job.retained_until>=before+PHOTO_RETENTION_MS&&job.retained_until<=Date.now()+PHOTO_RETENTION_MS);
