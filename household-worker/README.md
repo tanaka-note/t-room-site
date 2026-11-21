@@ -114,6 +114,17 @@ Householdの `node --test test/encryption.test.js test/key-management.test.js`�
 
 共有用でも検索・集計・書き出しができる。APIは読み取り用と変更用を分け、共有用からの明細・口座・月末残高・分類の変更と復元を403で拒否する。画面でボタンを隠すだけの制御にしない。
 
+### 独立管理用アカウント `chiharu-admin` の削除
+
+本番への適用は承認された保守作業として行う。各SQLは該当Workerの設定を指定し、`wrangler d1 execute` の `--remote --file` で対象DBに個別に適用する。
+
+1. 対象が `household_accounts.id='chiharu-admin'`、`household_id='chiharu'`、`role='owner'` の組であることを読み取りで確認し、再作成に備えて現在の `session_version` を記録する。`security-db` では `service='household' AND service_account_id='chiharu-admin'` の連携とセッションの件数を確認する。両DBの復旧点を確認し、作業中は対象への連携追加や招待発行を止める。
+2. `household-db` に [`retire-chiharu-account.sql`](operations/retire-chiharu-account.sql) を適用し、対象アカウントが0件になったことを確認する。この時点から家計簿は対象の既存セッションと新規ログインを拒否する。
+3. `security-db` に [`unlink-retired-household-account.sql`](../security-worker/operations/unlink-retired-household-account.sql) を適用する。対象の全連携と引換トークンを削除し、セッションを終了する。対象との連携があったIdentityの有効な招待は連携の組が変わるため取り消す。必要な場合は第一管理者が残りの連携で再発行する。中断した場合は家計簿アカウントを削除した状態で手順3を再実行できる。
+4. 対象のアカウント、連携、未終了セッションが0件であることを確認する。`owner` と `viewer` の家計簿アクセスを確認し、保全した `chiharu` の家計データと鍵の復旧情報は通常のバックアップに含める。共通Identityと登録済みパスキーは他サービスでも引き続き使える。
+
+利用を再開する場合は、対象の旧連携が0件であることを確認してから、保全済みの `chiharu` に以前より大きい `session_version` でアカウントを作成する。第一管理者が現在承認済みのIdentityに新規連携を設定する。暗号化済みの家計で新しい連携への鍵委譲が必要な場合は、既存の管理者復旧手順を使う。
+
 ## 保存と更新
 
 - `household_accounts`: サービスアカウントとrole・有効状態・session version・所属`household_id`。アプリのバックアップ復元の対象外。

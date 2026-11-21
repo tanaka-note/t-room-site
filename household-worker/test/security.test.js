@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync,readdirSync} from 'node:fs';
-import {randomBytes} from 'node:crypto';
+import {createHash,randomBytes} from 'node:crypto';
 import {bundle,d1,fixture,household} from './fixture.js';
 const directory=new URL('../../security-worker/migrations/',import.meta.url),migration='0026_household_service.sql';
-const security=await bundle(new URL('../../security-worker/src/index.js',import.meta.url),'\nexport {validateServiceLinks,validatePasskeySession,passkeyRollingSession};');
+const security=await bundle(new URL('../../security-worker/src/index.js',import.meta.url),'\nexport {validateServiceLinks,validatePasskeySession,passkeyRollingSession,redeemHandoff};');
 function db(){const sqlite=new DatabaseSync(':memory:');for(const file of readdirSync(directory).filter(n=>n.endsWith('.sql')&&n<migration).sort())sqlite.exec(readFileSync(new URL(file,directory),'utf8'));return sqlite;}
 function apply(sqlite){sqlite.exec(readFileSync(new URL(migration,directory),'utf8'));}
 function seed(sqlite){sqlite.exec(`INSERT INTO security_identities(id,display_name,status,is_security_admin) VALUES ('primary-admin','Sample Owner','active',1),('sample-viewer','Sample Viewer','active',0);
@@ -116,4 +116,75 @@ test('sharing migration preserves every row and revocation stays specific to eac
   assert.deepEqual(await valid(),[true,false,false],'a fresh link cannot revive sessions bound to the disabled link');
   assert.equal(sqlite.prepare("SELECT status FROM security_service_links WHERE id='old-editor'").get().status,'disabled');
  }finally{f.close();sqlite.close();}
+});
+
+test('retiring a household removes every link to its account and invalidates only the affected access', async () => {
+  const sqlite = db();
+  try {
+    seed(sqlite);
+    for (const file of readdirSync(directory).filter(name => name.endsWith('.sql') && name >= migration).sort()) {
+      sqlite.exec(readFileSync(new URL(file, directory), 'utf8'));
+    }
+    const primary = 'primary-admin';
+    const member = 'sample-viewer';
+    const credential = 'dmlld2VyLWNyZWRlbnRpYWw';
+    const insertLink = sqlite.prepare(`
+      INSERT INTO security_service_links (id, identity_id, service, service_account_id, display_label, status)
+      VALUES (?, ?, ?, ?, 'Fixture', ?)`);
+    insertLink.run('primary-old', primary, 'household', 'chiharu-admin', 'disabled');
+    insertLink.run('primary-pending', primary, 'household', 'chiharu-admin', 'pending');
+    insertLink.run('target', member, 'household', 'chiharu-admin', 'active');
+    insertLink.run('viewer-link', member, 'household', 'viewer', 'active');
+    insertLink.run('diary-link', member, 'diary', 'chiharu-admin', 'active');
+    sqlite.exec(`
+      INSERT INTO security_identities (id, display_name, status) VALUES ('unrelated', 'Unrelated', 'active');
+      INSERT INTO security_invitations (id, identity_id, token_hash, link_set_hash, expires_at) VALUES
+        ('affected-invite', 'sample-viewer', 'affected-hash', 'fixture', 4102444800),
+        ('unrelated-invite', 'unrelated', 'unrelated-hash', 'fixture', 4102444800);
+    `);
+    const env = { DB: d1(sqlite), PASSKEY_ENABLED: 'true' };
+    const insertHandoff = sqlite.prepare(`
+      INSERT INTO security_handoffs (id, token_hash, identity_id, service_link_id, credential_id, expires_at, session_epoch)
+      VALUES (?, ?, ?, ?, ?, 4102444800, 1)`);
+    const cases = [
+      ['target', 'household', 'chiharu-admin', 'owner'],
+      ['viewer-link', 'household', 'viewer', 'viewer'],
+      ['diary-link', 'diary', 'chiharu-admin', 'admin']
+    ];
+    const sessions = cases.map(([serviceLinkId, service, serviceAccountId, role]) => ({
+      serviceLinkId, service, serviceAccountId, role, identityId: member, credentialId: credential,
+      sessionIdHash: randomBytes(32).toString('base64url'), sessionEpoch: 1, sessionVersion: '1:1',
+      startedAt: new Date().toISOString(), expiresAt: Math.floor(Date.now() / 1000) + 43200, ttlSeconds: 43200
+    }));
+    const sessionValid = async session => (await security.passkeyRollingSession(env, { ...session, action: 'read' })).valid;
+    for (const session of sessions) {
+      assert.equal((await security.passkeyRollingSession(env, { ...session, action: 'register' })).valid, true);
+      const link = session.serviceLinkId;
+      const hash = createHash('sha256').update(`token-${link}`).digest('base64url');
+      insertHandoff.run(`handoff-${link}`, hash, member, link, credential);
+    }
+    const protectedRows = () => ['security_identities', 'security_credentials', 'security_tcloud_key_envelopes']
+      .map(table => sqlite.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
+    const before = protectedRows();
+    const sql = readFileSync(new URL('../../security-worker/operations/unlink-retired-household-account.sql', import.meta.url), 'utf8');
+    sqlite.exec(sql);
+    sqlite.exec(sql);
+
+    assert.deepEqual(protectedRows(), before);
+    assert.equal(sqlite.prepare("SELECT count(*) AS n FROM security_service_links WHERE service='household' AND service_account_id='chiharu-admin'").get().n, 0);
+    assert.equal(sqlite.prepare("SELECT count(*) AS n FROM security_audit_events WHERE event_type='service_link_removed' AND service_account_id='chiharu-admin'").get().n, 3);
+    assert.equal(sqlite.prepare("SELECT status FROM security_invitations WHERE id='affected-invite'").get().status, 'revoked');
+    assert.equal(sqlite.prepare("SELECT status FROM security_invitations WHERE id='unrelated-invite'").get().status, 'active');
+    assert.equal(sqlite.prepare('SELECT end_reason FROM security_active_sessions WHERE session_id_hash=?').get(sessions[0].sessionIdHash).end_reason, 'service_link_disabled');
+    assert.deepEqual(await Promise.all(sessions.map(sessionValid)), [false, true, true]);
+    assert.equal(await security.redeemHandoff(env, 'token-target', 'household'), null);
+    assert.equal((await security.redeemHandoff(env, 'token-viewer-link', 'household')).serviceLinkId, 'viewer-link');
+    assert.equal((await security.redeemHandoff(env, 'token-diary-link', 'diary')).serviceLinkId, 'diary-link');
+    assert.deepEqual(sqlite.prepare('PRAGMA foreign_key_check').all(), []);
+
+    insertLink.run('new-link', member, 'household', 'chiharu-admin', 'active');
+    assert.equal(await sessionValid(sessions[0]), false);
+  } finally {
+    sqlite.close();
+  }
 });
