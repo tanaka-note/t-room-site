@@ -138,7 +138,7 @@ try{
     while (!reads && performance.now() < deadline) await new Promise(requestAnimationFrame);
     const first=reads;loader.reset();for(const resolve of done)resolve();await new Promise(requestAnimationFrame);const stale=host.querySelectorAll('img[src]').length;host.remove();return {max,first,stale};
   });
-  assert.ok(bounds.first>0&&bounds.first<40);assert.ok(bounds.max<=8);assert.equal(bounds.stale,0);
+  assert.ok(bounds.first>0&&bounds.first<40);assert.ok(bounds.max<=14);assert.equal(bounds.stale,0);
 
   const priority=await page.evaluate(async()=>{
     const {createPhotoImages}=await import('/diary/diary-photo-images.js');
@@ -199,7 +199,7 @@ try{
     releaseAlbumThumbnail();
     await tile.locator('img[data-photo-state="ready"]').waitFor();
     await placeholder.waitFor({state:'hidden'});
-    assert.equal(requests.slice(firstAlbumRequest).some(({path}) => path.endsWith('/display')), false);
+    assert.equal(requests.slice(firstAlbumRequest).some(({path})=>path.endsWith('/display')),false);
   } finally {
     releaseAlbumThumbnail();
   }
@@ -208,14 +208,15 @@ try{
     const album = page.locator('#camera-roll-dialog');
     await page.click('[data-close-dialog="camera-roll-dialog"]');
     await album.waitFor({ state: 'hidden' });
-    const photos = Array.from({ length: 24 }, (_, index) => seedLegacyPhoto(`album-${index}.png`));
+    const photos = Array.from({ length: 44 }, (_, index) => seedLegacyPhoto(`album-${index}.png`));
     await writer.sync();
     await writer.commitAction('seed-album-prefetch', {
       entryDate: '2026-11-17', title: 'Album scroll fixture', tags: [], photos,
       content: photos.map(({ id }) => `[[写真:${id}]]`).join('\n')
     }, { state: 'published' });
     await page.click('#camera-roll-button');
-    await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid img').length === 26);
+    await page.waitForFunction(() => document.querySelectorAll('#camera-roll-grid img').length === 46);
+    await album.evaluate(dialog=>{dialog.querySelector('#camera-roll-grid').style.gridTemplateColumns='repeat(2,1fr)';});
     const { near, far } = await album.evaluate(dialog => {
       const { bottom } = dialog.getBoundingClientRect();
       const cards = [...dialog.querySelectorAll('.camera-roll-item')].map(card => ({
@@ -223,11 +224,11 @@ try{
         distance: card.querySelector('img').getBoundingClientRect().top - bottom
       }));
       return {
-        near: cards.findLast(({ distance }) => distance > 50 && distance < 680)?.id,
-        far: cards.find(({ distance }) => distance > 760)?.id
+        near: cards.findLast(({ distance }) => distance > 800 && distance < 1800)?.id,
+        far: cards.find(({ distance }) => distance > 2060)?.id
       };
     });
-    assert.ok(near && far, 'the album contains offscreen photos inside and beyond the 720px margin');
+    assert.ok(near && far, 'the album contains offscreen photos inside and beyond the 2000px margin');
     const loaded = id => album.locator(`[data-photo-id="${id}"] img[src^="blob:"]`);
     await loaded(near).waitFor({ state: 'attached', timeout: 8000 });
     assert.equal(await album.evaluate(dialog => dialog.scrollTop), 0, 'a nearby thumbnail loads before scrolling');

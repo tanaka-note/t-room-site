@@ -29,11 +29,14 @@ test('encrypted fixed exports include same-generation keys and restore over 10,0
     const store=createStore(f.db,registry),c=new EncryptedDiaryClient({profile,anchor:f.configuration.anchor,transport:{valid:async()=>true,timestamp:async()=>new Date().toISOString(),snapshot:(h,since)=>store.snapshot(profile.actor,h,since),mutation:(proposal,operation)=>store.mutation(profile.actor,proposal,operation)}});
     await c.unlock(new Uint8Array(user.prf));const post=(await c.saveEntry({...entry(),title:'ENCRYPTED_EXPORT_PRIVATE_CANARY'})).entry;await c.setFavorite(post.id,true);
     f.db.sqlite.exec("WITH RECURSIVE n(v) AS (SELECT 1 UNION ALL SELECT v+1 FROM n WHERE v<12000) INSERT INTO diary_e2ee_changes(id,household,revision,deleted) SELECT '1','tanaka-household',v,0 FROM n");
+    f.db.sqlite.exec(readFileSync(new URL('../../diary-worker/e2ee/photo-reference-index.sql',import.meta.url),'utf8'));
     const env={...exportEnv('diary',f.db,bucket),SECURITY_DB:f.central};
     const mock=exportFetcher(f.db.sqlite,'diary',{migration:DIARY_ENCRYPTED_MIGRATION});
     const saved=await saveExport(env,'diary',now,{fetcher:mock.fetcher,sleep});assert.match(saved.daily,/^v10\/daily/);
     const manifest=await readExportManifest(bucket,saved.daily,'diary');
     assert.equal(manifest.payload.tables.diary_e2ee_changes.rowCount,12002);
+    assert.equal(manifest.payload.schema.some(row=>row.name.startsWith('diary_photo_refs')),false);
+    assert.equal(Object.hasOwn(manifest.payload.tables,'diary_photo_refs'),false);
     assert.equal(Object.hasOwn(manifest.payload.tables,'diary_entries'),false);
     assert.ok(manifest.payload.keyMetadata.vaults[user.recipientId]);
     assert.deepEqual(await openTrust(user.prf,user.recipientId,manifest.payload.keyMetadata.vaults[user.recipientId].trust),trust);
@@ -65,7 +68,8 @@ test('encrypted fixed exports include same-generation keys and restore over 10,0
     await assert.rejects(saveExport(env,'diary',tomorrow,{fetcher:changed.fetcher,sleep}));
     assert.deepEqual([...bucket.objects.keys()].sort(),beforeKeys);
     f.central.sqlite.exec('UPDATE security_diary_key_config SET generation=1');
-    f.db.sqlite.exec('DROP TRIGGER diary_plaintext_entry_insert');
+    f.db.sqlite.exec('DROP TRIGGER diary_photo_refs_record_update');
+    await assert.rejects(saveExport(env,'diary',tomorrow,{fetcher:mock.fetcher,sleep}),/SchemaReviewRequired/);
     await assert.rejects(saveExport(env,'diary',tomorrow,{fetcher:mock.fetcher,sleep}),/SchemaReviewRequired/);
     c.lock();
   }finally{restored?.db.close();securityRestore?.db.close();await f.close();}

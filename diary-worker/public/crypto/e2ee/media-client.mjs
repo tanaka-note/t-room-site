@@ -5,9 +5,9 @@ import {PHOTO_CONTEXT_HEADER, PHOTO_FORMAT_HEADER, PHOTO_EXPIRY_HEADER, validPho
 
 const abortPhoto = () => new DOMException('Aborted', 'AbortError');
 const failPhoto = (status,message) => Object.assign(new Error(message),{status});
-const MAX_PHOTO_CACHE_BYTES = 24 * 1024 * 1024;
+const MAX_PHOTO_CACHE_BYTES = 64 * 1024 * 1024;
 
-export function createEncryptedMediaClient(client,request,nativeFetch,{photoContext,onPhotoExpiry=()=>{}}) {
+export function createEncryptedMediaClient(client,request,nativeFetch,{photoContext,onPhotoExpiry=()=>{},encryptedOnly=false}) {
   const pending=new Map(),cache=new Map(),loads=new Map(),controllers=new Set();
   let bytes=0,closed=false;
   const binding=(session,id,epoch)=>({household:client.household,scope:preferencesScope(client.household,client.actor.accountId),id,revision:1,epoch,kind:'photo-staging',sourceId:session});
@@ -54,24 +54,28 @@ export function createEncryptedMediaClient(client,request,nativeFetch,{photoCont
     if(!validPhotoEtag(etag)||blob.size>MAX_PHOTO_CACHE_BYTES)return;
     cache.set(identity,{etag,blob});
     bytes+=blob.size;
-    while(cache.size>64||bytes>MAX_PHOTO_CACHE_BYTES) {
+    while(cache.size>192||bytes>MAX_PHOTO_CACHE_BYTES) {
       const oldest=cache.keys().next().value;
       bytes-=cache.get(oldest).blob.size;
       cache.delete(oldest);
     }
   }
 
-  async function requestPhoto(photo,kind,generation,household,identity,signal) {
+  const cacheIdentity=(photo,kind,generation=client.generation,household=client.household)=>
+    JSON.stringify([generation,household,photo.id,kind,photo.crypto||null]);
+  const isPhotoCached=(photo,kind)=>!closed&&!client.closed&&!client.switching&&cache.has(cacheIdentity(photo,kind));
+
+  async function requestPhoto(photo,kind,generation,household,identity,signal,priority) {
     const context=await photoContext();
     assertPhotoRead(generation,signal);
     if(!context)throw failPhoto(401,'PhotoSessionChanged');
     assertReferenced(photo.id);
     const snapshot=client.records,sequence=client.sequence;
     const cached=cache.get(identity);
-    const format=photo.crypto?'encrypted':'legacy';
+    const format=encryptedOnly||photo.crypto?'encrypted':'legacy';
     const headers=new Headers({[PHOTO_CONTEXT_HEADER]:context,[PHOTO_FORMAT_HEADER]:format});
     if(cached)headers.set('If-None-Match',cached.etag);
-    const response=await nativeFetch(`/diary/api/photos/${photo.id}/${kind}`,{credentials:'same-origin',cache:'no-store',headers,signal});
+    const response=await nativeFetch(`/diary/api/photos/${photo.id}/${kind}`,{credentials:'same-origin',cache:'no-store',headers,signal,priority});
     try {
       assertPhotoRead(generation,signal);
       if(!response.ok&&response.status!==304)throw failPhoto(response.status,'PhotoReadFailed');
@@ -85,7 +89,7 @@ export function createEncryptedMediaClient(client,request,nativeFetch,{photoCont
       if(response.status===304) {
         if(!cached||etag!==cached.etag)throw failPhoto(409,'PhotoResponseMismatch');
         blob=cached.blob;
-      } else if(photo.crypto) {
+      } else if(format==='encrypted') {
         const raw=await response.arrayBuffer();
         assertPhotoRead(generation,signal);
         blob=await decryptPhotoPart(raw,photo.crypto,household,photo.id,kind);
@@ -105,16 +109,17 @@ export function createEncryptedMediaClient(client,request,nativeFetch,{photoCont
     }
   }
 
-  async function read(photo,kind,{signal}={}) {
+  async function read(photo,kind,{signal,priority='auto'}={}) {
     const generation=client.generation,household=client.household;
     assertPhotoRead(generation,signal);
-    const identity=JSON.stringify([generation,household,photo.id,kind,photo.crypto||null]);
+    if(encryptedOnly&&!photo.crypto)throw failPhoto(409,'PhotoFormatChanged');
+    const identity=cacheIdentity(photo,kind,generation,household);
     let load=loads.get(identity);
     if(!load) {
       const controller=new AbortController();
       load={controller,readers:0,finished:false};
       controllers.add(controller);
-      load.promise=requestPhoto(photo,kind,generation,household,identity,controller.signal).finally(()=>{
+      load.promise=requestPhoto(photo,kind,generation,household,identity,controller.signal,priority).finally(()=>{
         load.finished=true;
         controllers.delete(controller);
         if(loads.get(identity)===load)loads.delete(identity);
@@ -145,6 +150,9 @@ export function createEncryptedMediaClient(client,request,nativeFetch,{photoCont
         load.controller.abort();
       }
     }
+  }
+  async function prefetch(photo,kind,{signal}={}) {
+    if(!isPhotoCached(photo,kind))await read(photo,kind,{signal,priority:'low'});
   }
   const fetchMedia=async(input,init={})=>{
     const url=new URL(input,location.href);
@@ -186,5 +194,5 @@ export function createEncryptedMediaClient(client,request,nativeFetch,{photoCont
     }catch(error){if(error.name==='AbortError')throw error;return Response.json({error:error.message==='PhotoEncryptionRequired'?'写真を選び直してください。本文は保持されています。':'写真を安全に保存できませんでした。編集内容を保管して再試行してください。'},{status:error.status||500});}
   };
   function reset(){for(const controller of controllers)controller.abort();controllers.clear();pending.clear();cache.clear();loads.clear();bytes=0;}
-  return {api,fetch:fetchMedia,read,reset,retire:id=>request(`/media/${id}`,{method:'DELETE'}),close:()=>{closed=true;reset();}};
+  return {api,fetch:fetchMedia,read,prefetch,isPhotoCached,reset,retire:id=>request(`/media/${id}`,{method:'DELETE'}),close:()=>{closed=true;reset();}};
 }

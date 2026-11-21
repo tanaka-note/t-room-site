@@ -66,6 +66,7 @@ async function createEncryptedDiary(session,authentication) {
   navigation=await createPrivateNavigation(client);
   let photoBinding;
   media=createEncryptedMediaClient(client,request,nativeFetch,{
+    encryptedOnly:initial.rollout.photoReadsEncryptedOnly===true,
     photoContext:()=>{
       if(photoBinding?.generation!==client.generation)photoBinding={generation:client.generation,
         context:photoReadContext(liveSession.keySession,client.household,initial.rollout.generation,client.directory.generation)};
@@ -123,6 +124,8 @@ async function createEncryptedDiary(session,authentication) {
         return Response.json({error:status===500?'日記を準備できませんでした。もう一度お試しください。':error.message},{status});
       }finally{if(path==='/logout')await lock({logout:true});}
     },fetch:async(...args)=>{try{const response=await media.fetch(...args);if(response.status===401||client.closed)expire();return response;}catch(error){if(error.status===401||client.closed)expire();throw error;}},readPhoto:async(...args)=>{try{return await media.read(...args);}catch(error){if(error.status===401||client.closed)expire();throw error;}},
+    prefetchPhoto:async(...args)=>{try{await media.prefetch(...args);}catch(error){if(error.status===401||client.closed)expire();throw error;}},
+    isPhotoCached:(...args)=>media.isPhotoCached(...args),
     presented:()=>releaseFirstView(),
     get storage(){return navigation.storage;},get history(){return navigation.history;},tagRoute:tag=>navigation.tagRoute(tag),tagValue:segment=>navigation.tagValue(segment),flush:()=>navigation.flush(),
     lock

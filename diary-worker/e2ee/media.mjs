@@ -20,9 +20,25 @@ async function upload(env,actor,id) {
   const row=await env.DB.prepare('SELECT * FROM diary_e2ee_uploads WHERE id=? AND household=? AND account_id=?').bind(id,actor.activeHouseholdId,actor.accountId).first();
   if(!row)fail(404,'UploadNotFound');return row;
 }
+const canReadReference=(actor,row)=>canRead(actor,{...row,retainedFor:JSON.parse(row.retained_for)});
 async function referenced(env,id,actor=null) {
-  const rows=(await env.DB.prepare(`SELECT r.household,r.state,r.author,r.retained_for FROM diary_e2ee_records r,json_each(r.photo_ids) p WHERE p.value=?`).bind(id).all()).results;
-  return actor?rows.some(row=>canRead(actor,{...row,retainedFor:JSON.parse(row.retained_for)})):rows.length>0;
+  const {results}=await env.DB.prepare(`SELECT r.household,r.state,r.author,r.retained_for FROM diary_e2ee_records r,json_each(r.photo_ids) p WHERE p.value=?`).bind(id).all();
+  return actor?results.some(row=>canReadReference(actor,row)):results.length>0;
+}
+async function readablePhoto(env,id,actor) {
+  try {
+    const {results}=await env.DB.prepare(`SELECT m.original_key,m.display_key,m.thumbnail_key,r.household,r.state,r.author,r.retained_for
+      FROM diary_photo_refs i JOIN diary_e2ee_records r ON r.id=i.record_id
+      JOIN diary_e2ee_media m ON m.id=i.photo_id
+      WHERE i.photo_id=? AND m.household=? AND m.status<>'retiring'
+        AND EXISTS(SELECT 1 FROM json_each(r.photo_ids) p WHERE p.value=i.photo_id)`).bind(id,actor.activeHouseholdId).all();
+    return results.find(row=>canReadReference(actor,row));
+  } catch(error) {
+    // Old backups and databases being prepared can still read canonical records.
+    if(!/no such table: diary_photo_refs\b/i.test(error.message))throw error;
+  }
+  const row=await env.DB.prepare("SELECT original_key,display_key,thumbnail_key FROM diary_e2ee_media WHERE id=? AND household=? AND status<>'retiring'").bind(id,actor.activeHouseholdId).first();
+  if(row&&await referenced(env,id,actor))return row;
 }
 function manage(actor){if(!actor.canManageEntries)fail(403,'AccessDenied');}
 
@@ -64,15 +80,16 @@ export async function handleEncryptedMedia(request,env,url,path,actor,{json,read
   const root='/api/encryption/uploads',method=request.method;
   const asset=path.match(/^\/api\/photos\/([0-9a-f-]{36})\/(original|display|thumbnail)$/);
   if(asset&&method==='GET') {
-    const row=await env.DB.prepare('SELECT * FROM diary_e2ee_media WHERE id=? AND household=?').bind(asset[1],actor.activeHouseholdId).first();
-    if(!row||row.status==='retiring'||!await referenced(env,row.id,actor))fail(404,'PhotoNotFound');
-    const kind=asset[2];
-    const encrypted=row.original_key.startsWith(PHOTO_PREFIX);
+    const row=await readablePhoto(env,asset[1],actor);
+    if(!row)fail(404,'PhotoNotFound');
+    const kind=asset[2],key=row[`${kind}_key`];
+    const encrypted=key.startsWith(PHOTO_PREFIX);
+    if(env.DIARY_PHOTO_ENCRYPTED_READS_ONLY==='true'&&!encrypted)fail(409,'PhotoFormatChanged');
     const format=encrypted?'encrypted':'legacy';
     if(photoSession&&request.headers.get(PHOTO_FORMAT_HEADER)!==format)fail(409,'PhotoFormatChanged');
     const validator=photoSession&&kind!=='original'?request.headers.get('If-None-Match'):null;
     const options=validPhotoEtag(validator)?{onlyIf:new Headers({'If-None-Match':validator})}:undefined;
-    const object=await env.MEDIA.get(row[`${kind}_key`], options);if(!object)fail(404,'PhotoNotFound');
+    const object=await env.MEDIA.get(key, options);if(!object)fail(404,'PhotoNotFound');
     const headers=new Headers({'Content-Type':encrypted||kind==='original'?'application/octet-stream':'image/webp',
       'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
     if(photoSession) {

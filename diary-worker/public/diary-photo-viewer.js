@@ -1,5 +1,5 @@
 // Photo presentation owns image loading and gestures; session, history and uploads stay with the caller.
-export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, canDelete = () => false, canNavigate = () => true, loadImage = (image, photo, kind) => { image.src = photo[`${kind}Url`]; }, releaseImage = () => {}, prefetch = () => {}, downloadPhoto = null, createImage = () => new Image() }) {
+export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, canDelete = () => false, canNavigate = () => true, loadImage = (image, photo, kind) => { image.src = photo[`${kind}Url`]; }, releaseImage = () => {}, prefetch = () => {}, isCached = () => false, downloadPhoto = null, createImage = () => new Image() }) {
   let imageRequestId = 0;
   let imageLoad = null;
   const fullscreenErrorMessage = 'この環境では全画面に切り替えられません。';
@@ -221,7 +221,8 @@ export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, c
     preview.id = "photo-viewer-image";
     preview.draggable = false;
     preview.alt = photo.fileName || "日記の写真";
-    preview.hidden = !photo.thumbnailUrl;
+    const usePreview = Boolean(photo.thumbnailUrl && !isCached(photo, "display"));
+    preview.hidden = !usePreview;
 
     nodes.image.replaceWith(preview);
     nodes.image = preview;
@@ -264,7 +265,7 @@ export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, c
         failed();
       }
     };
-    if (photo.thumbnailUrl) loadImage(preview, photo, "thumbnail");
+    if (usePreview) loadImage(preview, photo, "thumbnail");
     loadImage(image, photo, "display");
   }
 
@@ -279,8 +280,10 @@ export function createPhotoViewer({ nodes, selection, formatDate, formatBytes, c
     nodes.file.textContent = `${photo.fileName} / ${formatBytes(photo.originalSize)}${dimensions}`;
     if (nodes.deleteButton) nodes.deleteButton.hidden = !canDelete(photo);
     nodes.downloadOriginal.href = downloadPhoto ? "#" : `${photo.originalUrl}?download=1`;
-    prefetch(selection.photos[selection.index - 1]);
-    prefetch(selection.photos[selection.index + 1]);
+    for (let distance = 1; distance <= 4; distance++) {
+      prefetch(selection.photos[selection.index + distance]);
+      prefetch(selection.photos[selection.index - distance]);
+    }
   }
 
   function movePhotoViewer(direction) {

@@ -3,7 +3,8 @@
 export function createPhotoImages(runtime) {
   const tasks=new Map(),urls=new Map(),downloads=new Set();
   const observers = new Map();
-  const limits={selected:2,visible:6,nearby:2};
+  const prefetchMargin=2000;
+  const limits={selected:2,visible:8,nearby:6};
   const running={selected:new Set(),visible:new Set(),nearby:new Set()};
   let frame=0,generation=0;
   function observerFor(root) {
@@ -22,7 +23,7 @@ export function createPhotoImages(runtime) {
         }
       }
       schedule();
-    }, { root, rootMargin: '720px 0px' });
+    }, { root, rootMargin: `${prefetchMargin}px 0px` });
     observers.set(root, observer);
     return observer;
   }
@@ -42,24 +43,27 @@ export function createPhotoImages(runtime) {
   if(runtime)mutations.observe(document.body,{subtree:true,childList:true});
   function schedule(){if(!frame)frame=requestAnimationFrame(()=>{frame=0;pump();});}
   function distanceFromViewport(task) {
-    if (!task.image) return 1000;
-    const rect = task.image.getBoundingClientRect();
+    const element=task.image;
+    if (!element) return 500;
+    if (!element.isConnected) return Infinity;
+    const rect = element.getBoundingClientRect();
+    if (!rect.width||!rect.height) return Infinity;
     const root = task.root?.getBoundingClientRect();
     const top = Math.max(root?.top ?? 0, 0);
     const bottom = Math.min(root?.bottom ?? innerHeight, innerHeight);
     return Math.max(top - rect.bottom, rect.top - bottom, 0);
   }
   function laneFor(task,distance) {
-    return task.eager?'selected':distance===0?'visible':'nearby';
+    return task.eager?'selected':task.image&&distance===0?'visible':'nearby';
   }
   function pump(){
     if(document.hidden)return;
     const candidates=[...tasks.values()]
-      .filter(task=>!task.started&&(!task.readyAt||task.readyAt<=performance.now())&&(task.eager||task.near)&&(!task.image||task.image.isConnected))
+      .filter(task=>!task.started&&(!task.readyAt||task.readyAt<=performance.now())&&(task.eager||task.near!==false)&&(!task.image||task.image.isConnected))
       .map(task => ({ task, distance: distanceFromViewport(task) }))
-      .filter(({ task, distance }) => !task.visibleOnly || distance === 0);
+      .filter(({ task, distance }) => (task.eager||distance<=prefetchMargin)&&(!task.visibleOnly||distance===0));
     candidates.sort((a, b) => Number(b.task.eager) - Number(a.task.eager)
-      || Number(a.distance > 0) - Number(b.distance > 0)
+      || Number(laneFor(a.task,a.distance)==='nearby') - Number(laneFor(b.task,b.distance)==='nearby')
       || Number(Boolean(a.task.visibleOnly)) - Number(Boolean(b.task.visibleOnly))
       || a.distance - b.distance);
     if(running.visible.size>=limits.visible&&candidates.some(({task,distance})=>laneFor(task,distance)==='visible')) {
@@ -73,30 +77,37 @@ export function createPhotoImages(runtime) {
     for(const {task,distance} of candidates) {
       const lane=laneFor(task,distance);
       if(running[lane].size>=limits[lane])continue;
+      if(lane==='nearby'&&(running.selected.size||running.visible.size>=4))continue;
       const version=generation;
       const controller=new AbortController();
       task.started=true;
       task.controller=controller;
       running[lane].add(task);
-      runtime.readPhoto(task.photo,task.kind,{signal:controller.signal}).then(blob=>{
+      const options={signal:controller.signal,priority:lane==='nearby'?'low':'high'};
+      const load=task.image||!runtime.prefetchPhoto
+        ? runtime.readPhoto(task.photo,task.kind,options)
+        : runtime.prefetchPhoto(task.photo,task.kind,options);
+      load.then(blob=>{
         if(version!==generation||controller.signal.aborted||task.image&&!task.image.isConnected)return;
         if(task.image){
           const url=URL.createObjectURL(blob),old=urls.get(task.image);if(old)URL.revokeObjectURL(old);
-          urls.set(task.image,url);task.image.src=url;task.loaded=true;
+          urls.set(task.image,url);
+          if(lane!=='nearby')task.image.loading='eager';
+          task.image.src=url;task.loaded=true;
         }
       }).catch(error=>{
         if(error.name==='AbortError'||controller.signal.aborted||version!==generation)return;
         if(task.attempts++<2&&(!error.status||error.status===408||error.status===429||error.status>=500)&&!/Cipher|OperationError|Key|Session|Grant/.test(error.name+' '+error.message)){
           task.started=false;task.readyAt=performance.now()+500*task.attempts;setTimeout(schedule,500*task.attempts);
         }else{
-          tasks.delete(task.image||task);task.observer?.unobserve(task.image);
+          tasks.delete(task.image||task.key);task.observer?.unobserve(task.image);
           task.image?.dispatchEvent(new Event('error'));
         }
       }).finally(()=>{
         running[lane].delete(task);
-        if(version===generation&&tasks.get(task.image||task)===task) {
+        if(version===generation&&tasks.get(task.image||task.key)===task) {
           if(task.preempted){task.started=false;task.preempted=false;}
-          else if(task.started&&!task.loaded){tasks.delete(task.image||task);task.observer?.unobserve(task.image);}
+          else if(task.started&&!task.loaded){tasks.delete(task.image||task.key);task.observer?.unobserve(task.image);}
         }
         schedule();
       });
@@ -107,7 +118,7 @@ export function createPhotoImages(runtime) {
     if(!runtime||photo.previewUrl&&!photo[`${kind}Url`]){image.src=photo[`${kind}Url`]||photo.previewUrl;return;}
     image.decoding='async';
     const observer = observerFor(root);
-    const task={image,photo,kind,eager,root,visibleOnly,observer,near:!observer,started:false,attempts:0};
+    const task={image,photo,kind,eager,root,visibleOnly,observer,near:undefined,started:false,attempts:0};
     tasks.set(image,task);observer?.observe(image);schedule();
   }
   function release(image) {
@@ -118,8 +129,11 @@ export function createPhotoImages(runtime) {
     revokeImageUrl(image);
   }
   function prefetch(photo,kind='display'){
-    if(!runtime||!photo)return;
-    const task={photo,kind,eager:false,near:true,started:false,attempts:0};tasks.set(task,task);schedule();
+    if(!runtime||!photo||runtime.isPhotoCached?.(photo,kind))return;
+    const key=`${photo.id}:${kind}`;
+    if(tasks.has(key))return;
+    tasks.set(key,{key,photo,kind,eager:false,near:true,started:false,attempts:0});
+    schedule();
   }
   async function download(photo){
     const version=generation,blob=await runtime.readPhoto(photo,'original');if(version!==generation)return;
@@ -150,5 +164,5 @@ export function createPhotoImages(runtime) {
     }
     suspended = [];
   });
-  return {bind,release,prefetch,download:runtime?download:null,reset,setRuntime:value=>{reset();runtime=value;if(runtime)mutations.observe(document.body,{subtree:true,childList:true});}};
+  return {bind,release,prefetch,isCached:(photo,kind)=>Boolean(runtime?.isPhotoCached?.(photo,kind)),download:runtime?download:null,reset,setRuntime:value=>{reset();runtime=value;if(runtime)mutations.observe(document.body,{subtree:true,childList:true});}};
 }

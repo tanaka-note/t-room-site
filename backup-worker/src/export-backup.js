@@ -53,7 +53,17 @@ async function schemaMetadata(db, service, spec) {
     if ([...actual].sort().join(',') !== [...expected].sort().join(',')) throw new Error('SchemaReviewRequired');
     return { name: t.name, columns: t.columns, sourceColumns: actual.join(',') };
   });
-  const schema = results.at(-1).results;
+  let schema = results.at(-1).results;
+  if (service === 'diary') {
+    // The lookup table is rebuilt from signed records, never restored as data.
+    const referenceRows = schema.filter(row => row.name.startsWith('diary_photo_refs') || row.tbl_name === 'diary_photo_refs');
+    if (referenceRows.length) {
+      const shape = referenceRows.map(row => [row.type, row.name, row.tbl_name, row.sql.replace(/\r\n?/g,'\n')]);
+      if (await digest(new TextEncoder().encode(JSON.stringify(shape))) !== '4f9279260a16324060c6a7da5655a17d16d6e1f295c4e80d4e66ded5e4715610')
+        throw new Error('SchemaReviewRequired');
+      schema = schema.filter(row => !referenceRows.includes(row));
+    }
+  }
   if([BILLING_ENCRYPTED_MIGRATION,SECURITY_BILLING_MIGRATION].includes(spec.migration))await assertArchiveSchema(service,spec.migration,schema);
   else if([DIARY_ENCRYPTED_MIGRATION,SECURITY_DIARY_MIGRATION].includes(spec.migration)||service==='diary'&&schema.some(row=>row.name==='diary_e2ee_control'))await assertEncryptedSchema(service,schema);
   else await assertSchema(service, schema);

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {createHash} from 'node:crypto';
+import {readFileSync} from 'node:fs';
 import {encryptPhotoParts,decryptPhotoPart,photoHeader,PHOTO_PREFIX} from '../../e2ee/photo-crypto.mjs';
 import {createEncryptedMediaClient} from '../../e2ee/media-client.mjs';
 import {PHOTO_CONTEXT_HEADER, PHOTO_FORMAT_HEADER, photoReadContext} from '../../e2ee/session.mjs';
@@ -93,6 +94,9 @@ test('real upload adapter: mixed photos, immutable legacy objects, retries, old 
       assert.equal(bodies,before.bodies,'a matching validator uses the memory blob after authorizing it');
       assert.ok(requests.at(-1).headers.has('If-None-Match'));
     }
+    const warmedRequests=requests.length;
+    await media.prefetch(photo,'thumbnail');
+    assert.equal(requests.length,warmedRequests,'a speculative read for a warm photo sends no request');
     const oldThumb=f.r2.get(oldKeys[2]);
     f.r2.set(oldKeys[2],{bytes:new TextEncoder().encode('Updated legacy thumbnail')});
     assert.equal(await (await media.read(old,'thumbnail')).text(),'Updated legacy thumbnail');
@@ -178,4 +182,48 @@ test('real upload adapter: mixed photos, immutable legacy objects, retries, old 
     assert.equal((await call(`/diary/api/photo-upload-sessions/${newSession}/photos`,{method:'POST',body:retry})).status,423);
     assert.equal(puts,3);media.close();
   }finally{delete crypto.DigestStream;media?.close();client.lock();delete globalThis.location;await f.close();}
+});
+
+test('indexed reads preserve the current record and household authorization and deny plaintext in normal viewing',async()=>{
+  const f=await systemFixture(),db=f.db.sqlite;
+  const origin=f.env.DIARY_ENCRYPTION_ORIGIN;
+  try {
+    const photo=crypto.randomUUID(),legacy=crypto.randomUUID(),second=crypto.randomUUID();
+    const storage=db.prepare('INSERT INTO diary_e2ee_media VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)');
+    for(const [id,prefix] of [[photo,PHOTO_PREFIX],[legacy,'legacy/'],[second,PHOTO_PREFIX]]) {
+      const keys=kinds.map(kind=>prefix+id+'/'+kind);
+      storage.run(id,household,'main-admin','fixture','attached',...keys,'{}',1,'fixture',Date.now()+60000,null);
+      for(const key of keys)f.r2.set(key,{bytes:new Uint8Array([1,2,3])});
+    }
+    const record=db.prepare(`INSERT INTO diary_e2ee_records(id,household,scope,state,author,revision,epoch,source_id,source_revision,
+      retained_for,envelope,summary,photo_ids,request_id,mutation_id,key_box,attestation)
+      VALUES(?,?,'fixture',?,'main-admin',1,1,NULL,NULL,'[]','{}','{}',?,?,?,'{}','{}')`);
+    record.run('published',household,'published',JSON.stringify([photo,legacy]),'r1','r1');
+    const read=(id,account='main-admin')=>f.worker.fetch(new Request(`${origin}/diary/api/photos/${id}/thumbnail`,{
+      headers:{Cookie:f.cookie(account)}}),f.env,f.ctx);
+    assert.equal((await read(legacy)).status,200,'archive without the index can use the legacy asset path');
+    db.exec(readFileSync(new URL('../../e2ee/photo-reference-index.sql',import.meta.url),'utf8'));
+    f.env.DIARY_PHOTO_ENCRYPTED_READS_ONLY='true';
+    assert.equal(db.prepare('SELECT count(*) AS n FROM diary_photo_refs').get().n,2);
+    let reads=0;const get=f.env.MEDIA.get;
+    f.env.MEDIA.get=(...args)=>{reads++;return get(...args);};
+    assert.equal((await read(legacy)).status,409);
+    assert.equal((await read(photo,'chiharu-admin')).status,404);
+    assert.equal(reads,0,'denied requests do not fetch the photo from R2');
+    assert.equal((await read(photo)).status,200);
+    record.run('trash',household,'trash',JSON.stringify([photo]),'r2','r2');
+    db.prepare("UPDATE diary_e2ee_records SET retained_for=? WHERE id='trash'").run(JSON.stringify(['main-admin']));
+    assert.equal(db.prepare('SELECT count(*) AS n FROM diary_photo_refs WHERE photo_id=?').get(photo).n,2);
+    db.prepare("UPDATE diary_e2ee_records SET photo_ids=? WHERE id='published'").run(JSON.stringify([second]));
+    assert.equal(db.prepare('SELECT count(*) AS n FROM diary_photo_refs WHERE photo_id=?').get(second).n,1);
+    assert.equal((await read(second)).status,200);
+    assert.equal((await read(photo,'main-user')).status,404,'a trash-only reference grants no ordinary user access');
+    assert.equal((await read(photo)).status,200);
+    db.exec("DELETE FROM diary_e2ee_records WHERE id='trash'");
+    assert.equal(db.prepare('SELECT count(*) AS n FROM diary_photo_refs WHERE photo_id=?').get(photo).n,0);
+    db.prepare('INSERT INTO diary_photo_refs VALUES(?,?)').run(photo,'published');
+    assert.equal((await read(photo)).status,404,'the original record must still contain the photo ID');
+    f.users['main-admin'].active=false;
+    assert.equal((await read(second)).status,401);
+  }finally{await f.close();}
 });
