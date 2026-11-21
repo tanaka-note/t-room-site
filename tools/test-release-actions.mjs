@@ -35,7 +35,7 @@ test('production selects changed services only, never PR/branch/docs/tooling or 
   assert.deepEqual(productionPlan(['site','cloud'], {...context,event:'workflow_dispatch',requested:'diary'}), ['diary']);
   assert.deepEqual(productionPlan(['site'], {...context,event:'workflow_dispatch'}), []);
   assert.throws(() => productionPlan([], {...context,event:'workflow_dispatch',requested:'../../evil'}));
-  for (const target of ['downloader', 'downloader2', 'ai']) {
+  for (const target of ['downloader', 'downloader2', 'ai', 'health']) {
     assert.deepEqual(productionPlan([target],context), []);
     assert.throws(() => manualVerification(target), /Unknown production target/);
   }
@@ -107,7 +107,7 @@ test('production gates explicitly handle skipped upstream service jobs', () => {
   assert.match(gate,/!cancelled\(\)/);
   assert.match(gate,/needs\.verify\.result == 'success'/);
   assert.match(gate,/github\.ref == 'refs\/heads\/main'/);
-  assert.doesNotMatch(workflow,/clamav|downloader-production/i);
+  assert.doesNotMatch(workflow,/clamav|downloader-production|downloader2-native/i);
 });
 test('scope checks accept product-specific authorization denials, never success or a missing endpoint', () => {
   for (const status of [401,403]) assertDenied(status,{success:false,errors:[{code:10000}]});
@@ -130,8 +130,8 @@ test('token preflight requires account subdomain access and checks only read ope
   };
   await checkTokenScope(options);
   assert.match(calls[0], /\/workers\/subdomain$/);
-  assert.equal(calls.length, 13, 'account subdomain, 10 selected Workers, D1 and R2');
-  assert.equal(calls.filter(path => path.endsWith('/settings')).length, 10);
+  assert.equal(calls.length, 12, 'account subdomain, 9 selected Workers, D1 and R2');
+  assert.equal(calls.filter(path => path.endsWith('/settings')).length, 9);
   assert.equal(logs.some(message => message.includes('fixture-token')), false);
   const deniedCalls = [];
   await assert.rejects(checkTokenScope({...options, read: async path => {

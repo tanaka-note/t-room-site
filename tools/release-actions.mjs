@@ -6,7 +6,7 @@ import { root, affected } from './verify-plan.mjs';
 import { loadWebAppRegistry } from './web-app-registry.mjs';
 import {serviceProductionPreflight} from './service-production-preflight.mjs';
 
-export const productionTargets = ['site', 'cloud', 'security', 'diary', 'billing', 'inventory', 'health', 'payments', 'household', 'calendar'];
+export const productionTargets = ['site', 'cloud', 'security', 'diary', 'billing', 'inventory', 'payments', 'household', 'calendar'];
 export const workerName = target => {
   if (!productionTargets.includes(target)) throw new Error('Unknown production target');
   return `t-room-${target}`;
@@ -154,12 +154,6 @@ export async function releaseActions(target) {
   await waitForProductionVerification(async () => {
     const deployments = await api(`/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${name}/deployments`);
     assertDeployedVersion(deployments, version);
-  });
-  if (target === 'health') await waitForProductionVerification(async () => {
-    const response = await fetch('https://tanaka-note.com/health/', {
-      cache: 'no-store', signal: AbortSignal.timeout(15000)
-    });
-    if (response.status !== 410) throw new Error('Health retirement endpoint did not return 410.');
   });
   if (app) await waitForProductionVerification(
     () => run(root, ['tools/verify-web-app-builds.mjs', '--target', app.deployTarget]), { attempts: 6 });

@@ -40,7 +40,7 @@ node tools/verify.mjs --target android-ai-chat
 
 対象表は `tools/verify-plan.mjs` 一か所。サービス内の標準回帰を選び、認証共通変更は `auth`、暗号資産変更はSecurityにも広げる。`web-apps.json` のbuild依存も参照する。削除・rename元も差分に含め、不明refは失敗する。未知のWebファイルはsiteへ回す。機能固有の試験（検索・動画デコーダなど）が必要なら既存package.jsonの追加試験を実行し、恒常的に必要なものだけprofileへ追加する。
 
-Downloaderの通常verifyはNodeテスト・Python構文・Worker bundleまで。Container変更だけ `container-unit` を追加し、既存のローカルPython試験を実行する（ffmpeg/ClamAV等がない場合のskipは既存試験の表示に従う）。Docker image作成、定義rollout、R2実転送は行わない。終了後のDownloaderの既存テストはローカル検証に利用できる。ClamAVの定期更新・独立監視Workflowは終了する。
+Downloaderの通常verifyはNodeテスト・Python構文・Worker bundleまで。Container変更だけ `container-unit` を追加し、既存のローカルPython試験を実行する（ffmpeg/ClamAV等がない場合のskipは既存試験の表示に従う）。Docker image作成、定義rollout、R2実転送は行わない。終了済みのDownloader 1・2、AI Chat、体調管理の専用テストはローカルで実行できる。通常のGitHub Actionsではこれらの専用テストを選択しない。ClamAVの定期更新・独立監視・定義更新テストのWorkflowは終了し、定義更新テストはDownloaderのローカルverifyに残す。公開サイトの旧URLが410を返す回帰確認は継続する。
 
 Android/TWAは該当ディレクトリの変更時だけJava 21でdebug buildとunit test。SDK 36が必要。署名鍵、release build、実機/emulatorをCIへ持ち込まない。Webだけの変更でAndroid buildは走らない。
 
@@ -163,15 +163,15 @@ gh run view <run-id> --repo tanaka-note/t-room-site --json jobs,url,headSha,conc
 
 ### 通常公開の制限付き認証
 
-`Verify changed services` はmain pushの差分対象だけを検証し、集約`verify`成功後に対象Workerだけを公開する。PR・開発branch・通常の手動verifyからは本番公開しない。手動公開は同Workflowの`production_target`で1サービスを選び、branchをmainにする。手動対象にも既存の対象別CI（Securityのauth回帰、Downloader 2のNative試験等）を適用する。
+`Verify changed services` はmain pushの差分対象だけを検証し、集約`verify`成功後に対象Workerだけを公開する。PR・開発branch・通常の手動verifyからは本番公開しない。手動公開は同Workflowの`production_target`で1サービスを選び、branchをmainにする。手動対象にも既存の対象別CI（Securityのauth回帰等）を適用する。体調管理は自動・手動のActions公開対象から除外し、本番の410応答を維持する。
 
 初期設定はGitHubの`production` Environmentをbranch `main`だけに限定し、Environment Secret `CLOUDFLARE_API_TOKEN`とEnvironment変数`CLOUDFLARE_ACCOUNT_ID`を登録する。repository変数`CLOUDFLARE_PRODUCTION_ENABLED=true`で有効化する。無効時はCIだけ実行し、Production planに公開対象なしを明記する。失敗時は同じmainコミットのrunを再実行するか、最新mainから`production_target`を指定する。mainが進んだ古いrunは新規公開を拒否するため、失敗した対象を最新mainで明示再実行して公開漏れを解消する。
 
 専用のaccount-owned tokenは既存の本番13 Worker（`t-room-site/cloud/security/diary/billing/downloader/downloader2/ai/inventory/health/payments/household/calendar`）を個別指定した`Individual Workers Editor`と、同アカウント全体の`Workers Scripts Read`を付与する。後者はWranglerがversion upload後に取得する共通`workers.dev`サブドメインの読取に必要で、個別Worker権限だけではHTTP 403/code 10000で失敗する。アップロード前にもこのAPIを検査して早期停止する。`Workers Scripts Read`は対象外Workerのmetadata/sourceの読取も許可するため、その範囲も含む権限である。アカウント管理、token管理、DNS/ルート編集、D1/R2の直接読み書き権限を追加しない。Editorには対象Workerのコード・binding・設定の変更権限があり、コード変更を通した本番データへの間接的なアクセスまで遮断する権限ではない。mainへの変更内容とCIがその境界になる。[Cloudflareの権限仕様](https://developers.cloudflare.com/workers/authorization/workers/)を参照。初期構築の専用トークンはユーザー指定により期限なしとする。漏えいの疑い・権限変更等で交換する場合は、同じ限定権限の新トークンを発行し、Environment Secretだけを差し替える。値をチャット・Git・ログ・スクリーンショットへ出さない。
 
-既存のCloudflare Buildsによるsiteの独立した自動公開は停止し、CIを迂回する二重公開を避ける。他の10 WorkerにBuilds連携がないことも初期構築時に確認した。`Disable builds`を解除する場合はCIとの公開順序を再設計する。
+既存のCloudflare Buildsによるsiteの独立した自動公開は停止し、CIを迂回する二重公開を避ける。他の本番WorkerにBuilds連携がないことも初期構築時に確認した。`Disable builds`を解除する場合はCIとの公開順序を再設計する。
 
-通常の公開対象Workerは`tools/release-actions.mjs`がCIとcheckoutのSHA、最新main、clean状態、対象configのWorker名を確認する。CIと同じ`installDirectories()`で依存を準備し、siteだけ公開用assetを生成する。検証済みの同一SHAの試験を繰り返さず、既存のtarget全体のbuild freshness preflight、HealthのSecret名preflight、公開後のWeb build照合を維持する。`versions upload`の構造化出力から対象Workerの一意なversion IDを取得し、そのIDだけを100%へ昇格してAPIで読み戻す。手動公開時はアカウント共通サブドメインおよび対象Workerのmetadata読取成功と、D1一覧・R2一覧への認可拒否（製品により401/403、success=false）も確認する。これはreadによる権限範囲の確認であり、削除API等の実行試験はしない。
+通常の公開対象Workerは`tools/release-actions.mjs`がCIとcheckoutのSHA、最新main、clean状態、対象configのWorker名を確認する。CIと同じ`installDirectories()`で依存を準備し、siteだけ公開用assetを生成する。検証済みの同一SHAの試験を繰り返さず、既存のtarget全体のbuild freshness preflight、公開後のWeb build照合を維持する。`versions upload`の構造化出力から対象Workerの一意なversion IDを取得し、そのIDだけを100%へ昇格してAPIで読み戻す。手動公開時はアカウント共通サブドメインおよび対象Workerのmetadata読取成功と、D1一覧・R2一覧への認可拒否（製品により401/403、success=false）も確認する。これはreadによる権限範囲の確認であり、削除API等の実行試験はしない。
 
 この経路は既存のroutes、Custom Domains、Cron、Queue設定、Containerを変更しない。これらの非version設定やDB migrationを変更する作業は、通常コード公開と別に既存の専用手順で扱う。勝手に権限を増やしたり、未適用の設定変更を適用済みとして報告しない。ローカルの`npm run release`は従来どおり利用できる。
 

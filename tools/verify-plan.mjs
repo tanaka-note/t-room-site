@@ -6,6 +6,8 @@ export const root = fileURLToPath(new URL('../', import.meta.url));
 export const services = ['cloud', 'security', 'diary', 'billing', 'downloader', 'downloader2', 'ai', 'inventory', 'health', 'payments', 'household', 'calendar', 'portfolio'];
 export const android = ['android-tcloud', 'android-tcloud-twa', 'android-diary-twa', 'android-ai-chat', 'android-calendar'];
 export const targets = ['tooling', 'site', ...services, 'backup', 'auth', 'container-unit', 'tcloud-windows', ...android];
+const retiredTargets = new Set(['ai', 'android-ai-chat', 'container-unit', 'downloader', 'downloader2', 'health']);
+const ciTargets = targets.filter(target => !retiredTargets.has(target));
 const registry = JSON.parse(readFileSync(new URL('../web-apps.json', import.meta.url), 'utf8'));
 const node = (cwd, ...args) => ({ cwd, args });
 const files = (dir, pattern) => readdirSync(new URL(`../${dir}/`, import.meta.url)).filter(f => pattern.test(f)).sort();
@@ -130,10 +132,6 @@ export function affected(paths) {
   return targets.filter(t => selected.has(t));
 }
 
-export function downloader2NativeAffected(paths) {
-  return paths.some(raw => raw.replaceAll('\\', '/').startsWith('downloader2-native/'));
-}
-
 export function changedFiles(base, head, cwd = root) {
   const git = args => execFileSync('git', args, { cwd, encoding: 'utf8' }).split('\0').filter(Boolean);
   if (base) {
@@ -146,7 +144,7 @@ export function changedFiles(base, head, cwd = root) {
 }
 
 export function ciPlan({ event, ref, base, head, defaultBranch = 'origin/main' }, cwd = root) {
-  if (event === 'workflow_dispatch') return { selected: targets, native: true };
+  if (event === 'workflow_dispatch') return ciTargets;
   if (!head) throw new Error('CI requires a head commit');
   let changed;
   if (event === 'push' && ref === 'refs/heads/main') {
@@ -162,7 +160,7 @@ export function ciPlan({ event, ref, base, head, defaultBranch = 'origin/main' }
     if (!base || /^0+$/.test(base)) throw new Error('Pull request requires a base commit');
     changed = changedFiles(base, head, cwd);
   } else throw new Error(`Unsupported CI event: ${event}`);
-  return { selected: affected(changed), native: downloader2NativeAffected(changed) };
+  return affected(changed).filter(target => !retiredTargets.has(target));
 }
 
 export function installDirectories(selected) {
