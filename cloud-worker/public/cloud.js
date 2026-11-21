@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-dfbdf7c0445b";
+const APP_BUILD_ID = "cloud-8741b44931cf";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -224,13 +224,14 @@ function bindEvents() {
   bindPasswordVisibilityToggles();
   document.addEventListener("troom:before-auto-update", (event) => {
     const transferActive = state.uploading || state.activeFolderUploadOperationId || state.downloadActive
-      || state.offlineActive || state.pendingSafetyUpload || state.filePickerActive;
+      || state.offlineActive || state.pendingSafetyUpload || state.filePickerActive || cloudKeyDelivery?.busy;
     const interactiveViewOpen = Boolean(document.querySelector("dialog[open]")) || state.previewPlayer || state.previewPictureInPictureActive;
     if (transferActive || interactiveViewOpen) event.preventDefault();
   });
   window.addEventListener("beforeinstallprompt", handleInstallPrompt);
   window.addEventListener("appinstalled", handleAppInstalled);
   $("#passkey-login").addEventListener("click", loginWithPasskey);
+  $("#retry-key-delivery").addEventListener("click", retryCloudKeyDelivery);
   $("#logout-button").addEventListener("click", logout);
   $("#vault-logout-button").addEventListener("click", logout);
   $("#install-app-button-top").addEventListener("click", installApp);
@@ -928,6 +929,7 @@ function toggleNewFolderPasswordInput() {
 }
 
 let cloudKeyPreparationSession = null;
+let cloudKeyDelivery = null;
 
 async function loginWithPasskey() {
   globalThis.TCloudSession?.beginSelection();
@@ -950,11 +952,18 @@ async function loginWithPasskey() {
     }
     const preparation = cloudKeyPreparationSession;
     let links = preparation.links;
+    let deliveryFailures = 0;
     try {
-      links = (await prepareCloudKeys(preparation)).links;
+      const result = await prepareCloudKeys(preparation);
+      links = result.links;
+      deliveryFailures = result.deliveryFailures;
       preparation.links = links;
     } catch (error) {
       if (!links.length || error.status === 401 || error.status === 403) throw error;
+      if (links.some(link => link.accountId === "admin")) {
+        logCloudKeyDeliveryFailure("status", error);
+        deliveryFailures = null;
+      }
     }
     if (!links.length) {
       showCloudKeyPreparationStatus("ログイン済みです。鍵を解除できる管理者が次にT-Cloudへログインすると鍵が届きます。");
@@ -969,6 +978,10 @@ async function loginWithPasskey() {
     const session = await api("/passkey/handoff", { method: "POST", body: JSON.stringify({ handoffToken: handoff.handoffToken }) });
     cloudKeyPreparationSession = null;
     await enterApp(session, "", null, { preparation: preparation.crypto, tcloudKey: handoff.tcloudKey });
+    if (state.session === session && session.role === "admin" && deliveryFailures !== 0) {
+      cloudKeyDelivery = { session, preparation, failures: deliveryFailures, busy: false };
+      renderCloudKeyDelivery();
+    }
   } catch (error) {
     if (error.status === 401 || error.status === 403) cloudKeyPreparationSession = null;
     if (state.session?.authMethod === "passkey") await api("/logout", { method: "POST", body: "{}" }).catch(() => {});
@@ -987,9 +1000,13 @@ function showCloudKeyPreparationStatus(message) {
   status.textContent = message;
 }
 
+function requestCloudKeyPreparation(credentialId, action, payload = {}) {
+  return TRoomPasskeys.api("/tcloud/key-preparation", { action, credentialId, ...payload });
+}
+
 async function prepareCloudKeys(preparation) {
   const { credentialId, crypto: keys } = preparation;
-  const request = (action, payload = {}) => TRoomPasskeys.api("/tcloud/key-preparation", { action, credentialId, ...payload });
+  const request = (action, payload) => requestCloudKeyPreparation(credentialId, action, payload);
   let current = await request("status");
   if ((current.hasMember && !current.memberVault) || (current.adminLinkId && !current.adminEnvelope && !current.receiver)) {
     if (current.hasMember && !current.memberVault) {
@@ -1015,34 +1032,120 @@ async function prepareCloudKeys(preparation) {
       recipientFingerprint: binding.recipientFingerprint, transferCiphertext: receiver.ciphertext });
     current = await request("status");
   }
-  if (current.recipients.admin.length || current.recipients.folders.length) {
-    for (const target of current.recipients.admin) {
-      try {
-        const binding = { sourceCredentialId: credentialId, targetCredentialId: target.credentialId,
-          linkId: current.adminLinkId, recipientFingerprint: target.recipientFingerprint, adminFingerprint: current.adminFingerprint };
-        const packet = await keys.sendAdminKey(current.adminEnvelope, JSON.parse(target.publicKey), binding);
-        await request("admin-grant", { ...packet, targetCredentialId: binding.targetCredentialId,
-          recipientFingerprint: binding.recipientFingerprint, adminFingerprint: binding.adminFingerprint });
-      } catch (error) {
-        if (error.status === 401) throw error;
-      }
-    }
-    if (current.recipients.folders.length) {
-      const privateKey = await keys.unlockAdminVault(current.adminEnvelope);
-      for (const target of current.recipients.folders) {
-        try {
-          const folderKey = await TRoomCrypto.unlockFolderAsAdmin(target.folder, privateKey);
-          const wrappedKey = await TRoomCrypto.wrapFolderKeyForIdentity(folderKey, JSON.parse(target.publicKey));
-          await request("folder-grant", { targetCredentialId: target.credentialId, linkId: target.linkId,
-            recipientFingerprint: target.recipientFingerprint, wrappedKey });
-        } catch (error) {
-          if (error.status === 401) throw error;
-        }
-      }
+  let deliveryFailures = await sendCloudKeys(preparation, current, () => cloudKeyPreparationSession === preparation);
+  if (current.recipients.folders.length) {
+    try {
       current = await request("status");
+    } catch (error) {
+      if (error.status === 401 || error.status === 403) throw error;
+      logCloudKeyDeliveryFailure("status", error);
+      if (deliveryFailures === 0) deliveryFailures = null;
     }
   }
-  return current;
+  return { links: current.links, deliveryFailures };
+}
+
+async function sendCloudKeys({ credentialId, crypto: keys }, current, isCurrent) {
+  let failures = current.recipients.unavailableFolders || 0;
+  if (failures) console.warn("T-Cloud key delivery unconfirmed", { action: "folder-status", count: failures });
+  async function send(action, buildPayload) {
+    if (!isCurrent()) return;
+    try {
+      const payload = await buildPayload();
+      if (!isCurrent()) return;
+      const result = await requestCloudKeyPreparation(credentialId, action, payload);
+      if (result.ok !== true) throw new Error("Unconfirmed key delivery");
+    } catch (error) {
+      if (error.status === 401) throw error;
+      failures++;
+      logCloudKeyDeliveryFailure(action, error);
+    }
+  }
+  for (const target of current.recipients.admin) {
+    await send("admin-grant", async () => {
+      const binding = { sourceCredentialId: credentialId, targetCredentialId: target.credentialId,
+        linkId: current.adminLinkId, recipientFingerprint: target.recipientFingerprint, adminFingerprint: current.adminFingerprint };
+      const packet = await keys.sendAdminKey(current.adminEnvelope, JSON.parse(target.publicKey), binding);
+      return { ...packet, targetCredentialId: binding.targetCredentialId,
+        recipientFingerprint: binding.recipientFingerprint, adminFingerprint: binding.adminFingerprint };
+    });
+  }
+  if (!current.recipients.folders.length || !isCurrent()) return failures;
+  let privateKey;
+  try {
+    privateKey = await keys.unlockAdminVault(current.adminEnvelope);
+  } catch (error) {
+    logCloudKeyDeliveryFailure("folder-unlock", error);
+    return failures + current.recipients.folders.length;
+  }
+  for (const target of current.recipients.folders) {
+    await send("folder-grant", async () => {
+      const folderKey = await TRoomCrypto.unlockFolderAsAdmin(target.folder, privateKey);
+      const wrappedKey = await TRoomCrypto.wrapFolderKeyForIdentity(folderKey, JSON.parse(target.publicKey));
+      return { targetCredentialId: target.credentialId, linkId: target.linkId,
+        recipientFingerprint: target.recipientFingerprint, wrappedKey };
+    });
+  }
+  return failures;
+}
+
+function logCloudKeyDeliveryFailure(action, error) {
+  console.warn("T-Cloud key delivery unconfirmed", { action, status: Number.isInteger(error.status) ? error.status : null });
+}
+
+function renderCloudKeyDelivery() {
+  const delivery = cloudKeyDelivery;
+  $("#key-delivery-notice").hidden = !delivery;
+  const status = $("#key-delivery-status");
+  const retry = $("#retry-key-delivery");
+  if (!delivery) {
+    status.textContent = "";
+    return;
+  }
+  const message = delivery.failures === null ? "鍵の引き渡し状況を確認できませんでした。"
+    : `鍵の引き渡しを確認できなかった対象が${delivery.failures}件あります。`;
+  status.textContent = delivery.busy ? "鍵の引き渡し状況を確認しています…"
+    : delivery.preparation ? message : `${message} 管理者のパスキーで再ログインしてください。`;
+  retry.hidden = !delivery.preparation;
+  retry.disabled = delivery.busy;
+}
+
+async function retryCloudKeyDelivery() {
+  const delivery = cloudKeyDelivery;
+  const preparation = delivery?.preparation;
+  const isCurrent = () => cloudKeyDelivery === delivery && state.session === delivery.session;
+  if (!preparation || delivery.busy || !isCurrent()) return;
+  delivery.busy = true;
+  renderCloudKeyDelivery();
+  try {
+    globalThis.TCloudSession?.check();
+    // Check the current recipients first. A write whose response was lost
+    // must not be repeated after the server has recorded it.
+    const current = await requestCloudKeyPreparation(preparation.credentialId, "status");
+    if (!isCurrent()) return;
+    const canSend = current.canSend ?? Boolean(current.recipients.admin.length || current.recipients.folders.length);
+    if (!canSend) {
+      delivery.preparation = null;
+      return;
+    }
+    const failures = await sendCloudKeys(preparation, current, isCurrent);
+    if (!isCurrent()) return;
+    if (failures) delivery.failures = failures;
+    else {
+      cloudKeyDelivery = null;
+      renderCloudKeyDelivery();
+      setNotice("鍵の引き渡しを確認しました。");
+    }
+  } catch (error) {
+    if (!isCurrent()) return;
+    logCloudKeyDeliveryFailure("retry", error);
+    if (error.status === 401 || error.status === 403) delivery.preparation = null;
+  } finally {
+    if (isCurrent()) {
+      delivery.busy = false;
+      renderCloudKeyDelivery();
+    }
+  }
 }
 
 function requirePasskeyPrf(authentication, { allowUnprepared = false } = {}) {
@@ -1177,6 +1280,8 @@ async function enterApp(session, password = "", accountKey = null, passkeyContex
 
 async function logout() {
   globalThis.TCloudSession?.check();
+  cloudKeyDelivery = null;
+  renderCloudKeyDelivery();
   await api("/logout", { method: "POST", body: "{}" });
   await stopPictureInPicturePreview();
   state.crypto = { config: null, accountKey: null, adminPrivateKey: null, publicKey: null, folderKeys: new Map(), fileEncryptionReady: false };
@@ -1964,6 +2069,8 @@ async function clearLegacyPasskeyAdminKeys() {
 }
 
 function releaseSessionState() {
+  cloudKeyDelivery = null;
+  renderCloudKeyDelivery();
   void state.photoFullscreen?.exit();
   photoHistoryFiles.clear();
   cancelFolderNavigation();

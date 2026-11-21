@@ -1040,7 +1040,7 @@ async function cloudKeyPreparation(request, env) {
     source_credential_id AS sourceCredentialId, transfer_iv AS iv, transfer_wrapped_key AS wrappedKey
     FROM security_tcloud_admin_key_transfers t LEFT JOIN security_credentials c ON c.credential_id = t.source_credential_id
     WHERE t.credential_id = ?1 AND t.identity_id = ?2 AND t.service_link_id = ?4`).bind(...own, adminFingerprint, adminLink.id).first() : null;
-  let recipients = { admin: [], folders: [] };
+  let recipients = { admin: [], folders: [], unavailableFolders: 0 };
   if (canSend && adminFingerprint) {
     const [admin, folders] = await Promise.all([
       env.DB.prepare(`SELECT t.credential_id AS credentialId, t.public_key_jwk AS publicKey, t.public_key_fingerprint AS recipientFingerprint
@@ -1060,17 +1060,16 @@ async function cloudKeyPreparation(request, env) {
             WHERE e.credential_id = c.credential_id AND e.service_link_id = l.id AND e.envelope_type = 'folder_key_rsa')
         ORDER BY l.id, c.credential_id LIMIT 50`).all()
     ]);
-    recipients = {
-      admin: admin.results || [],
-      folders: (await Promise.all((folders.results || []).map(async item => {
-        const folder = await env.CLOUD_AUTH.getFolderCryptoRecord(item.rootFolderId).catch(() => null);
-        return folder ? { ...item, folder } : null;
-      }))).filter(Boolean)
-    };
+    const folderRecords = await Promise.all((folders.results || []).map(async item => {
+      const folder = await env.CLOUD_AUTH.getFolderCryptoRecord(item.rootFolderId).catch(() => null);
+      return folder ? { ...item, folder } : null;
+    }));
+    const availableFolders = folderRecords.filter(Boolean);
+    recipients = { admin: admin.results || [], folders: availableFolders, unavailableFolders: folderRecords.length - availableFolders.length };
   }
   return json({ links: await Promise.all(readyLinks.map(link => publicLink(env, link))),
     hasMember: Boolean(memberLinks.length), memberVault, adminLinkId: adminLink?.id || null,
-    adminEnvelope, adminFingerprint, adminPublicKey, receiver, recipients });
+    adminEnvelope, adminFingerprint, adminPublicKey, receiver, canSend: Boolean(canSend && adminFingerprint), recipients });
 }
 
 async function cloudPreparationVault(value) {

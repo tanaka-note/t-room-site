@@ -144,7 +144,91 @@ try {
     assert.equal(result.resume, "cloud-member");
     assert.equal(result.moveRoot, 9);
     assert.equal(result.canMoveRoot, false);
+
+    const deliveryPage = await context.newPage();
+    deliveryPage.on("pageerror", error => errors.push(error.message));
+    const warnings = [];
+    deliveryPage.on("console", message => {
+      if (message.type() === "warning" && message.text().startsWith("T-Cloud key delivery")) warnings.push(message.text());
+    });
+    await deliveryPage.goto(fixture.origin + "/cloud/");
+    await deliveryPage.waitForFunction(() => globalThis.__test && globalThis.TRoomPasskeys);
+    await deliveryPage.evaluate(async () => {
+      prepareCryptoSession = async () => {};
+      navigateToFolder = async () => ({ ok: true });
+      scheduleUsageLoad = () => {};
+      scheduleLegacyFolderMigration = () => {};
+      const adminLink = { id: "admin", accountId: "admin", role: "admin" };
+      globalThis.__deliveryAttempt = 0;
+      globalThis.__grants = [];
+      globalThis.__authentications = 0;
+      globalThis.api = async path => {
+        if (path === "/session") return { authenticated: false };
+        if (path === "/passkey/handoff") return { role: "admin", authMethod: "passkey", accountName: "Fixture", loginId: "fixture",
+          serviceAccountId: "admin", serviceLinkId: "admin", sessionCacheId: "fixture-admin",
+          expiresAt: Math.floor(Date.now() / 1000) + 3600 };
+        throw new Error(`Unexpected Cloud request: ${path}`);
+      };
+      const recipient = credentialId => ({ credentialId, publicKey: "{}", recipientFingerprint: "fixture" });
+      const folder = credentialId => ({ ...recipient(credentialId), folder: {}, linkId: "link" });
+      const handedOff = new Set();
+      globalThis.TRoomCrypto = { ...TRoomCrypto,
+        cloudPasskeyPreparation: async () => ({ sendAdminKey: async () => ({}), unlockAdminVault: async () => ({}) }),
+        unlockFolderAsAdmin: async () => ({}), wrapFolderKeyForIdentity: async () => "wrapped-fixture"
+      };
+      globalThis.TRoomPasskeys = { ...TRoomPasskeys,
+        authenticate: async () => {
+          __authentications++;
+          return { credentialId: "sender", prfOutput: new Uint8Array(32), verified: { links: [adminLink] } };
+        },
+        api: async (path, body) => {
+          if (path === "/auth/handoff") return { handoffToken: "fixture" };
+          if (path !== "/tcloud/key-preparation" || body.credentialId !== "sender") throw new Error("Unexpected key request");
+          if (body.action === "status") return { links: [adminLink], adminEnvelope: {}, canSend: __deliveryAttempt !== 2,
+            recipients: { admin: [recipient("forbidden"), recipient("conflict")].filter(x => !handedOff.has(x.credentialId)),
+              folders: [folder("lost-response"), folder("success")].filter(x => !handedOff.has(x.credentialId)),
+              unavailableFolders: __deliveryAttempt === 1 ? 1 : 0 } };
+          const target = body.targetCredentialId;
+          __grants.push(target);
+          if (__deliveryAttempt === 0 && (target === "forbidden" || target === "conflict")) {
+            throw Object.assign(new Error("synthetic-sensitive-error"), { status: target === "forbidden" ? 403 : 409 });
+          }
+          handedOff.add(target);
+          if (target === "lost-response") throw new TypeError("synthetic-sensitive-error");
+          return { ok: true };
+        }
+      };
+      await __test.initialize();
+    });
+    await deliveryPage.locator("#passkey-login").click();
+    const notice = deliveryPage.locator("#key-delivery-notice");
+    const deliveryStatus = deliveryPage.locator("#key-delivery-status");
+    const retry = deliveryPage.getByRole("button", { name: "鍵の引き渡しを再試行" });
+    await notice.waitFor({ state: "visible" });
+    assert.match(await deliveryStatus.textContent(), /3件/);
+    assert.equal(await deliveryPage.locator("#app-view").isVisible(), true);
+    assert.equal(warnings.length, 3);
+    assert.doesNotMatch(warnings.join("\n"), /synthetic-sensitive-error|lost-response|forbidden|conflict/);
+    await deliveryPage.evaluate(attempt => { __deliveryAttempt = attempt; }, mobile ? 2 : 1);
+    await retry.click();
+    if (mobile) {
+      await retry.waitFor({ state: "hidden" });
+      assert.match(await deliveryStatus.textContent(), /3件.*再ログイン/);
+    } else {
+      await notice.getByText(/1件/).waitFor();
+      await deliveryPage.evaluate(() => { __deliveryAttempt = 3; });
+      await retry.click();
+      await notice.waitFor({ state: "hidden" });
+      assert.match(await deliveryPage.locator("#notice").textContent(), /引き渡しを確認/);
+    }
+    assert.deepEqual(await deliveryPage.evaluate(() => __grants), ["forbidden", "conflict", "lost-response", "success",
+      ...(!mobile ? ["forbidden", "conflict"] : [])]);
+    assert.equal(await deliveryPage.evaluate(() => __authentications), 1);
+    await deliveryPage.evaluate(() => __test.releaseSessionState());
+    assert.equal(await notice.isVisible(), false);
+    assert.equal(await deliveryStatus.textContent(), "");
+    assert.deepEqual(errors, []);
     await context.close();
   }
-  console.log("PASS ordinary auto-selection, two owner modes, PC/touch/Esc/back cancellation, real multi-root PRF/RSA unlock, preserved offline namespaces and root move policy");
+  console.log("PASS owner modes, PC/touch cancellation, multi-root PRF/RSA unlock, and administrator key delivery failure, retry and reauthentication");
 } finally { await browser.close(); await fixture.close(); }

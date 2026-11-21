@@ -162,6 +162,7 @@ test("approved credentials receive only their own administrator or folder keys o
     const waiting = await request("status");
     assert.equal(waiting.links.length, 0);
     assert.equal(waiting.adminEnvelope, null);
+    assert.equal(waiting.canSend, false);
 
     const receiverVault = await newKeys.createReceiver();
     await request("admin-vault", { vault: receiverVault });
@@ -180,14 +181,29 @@ test("approved credentials receive only their own administrator or folder keys o
     await request("member-vault", { vault: memberVault });
     await assert.rejects(request("admin-vault", { vault: memberVault }), { status: 403 });
     await assert.rejects(request("folder-grant", {}), { status: 403 });
-    assert.equal((await request("status")).links.length, 0);
+    const memberStatus = await request("status");
+    assert.equal(memberStatus.links.length, 0);
+    assert.equal(memberStatus.canSend, false);
     f.actor.credentialId = "pending-key";
     await assert.rejects(request("member-vault", { vault: memberVault }), { status: 403 });
 
     f.actor.identityId = "primary-admin"; f.actor.credentialId = "credential-A";
     const ready = await request("status");
+    assert.equal(ready.canSend, true);
     assert.deepEqual(Array.from(ready.recipients.admin, row => row.credentialId), ["credential-B"]);
     assert.deepEqual(Array.from(ready.recipients.folders, row => row.linkId), ["member-root"]);
+    const readFolder = f.env.CLOUD_AUTH.getFolderCryptoRecord;
+    f.env.CLOUD_AUTH.getFolderCryptoRecord = async () => { throw new Error("Temporary folder lookup failure"); };
+    const unavailable = await request("status");
+    assert.equal(unavailable.recipients.folders.length, 0);
+    assert.equal(unavailable.recipients.unavailableFolders, 1);
+    f.env.CLOUD_AUTH.getFolderCryptoRecord = readFolder;
+    const authenticatedAt = freshAdmin.authenticatedAt;
+    freshAdmin.authenticatedAt -= 301;
+    const expired = await request("status");
+    assert.equal(expired.canSend, false);
+    assert.equal(expired.recipients.admin.length + expired.recipients.folders.length, 0);
+    freshAdmin.authenticatedAt = authenticatedAt;
     const [recipient] = ready.recipients.admin;
     const binding = { sourceCredentialId: "credential-A", targetCredentialId: recipient.credentialId,
       linkId: ready.adminLinkId, recipientFingerprint: recipient.recipientFingerprint, adminFingerprint: ready.adminFingerprint };
