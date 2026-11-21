@@ -37,7 +37,8 @@ test('concurrent credential vault creation is immutable and preserves delegated 
     validatePublicJwk:jwk=>jwk,normalizeSecretText:value=>value,canonicalJwk,
     sha256:async value=>createHash('sha256').update(value).digest('base64url'),parseJson:JSON.parse,
     localAuditStatement:async()=>({run:async()=>({})}),tcloudSetupStatus:async()=>({tcloudReady:false}),json:value=>value});
-  vm.runInContext(fn+'; globalThis.save=saveOwnTCloudEnvelope;',context);
+  const helper = source.slice(source.indexOf("async function saveCloudMemberVault"), source.indexOf("const CLOUD_PREPARATION_LINK"));
+  vm.runInContext(fn+helper+'; globalThis.save=saveOwnTCloudEnvelope;',context);
   const env={DB:{prepare:statement,batch:async statements=>Promise.all(statements.map(s=>s.run()))}};
   const prf=crypto.getRandomValues(new Uint8Array(32));
   const vaults=await Promise.all([TRoomCrypto.createPasskeyClientVault(prf),TRoomCrypto.createPasskeyClientVault(prf)]);

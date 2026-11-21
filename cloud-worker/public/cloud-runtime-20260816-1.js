@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-1f41e08c843c";
+const APP_BUILD_ID = "cloud-dfbdf7c0445b";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -927,32 +927,126 @@ function toggleNewFolderPasswordInput() {
   if (!enabled) $("#folder-password").value = "";
 }
 
+let cloudKeyPreparationSession = null;
+
 async function loginWithPasskey() {
   globalThis.TCloudSession?.beginSelection();
   const button = $("#passkey-login");
+  const label = button.querySelector(".passkey-login-label");
   showLoginError("");
+  showCloudKeyPreparationStatus("");
   button.disabled = true;
   button.setAttribute("aria-busy", "true");
-  button.querySelector(".passkey-login-label").textContent = "確認中…";
+  label.textContent = "確認中…";
   try {
-    await clearLegacyPasskeyAdminKeys();
-    const authentication = await TRoomPasskeys.authenticate("cloud", choosePasskeyLink);
-    requirePasskeyPrf(authentication);
-    const session = await api("/passkey/handoff", { method: "POST", body: JSON.stringify({ handoffToken: authentication.handoff.handoffToken }) });
-    await enterApp(session, "", null, { prfOutput: authentication.prfOutput, tcloudKey: authentication.handoff.tcloudKey });
+    if (!cloudKeyPreparationSession) {
+      await clearLegacyPasskeyAdminKeys();
+      const authentication = await TRoomPasskeys.authenticate("cloud", null, { prepareCloudKeys: true });
+      requirePasskeyPrf(authentication, { allowUnprepared: true });
+      try {
+        cloudKeyPreparationSession = { credentialId: authentication.credentialId,
+          crypto: await TRoomCrypto.cloudPasskeyPreparation(authentication.prfOutput), links: authentication.verified.links };
+      } finally { authentication.prfOutput.fill(0); }
+    }
+    const preparation = cloudKeyPreparationSession;
+    let links = preparation.links;
+    try {
+      links = (await prepareCloudKeys(preparation)).links;
+      preparation.links = links;
+    } catch (error) {
+      if (!links.length || error.status === 401 || error.status === 403) throw error;
+    }
+    if (!links.length) {
+      showCloudKeyPreparationStatus("ログイン済みです。鍵を解除できる管理者が次にT-Cloudへログインすると鍵が届きます。");
+      return;
+    }
+    const link = await choosePasskeyLink(links);
+    if (!link) {
+      cloudKeyPreparationSession = null;
+      return;
+    }
+    const handoff = await TRoomPasskeys.api("/auth/handoff", { service: "cloud", linkId: link.id, credentialId: preparation.credentialId });
+    const session = await api("/passkey/handoff", { method: "POST", body: JSON.stringify({ handoffToken: handoff.handoffToken }) });
+    cloudKeyPreparationSession = null;
+    await enterApp(session, "", null, { preparation: preparation.crypto, tcloudKey: handoff.tcloudKey });
   } catch (error) {
+    if (error.status === 401 || error.status === 403) cloudKeyPreparationSession = null;
     if (state.session?.authMethod === "passkey") await api("/logout", { method: "POST", body: "{}" }).catch(() => {});
     state.session = null;
     showLoginError(passkeyLoginErrorMessage(error));
   } finally {
     button.disabled = false;
     button.removeAttribute("aria-busy");
-    button.querySelector(".passkey-login-label").textContent = "パスキーでログイン";
+    label.textContent = cloudKeyPreparationSession ? "鍵の受け取りを確認" : "パスキーでログイン";
   }
 }
 
-function requirePasskeyPrf(authentication) {
-  if (!authentication.prfOutput || !["admin", "folder-member"].includes(authentication.link?.accountId)) {
+function showCloudKeyPreparationStatus(message) {
+  const status = $("#login-passkey-status");
+  status.hidden = !message;
+  status.textContent = message;
+}
+
+async function prepareCloudKeys(preparation) {
+  const { credentialId, crypto: keys } = preparation;
+  const request = (action, payload = {}) => TRoomPasskeys.api("/tcloud/key-preparation", { action, credentialId, ...payload });
+  let current = await request("status");
+  if ((current.hasMember && !current.memberVault) || (current.adminLinkId && !current.adminEnvelope && !current.receiver)) {
+    if (current.hasMember && !current.memberVault) {
+      const { publicKeyJwk, encryptedPayload, payloadIv } = await keys.createMemberVault();
+      try {
+        await request("member-vault", { vault: { publicKeyJwk, encryptedPayload, payloadIv } });
+      } catch (error) {
+        if (error.status !== 409 || !(await request("status")).memberVault) throw error;
+      }
+    }
+    if (current.adminLinkId && !current.adminEnvelope && !current.receiver) {
+      const { publicKeyJwk, encryptedPayload, payloadIv } = await keys.createReceiver();
+      await request("admin-vault", { vault: { publicKeyJwk, encryptedPayload, payloadIv } });
+    }
+    current = await request("status");
+  }
+  if (current.receiver?.ciphertext) {
+    const receiver = current.receiver;
+    const binding = { sourceCredentialId: receiver.sourceCredentialId, targetCredentialId: credentialId,
+      linkId: current.adminLinkId, recipientFingerprint: receiver.recipientFingerprint, adminFingerprint: current.adminFingerprint };
+    const envelope = await keys.receiveAdminKey(receiver, current.adminPublicKey, binding);
+    await request("admin-accept", { ...envelope, adminFingerprint: binding.adminFingerprint,
+      recipientFingerprint: binding.recipientFingerprint, transferCiphertext: receiver.ciphertext });
+    current = await request("status");
+  }
+  if (current.recipients.admin.length || current.recipients.folders.length) {
+    for (const target of current.recipients.admin) {
+      try {
+        const binding = { sourceCredentialId: credentialId, targetCredentialId: target.credentialId,
+          linkId: current.adminLinkId, recipientFingerprint: target.recipientFingerprint, adminFingerprint: current.adminFingerprint };
+        const packet = await keys.sendAdminKey(current.adminEnvelope, JSON.parse(target.publicKey), binding);
+        await request("admin-grant", { ...packet, targetCredentialId: binding.targetCredentialId,
+          recipientFingerprint: binding.recipientFingerprint, adminFingerprint: binding.adminFingerprint });
+      } catch (error) {
+        if (error.status === 401) throw error;
+      }
+    }
+    if (current.recipients.folders.length) {
+      const privateKey = await keys.unlockAdminVault(current.adminEnvelope);
+      for (const target of current.recipients.folders) {
+        try {
+          const folderKey = await TRoomCrypto.unlockFolderAsAdmin(target.folder, privateKey);
+          const wrappedKey = await TRoomCrypto.wrapFolderKeyForIdentity(folderKey, JSON.parse(target.publicKey));
+          await request("folder-grant", { targetCredentialId: target.credentialId, linkId: target.linkId,
+            recipientFingerprint: target.recipientFingerprint, wrappedKey });
+        } catch (error) {
+          if (error.status === 401) throw error;
+        }
+      }
+      current = await request("status");
+    }
+  }
+  return current;
+}
+
+function requirePasskeyPrf(authentication, { allowUnprepared = false } = {}) {
+  if (!authentication.prfOutput || (!allowUnprepared && !["admin", "folder-member"].includes(authentication.link?.accountId))) {
     throw new Error("この端末ではT-Cloudの安全なパスキー復号を利用できません。PRF対応のブラウザ・端末でパスキーを使用してください。");
   }
 }
@@ -1506,9 +1600,11 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
       const cached = passkeyContext?.cached;
       if (cached && cached.binding !== passkeyCacheBinding(state.session, config)) throw new Error("端末内の暗号鍵を再確認してください。");
       if (state.session.role === "admin") {
-        if (!cached && !passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。PRF対応のブラウザ・端末でパスキーを使用してください。");
+        if (!cached && !passkeyContext?.prfOutput && !passkeyContext?.preparation) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。PRF対応のブラウザ・端末でパスキーを使用してください。");
         if (!cached && !keys.admin_private_prf) throw new Error("このパスキーには管理者暗号鍵が登録されていません。管理者PWで復旧登録してください。");
-        const privateKey = cached?.privateKey || await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(passkeyContext.prfOutput, keys.admin_private_prf);
+        const privateKey = cached?.privateKey || (passkeyContext.preparation
+          ? await passkeyContext.preparation.unlockAdminVault(keys.admin_private_prf)
+          : await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(passkeyContext.prfOutput, keys.admin_private_prf));
         assertSelected();
         state.crypto.adminPrivateKey = privateKey;
         await saveCachedPasskeyKeys(selectedSession, config, privateKey);
@@ -1517,11 +1613,13 @@ async function prepareCryptoSession(password = "", accountKey = null, passkeyCon
         return;
       }
       if (state.session.role === "member") {
-        if (!cached && !passkeyContext?.prfOutput) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。PRF対応のブラウザ・端末でパスキーを使用してください。");
+        if (!cached && !passkeyContext?.prfOutput && !passkeyContext?.preparation) throw new Error("この端末ではT-Cloudのパスキー復号を利用できません。PRF対応のブラウザ・端末でパスキーを使用してください。");
         const scopes = memberFolderScopes();
         const wrappedKeys = cached?.wrappedFolderKeys || keys.folder_keys_rsa || (keys.folder_key_rsa ? [{ ...scopes[0], wrappedKey: keys.folder_key_rsa.wrappedKey }] : []);
         if ((!cached && !keys.client_private_prf) || !scopes.length || scopes.length !== wrappedKeys.length) throw new Error("T-Cloudの安全な鍵委譲が完了していません。管理者の承認をご確認ください。");
-        const privateKey = cached?.privateKey || await TRoomCrypto.unlockPasskeyClientPrivateKey(passkeyContext.prfOutput, keys.client_private_prf);
+        const privateKey = cached?.privateKey || (passkeyContext.preparation
+          ? await passkeyContext.preparation.unlockMemberVault(keys.client_private_prf)
+          : await TRoomCrypto.unlockPasskeyClientPrivateKey(passkeyContext.prfOutput, keys.client_private_prf));
         const unlocked = new Map();
         for (const scope of scopes) {
           const wrapped = wrappedKeys.find((item) => item.serviceLinkId === scope.serviceLinkId && Number(item.rootFolderId) === scope.rootFolderId);

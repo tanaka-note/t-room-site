@@ -10,6 +10,7 @@
   const RECOVERY_WRAP_CONTEXT = "T-ROOM Cloud Storage emergency recovery v1";
   const PASSKEY_ADMIN_WRAP_CONTEXT = "T-ROOM Cloud Storage passkey admin private key v1";
   const PASSKEY_CLIENT_WRAP_CONTEXT = "T-ROOM Cloud Storage passkey client private key v1";
+  const PASSKEY_TRANSFER_RECEIVER_CONTEXT = "T-Cloud admin transfer receiver private key v1";
   const FOLDER_AUTH_CONTEXT = "T-ROOM Cloud Storage folder authentication v1";
   const FOLDER_WRAP_CONTEXT = "T-ROOM Cloud Storage folder key v1";
   const PARENT_FOLDER_WRAP_CONTEXT = "T-ROOM Cloud Storage child folder key v1";
@@ -137,21 +138,23 @@
   async function unlockAdminPrivateKeyWithPasskey(prfOutput, envelope) {
     ensurePrf(prfOutput);
     const passkeyKey = await deriveAesKey(prfOutput, PASSKEY_ADMIN_WRAP_CONTEXT);
-    const bytes = await decryptBytes(passkeyKey, fromBase64Url(envelope.encryptedPayload), fromBase64Url(envelope.payloadIv), textEncoder.encode(PASSKEY_ADMIN_WRAP_CONTEXT));
-    try { return await crypto.subtle.importKey("pkcs8", bytes, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["decrypt"]); }
-    finally { bytes.fill(0); }
+    return unlockPasskeyVault(passkeyKey, envelope, PASSKEY_ADMIN_WRAP_CONTEXT);
   }
 
   async function createPasskeyClientVault(prfOutput) {
     ensurePrf(prfOutput);
+    const passkeyKey = await deriveAesKey(prfOutput, PASSKEY_CLIENT_WRAP_CONTEXT);
+    return createPasskeyVault(passkeyKey, PASSKEY_CLIENT_WRAP_CONTEXT);
+  }
+
+  async function createPasskeyVault(passkeyKey, context) {
     const pair = await crypto.subtle.generateKey({ name: "RSA-OAEP", modulusLength: 3072, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["encrypt", "decrypt"]);
     const [publicKeyJwk, privatePkcs8] = await Promise.all([crypto.subtle.exportKey("jwk", pair.publicKey), crypto.subtle.exportKey("pkcs8", pair.privateKey)]);
     publicKeyJwk.alg = "RSA-OAEP-256";
     publicKeyJwk.key_ops = ["encrypt"];
-    const passkeyKey = await deriveAesKey(prfOutput, PASSKEY_CLIENT_WRAP_CONTEXT);
     const privateBytes = new Uint8Array(privatePkcs8);
     try {
-      const wrapped = await encryptBytes(passkeyKey, privateBytes, textEncoder.encode(PASSKEY_CLIENT_WRAP_CONTEXT));
+      const wrapped = await encryptBytes(passkeyKey, privateBytes, textEncoder.encode(context));
       return { publicKeyJwk, privateKey: pair.privateKey, encryptedPayload: toBase64Url(wrapped.ciphertext), payloadIv: toBase64Url(wrapped.iv) };
     } finally {
       privateBytes.fill(0);
@@ -161,9 +164,67 @@
   async function unlockPasskeyClientPrivateKey(prfOutput, envelope) {
     ensurePrf(prfOutput);
     const passkeyKey = await deriveAesKey(prfOutput, PASSKEY_CLIENT_WRAP_CONTEXT);
-    const bytes = await decryptBytes(passkeyKey, fromBase64Url(envelope.encryptedPayload), fromBase64Url(envelope.payloadIv), textEncoder.encode(PASSKEY_CLIENT_WRAP_CONTEXT));
-    try { return await crypto.subtle.importKey("pkcs8", bytes, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["decrypt"]); }
+    return unlockPasskeyVault(passkeyKey, envelope, PASSKEY_CLIENT_WRAP_CONTEXT);
+  }
+
+  async function decryptPasskeyVault(passkeyKey, envelope, context) {
+    return decryptBytes(passkeyKey, fromBase64Url(envelope.encryptedPayload), fromBase64Url(envelope.payloadIv), textEncoder.encode(context));
+  }
+
+  function importPasskeyPrivateKey(bytes) {
+    return crypto.subtle.importKey("pkcs8", bytes, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["decrypt"]);
+  }
+
+  async function unlockPasskeyVault(passkeyKey, envelope, context) {
+    const bytes = await decryptPasskeyVault(passkeyKey, envelope, context);
+    try { return await importPasskeyPrivateKey(bytes); }
     finally { bytes.fill(0); }
+  }
+
+async function cloudPasskeyPreparation(prfOutput) {
+    ensurePrf(prfOutput);
+    const [adminWrapKey, memberWrapKey, receiverWrapKey] = await Promise.all([
+      deriveAesKey(prfOutput, PASSKEY_ADMIN_WRAP_CONTEXT),
+      deriveAesKey(prfOutput, PASSKEY_CLIENT_WRAP_CONTEXT),
+      deriveAesKey(prfOutput, PASSKEY_TRANSFER_RECEIVER_CONTEXT)
+    ]);
+    return {
+      createMemberVault: () => createPasskeyVault(memberWrapKey, PASSKEY_CLIENT_WRAP_CONTEXT),
+      unlockMemberVault: envelope => unlockPasskeyVault(memberWrapKey, envelope, PASSKEY_CLIENT_WRAP_CONTEXT),
+      unlockAdminVault: envelope => unlockPasskeyVault(adminWrapKey, envelope, PASSKEY_ADMIN_WRAP_CONTEXT),
+      createReceiver: () => createPasskeyVault(receiverWrapKey, PASSKEY_TRANSFER_RECEIVER_CONTEXT),
+      async sendAdminKey(envelope, targetPublicKey, binding) {
+        const privateBytes = await decryptPasskeyVault(adminWrapKey, envelope, PASSKEY_ADMIN_WRAP_CONTEXT);
+        try {
+          const transferKey = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+          const packet = await encryptBytes(transferKey, privateBytes, transferAssociatedData(binding));
+          return { ciphertext: toBase64Url(packet.ciphertext), iv: toBase64Url(packet.iv),
+            wrappedKey: await wrapFolderKeyForIdentity(transferKey, targetPublicKey) };
+        } finally { privateBytes.fill(0); }
+      },
+      async receiveAdminKey(receiver, adminPublicKey, binding) {
+        const receivingKey = await unlockPasskeyVault(receiverWrapKey, receiver, PASSKEY_TRANSFER_RECEIVER_CONTEXT);
+        const transferKey = await unlockDelegatedFolderKey(receivingKey, receiver.wrappedKey);
+        const privateBytes = await decryptBytes(transferKey, fromBase64Url(receiver.ciphertext), fromBase64Url(receiver.iv), transferAssociatedData(binding));
+        try {
+          const privateKey = await importPasskeyPrivateKey(privateBytes);
+          const publicKey = await crypto.subtle.importKey("jwk", adminPublicKey, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]);
+          const probe = crypto.getRandomValues(new Uint8Array(32));
+          const challenge = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, publicKey, probe);
+          const decrypted = new Uint8Array(await crypto.subtle.decrypt({ name: "RSA-OAEP" }, privateKey, challenge));
+          if (!probe.every((byte, index) => decrypted[index] === byte) || decrypted.length !== probe.length) {
+            throw new Error("T-Cloud管理者鍵を確認できません。");
+          }
+          const sealed = await encryptBytes(adminWrapKey, privateBytes, textEncoder.encode(PASSKEY_ADMIN_WRAP_CONTEXT));
+          return { encryptedPayload: toBase64Url(sealed.ciphertext), payloadIv: toBase64Url(sealed.iv) };
+        } finally { privateBytes.fill(0); }
+      }
+    };
+  }
+
+  function transferAssociatedData(binding) {
+    return textEncoder.encode(JSON.stringify(["T-Cloud admin key transfer v1",
+      binding.sourceCredentialId, binding.targetCredentialId, binding.linkId, binding.recipientFingerprint, binding.adminFingerprint]));
   }
 
   async function wrapFolderKeyForIdentity(folderKey, publicKeyJwk) {
@@ -654,6 +715,7 @@
     unlockAdminPrivateKeyWithPasskey,
     createPasskeyClientVault,
     unlockPasskeyClientPrivateKey,
+    cloudPasskeyPreparation,
     wrapFolderKeyForIdentity,
     unlockDelegatedFolderKey,
     createFolderPackage,

@@ -3209,6 +3209,7 @@ var SERVICES = {
     ],
     "knownTables": [
       "security_windows_authority_versions",
+      "security_tcloud_admin_key_transfers",
       "security_identities",
       "security_invitations",
       "security_credentials",
@@ -3864,6 +3865,16 @@ function reviewedSchemaMatches(service, baseline, actual) {
   return typeof baseline === "string" && (actual === baseline || REVIEWED[service]?.[0] === baseline && REVIEWED[service][1] === actual);
 }
 async function assertSchema(service, rows2) {
+  if (service === "security") {
+    const transfers = rows2.filter((row) => row.tbl_name === "security_tcloud_admin_key_transfers");
+    if (transfers.length) {
+      const shape = transfers.map((r) => [r.type, r.name, r.tbl_name, r.sql.replace(/\r\n?/g, "\n")]);
+      if (await digest(new TextEncoder().encode(JSON.stringify(shape))) !== "db7c7e7d41bc04aebc955bac86f03b8ab93d85b206d62bb432a429f5dd3a2c97") {
+        throw new Error("SchemaReviewRequired");
+      }
+      rows2 = rows2.filter((row) => row.tbl_name !== "security_tcloud_admin_key_transfers");
+    }
+  }
   const versions = service === "cloud" ? rows2.filter((row) => row.tbl_name === "cloud_file_versions" || row.name === "cloud_version_restore_name") : [];
   if (service === "cloud" && Boolean(versions.length) !== rows2.some((row) => row.name === "cloud_windows_uploads")) throw new Error("SchemaReviewRequired");
   if (versions.length) {

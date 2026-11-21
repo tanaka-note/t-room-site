@@ -575,15 +575,12 @@ async function verifyBrowser(browserType, name, origin) {
       isPrimaryAdmin: false, prfEnabled: true, tcloudReady: false,
       cloudLinks: [{ id: "cloud-2", accountId: "folder-member", rootFolderId: 2 }, { id: "cloud-10", accountId: "folder-member", rootFolderId: 10 }]
     };
+    securityStatusBody = { enabled: true, initialized: true, adminAuthenticated: false };
     const resumed = await context.newPage();
     await resumed.goto(`${origin}/security/?scenario=general-retry`, { waitUntil: "load" });
-    const resumeButton = resumed.getByRole("button", { name: "T-Cloudの準備を再開" });
-    await resumeButton.waitFor();
-    assert.equal(await resumed.locator("#invite-view").isVisible(), true, `${name}: setup session resumes after reload`);
-    await resumeButton.click();
-    await resumed.waitForFunction(() => window.__troomWebAuthnGetCalled === true, null, { timeout: 30000 });
-    assert.notEqual(await resumed.evaluate(() => window.__troomWebAuthnCreateCalled), true,
-      `${name}: lost general setup authority resumes with get(), never create()`);
+    await resumed.locator("#admin-login-view").waitFor();
+    assert.equal(await resumed.locator("#invite-view").isVisible(), false, `${name}: approved member prepares keys on T-Cloud login`);
+    assert.notEqual(await resumed.evaluate(() => window.__troomWebAuthnCreateCalled || window.__troomWebAuthnGetCalled), true);
     await resumed.close();
     setupStatusBody = { active: false };
     securityStatusBody = { enabled: true, initialized: false, adminAuthenticated: false };

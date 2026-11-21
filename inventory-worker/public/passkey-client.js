@@ -6,10 +6,14 @@
   async function authenticate(service, chooseLink, options = {}) {
     ensureSupport();
     try {
-      const start = await api("/auth/options", { service });
+      const prepareCloudKeys = service === "cloud" && options.prepareCloudKeys === true;
+      const request = prepareCloudKeys ? { service, prepareCloudKeys } : { service };
+      const start = await api("/auth/options", request);
       const credential = await runWebAuthn("get", decodeRequestOptions(start.options), { operation: "authentication" });
       const prfOutput = readPrfOutput(credential);
-      const verified = await api("/auth/verify", { service, challengeId: start.challengeId, response: serializeCredential(credential) });
+      const verified = await api("/auth/verify", { ...request, challengeId: start.challengeId, response: serializeCredential(credential),
+        ...(prepareCloudKeys ? { prfAvailable: Boolean(prfOutput) } : {}) });
+      if (prepareCloudKeys) return { verified, credentialId: verified.credentialId, prfOutput };
       const link = verified.links.length === 1 ? verified.links[0] : await (chooseLink || chooseLinkDialog)(verified.links, service);
       if (service !== "security" && !link) throw new Error("利用するアカウントを選択してください。");
       const handoff = service === "security" || options.handoff === false ? null : await api("/auth/handoff", { service, linkId: link.id });
@@ -26,9 +30,7 @@
     ensureSupport();
     const start = await api("/invite/options", { token });
     const credential = await runWebAuthn("create", decodeCreationOptions(start.options), { operation: "registration", registration: "invite" });
-    const result = await api("/invite/verify", { token, challengeId: start.challengeId, response: serializeCredential(credential), prfEnabled: supportsPrf(credential) });
-    const prf = await obtainPrfSafely(result.credentialId);
-    return { ...result, ...prf, cloudLinks: start.cloudLinks || [] };
+    return api("/invite/verify", { token, challengeId: start.challengeId, response: serializeCredential(credential), prfEnabled: supportsPrf(credential) });
   }
 
   async function bootstrap(authProof) {
@@ -146,7 +148,11 @@
       body: JSON.stringify(body || {})
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(safeJapaneseMessage(payload.error, "端末のロック解除を確認できませんでした。"));
+    if (!response.ok) {
+      const error = new Error(safeJapaneseMessage(payload.error, "端末のロック解除を確認できませんでした。"));
+      error.status = response.status;
+      throw error;
+    }
     return payload;
   }
 

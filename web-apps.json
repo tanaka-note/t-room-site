@@ -382,6 +382,7 @@
         "security-worker/src/index.js",
         "security-worker/src/windows-device-context.js",
         "security-worker/migrations/0033_windows_device_authority.sql",
+        "security-worker/migrations/0034_tcloud_admin_key_transfers.sql",
         "security-worker/src/billing-vaults.js",
         "security-worker/src/security-domain.js",
         "security-worker/src/security-headers.js",

@@ -10,10 +10,10 @@ const title = "パスキーの登録が完了しました。";
 const message = "管理者の確認後、利用できるようになります。しばらくお待ちください。";
 const credentialId = "Zml4dHVyZS1jcmVkZW50aWFs";
 const cloudLinks = [{ id: "fixture-link", accountId: "folder-member", rootFolderId: 2 }];
-let setup, scenario, envelopeFails, statusFails, registrations, reads, bodies;
+let setup, scenario, statusFails, registrations, reads, bodies;
 function reset(name = "normal") {
   setup = { active: false, resumable: false };
-  scenario = name; envelopeFails = name === "vault-failure"; statusFails = false;
+  scenario = name; statusFails = false;
   registrations = 0; reads = 0; bodies = [];
 }
 const files = new Map([
@@ -37,19 +37,10 @@ const server = createServer(async (request, response) => {
     if (path.endsWith("/invite/verify")) {
       registrations++;
       setup = { active: true, completed: false, resumable: false, identityId: "fixture", credentialId,
-        isPrimaryAdmin: false, credentialStatus: "pending", pendingApproval: true, prfEnabled: !["unsupported", "prf-cancelled"].includes(scenario),
+        isPrimaryAdmin: scenario === "primary", credentialStatus: "pending", pendingApproval: true, prfEnabled: !["unsupported", "prf-cancelled"].includes(scenario),
         tcloudReady: scenario === "no-cloud", needsTCloudSetup: scenario !== "no-cloud", clientKeyReady: false,
         cloudLinks: scenario === "no-cloud" ? [] : cloudLinks };
       return json({ ok: true, identityId: "fixture", credentialId, pendingApproval: true, prfEnabled: setup.prfEnabled });
-    }
-    if (path.endsWith("/prf/options")) return json({ challengeId: "fixture", prfSalt: "AAECAwQFBgcICQoLDA0ODw",
-      options: { challenge: "AAECAwQFBgcICQoLDA0ODw", rpId: "127.0.0.1", allowCredentials: [{ type: "public-key", id: credentialId }],
-        extensions: { prf: { eval: { first: "AAECAwQFBgcICQoLDA0ODw" } } } } });
-    if (path.endsWith("/prf/verify")) { setup.prfEnabled ||= JSON.parse(body).prfAvailable; return json({ verified: true }); }
-    if (path.endsWith("/tcloud/envelope")) {
-      if (envelopeFails) return json({ error: "fixture save failure" }, 503);
-      setup = { ...setup, active: false, completed: true, tcloudReady: true, needsTCloudSetup: false, clientKeyReady: true };
-      return json({ ok: true });
     }
     return json({ error: "unexpected fixture API" }, 404);
   }
@@ -94,7 +85,7 @@ try {
       assert.equal(await page.locator("#invite-view").isVisible(), false);
       assert.equal(await page.locator("#invite-register").isVisible(), false);
       assert.equal(await page.locator("#message").isVisible(), false);
-      assert.equal(await page.locator("#invite-complete a, #invite-complete button").count(), 0);
+      assert.equal(await page.locator("#invite-admin-login").isVisible(), scenario === "primary");
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     };
     reset(); await visit();
@@ -102,13 +93,11 @@ try {
     await page.locator("#invite-register").click(); await complete();
     assert.equal(registrations, 1);
     const steps = await page.evaluate(() => window.fixtureSteps);
-    assert.deepEqual(steps.map(s => s[0]), ["create", "get"]);
+    assert.deepEqual(steps.map(s => s[0]), ["create"]);
     assert.match(steps[0][1], /パスキーを登録しています/);
-    assert.match(steps[1][1], /続けて端末のロック解除を確認する場合があります/);
     assert.equal(setup.pendingApproval, true);
-    assert.equal(setup.active, false); assert.equal(setup.completed, true);
-    const envelope = bodies.find(body => body.envelopeType === "client_private_prf");
-    assert.ok(envelope.encryptedPayload); assert.ok(envelope.publicKeyJwk);
+    assert.equal(setup.active, true);
+    assert.equal(bodies.some(body => body.envelopeType), false);
     assert.doesNotMatch(JSON.stringify(bodies), /prfOutput|privateKey|"results"/);
     await page.reload(); await complete();
     await page.goto(`${origin}/elsewhere`); await page.goBack(); await complete();
@@ -126,42 +115,24 @@ try {
     await page.reload(); await page.locator("#admin-login-view").waitFor();
     assert.equal(await page.locator("#invite-complete").isVisible(), false);
 
-    reset("vault-failure"); await visit(); await page.locator("#invite-register").click();
-    await page.locator("#message.error").waitFor();
-    assert.match(await page.locator("#message").textContent(), /パスキーは登録済み/);
-    assert.equal(await page.locator("#invite-complete").isVisible(), false);
-    await page.reload(); await page.getByRole("button", { name: "T-Cloudの準備を再開" }).waitFor();
-    envelopeFails = false; await page.locator("#invite-register").click(); await complete();
-    assert.equal(registrations, 1, "vault retry reuses the same credential");
-    assert.deepEqual((await page.evaluate(() => window.fixtureSteps)).map(s => s[0]), ["get"]);
-
-    reset("unsupported"); await visit(); await page.locator("#invite-register").click();
-    await page.waitForFunction(() => document.querySelector("#invite-description").textContent.includes("T-Cloudのパスキー利用準備は未確認"));
-    assert.equal(await page.locator("#invite-complete").isVisible(), false);
-    assert.match(await page.locator("#invite-description").textContent(), /日記・請求書のパスキー登録は完了/);
-    assert.doesNotMatch(await page.locator("#invite-description").textContent(), /非対応|対応していません/);
-    assert.match(await page.locator("#invite-description").textContent(), /現在のパスキー.*再試行/);
+    reset("unsupported"); await visit(); await page.locator("#invite-register").click(); await complete();
+    assert.equal(setup.prfEnabled, false);
     assert.equal(bodies.some(body => body.envelopeType), false);
-    await page.reload(); await page.locator("#invite-register").waitFor();
+    await page.reload(); await complete();
+
+    reset("primary"); await visit(); await page.locator("#invite-register").click(); await complete();
+    assert.equal(await page.locator("#tcloud-setup-notice").isVisible(), false);
+    await page.locator("#invite-admin-login").click();
+    await page.locator("#admin-login-view").waitFor();
     assert.equal(await page.locator("#invite-complete").isVisible(), false);
     assert.equal(registrations, 1);
-
-    assert.match(await page.locator("#invite-description").textContent(), /未確認.*現在のパスキーで再確認/);
-
-    reset("prf-cancelled"); await visit(); await page.locator("#invite-register").click();
-    await page.locator("#message.error").waitFor();
-    assert.equal(await page.locator("#invite-complete").isVisible(), false);
-    assert.doesNotMatch(await page.locator("#message").textContent(), /対応していません|PRF/);
-    await page.reload(); await page.locator("#invite-register").waitFor();
-    await page.evaluate(() => { window.fixtureCancelGet = false; });
-    await page.locator("#invite-register").click(); await complete();
-    assert.equal(registrations, 1, "cancelled verification retries safely even when support was not yet measured");
+    assert.deepEqual((await page.evaluate(() => window.fixtureSteps)).map(step => step[0]), ["create"]);
 
     reset("no-cloud"); await visit(); await page.locator("#invite-register").click(); await complete();
     assert.equal(setup.active, true, "no-cloud setup need not have a completed flag");
     await page.reload(); await complete();
     assert.deepEqual(errors, []);
-    console.log(`invite completion: registration, reload/back, pending approval, failure/retry, unsupported, no Cloud (${viewport.width}px): ok`);
+    console.log(`invite completion: registration, reload/back, pending approval, first administrator, unsupported PRF, no Cloud (${viewport.width}px): ok`);
     await context.close();
   }
 } finally {

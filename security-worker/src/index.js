@@ -306,6 +306,10 @@ async function handleApi(request, env, url, path, context = null) {
     requireMutation(request, url);
     return prfVerify(request, env, url);
   }
+  if (path === "/api/tcloud/key-preparation" && request.method === "POST") {
+    requireMutation(request, url);
+    return cloudKeyPreparation(request, env);
+  }
   if (path === "/api/tcloud/envelope" && request.method === "POST") {
     requireMutation(request, url);
     return saveOwnTCloudEnvelope(request, env);
@@ -499,7 +503,10 @@ async function authenticationOptions(request, env) {
   const service = normalizeAuthService(body.service);
   if (!service) throw new HttpError(400, "ログイン先サービスを確認してください。");
   await enforceAuthenticationOptionsRateLimit(request, env);
-  const servicePredicate = service === "security"
+  const prepareCloudKeys = service === "cloud" && body.prepareCloudKeys === true;
+  const servicePredicate = prepareCloudKeys
+    ? `EXISTS (SELECT 1 FROM security_service_links l WHERE l.identity_id = i.id AND ${CLOUD_PREPARATION_LINK})`
+    : service === "security"
     ? "i.is_security_admin = 1"
     : service === "cloud"
       ? `EXISTS (
@@ -538,7 +545,7 @@ async function authenticationOptions(request, env) {
     allowCredentials: rows.results.map((row) => ({ id: row.credential_id, transports: parseJson(row.transports_json, []) })),
     extensions
   });
-  const challengeId = await storeChallenge(env, "authentication", options.challenge, null, null, service);
+  const challengeId = await storeChallenge(env, "authentication", options.challenge, null, null, prepareCloudKeys ? "cloud_key_login" : service);
   await writeLocalAudit(env, { eventType: "passkey_authentication_options", outcome: "info", authMethod: "passkey", service }, request);
   return json({ challengeId, options });
 }
@@ -546,8 +553,9 @@ async function authenticationOptions(request, env) {
 async function authenticationVerify(request, env, url) {
   const body = await readJson(request, 100000);
   const service = normalizeAuthService(body.service);
+  const prepareCloudKeys = service === "cloud" && body.prepareCloudKeys === true;
   const challenge = await consumeChallenge(env, body.challengeId, "authentication", null);
-  if (!service || challenge.service !== service) throw new HttpError(401, "認証先サービスが一致しません。");
+  if (!service || challenge.service !== (prepareCloudKeys ? "cloud_key_login" : service)) throw new HttpError(401, "認証先サービスが一致しません。");
   const credentialId = validCredentialId(body.response?.id);
   const credential = await activeCredential(env, credentialId);
   if (!credential) {
@@ -565,11 +573,18 @@ async function authenticationVerify(request, env, url) {
     await writeLocalAudit(env, { eventType: "passkey_authentication_failure", outcome: "failure", identityId: credential.identity_id, authMethod: "passkey", service }, request);
     throw new HttpError(401, "パスキーを確認できませんでした。");
   }
-  await env.DB.prepare("UPDATE security_credentials SET counter = ?, last_used_at = CURRENT_TIMESTAMP WHERE credential_id = ?")
-    .bind(verification.authenticationInfo.newCounter, credentialId).run();
+  const counter = verification.authenticationInfo.newCounter;
+  const updateCredential = prepareCloudKeys && body.prfAvailable === true
+    ? env.DB.prepare("UPDATE security_credentials SET counter = ?, last_used_at = CURRENT_TIMESTAMP, prf_enabled = 1 WHERE credential_id = ?")
+    : env.DB.prepare("UPDATE security_credentials SET counter = ?, last_used_at = CURRENT_TIMESTAMP WHERE credential_id = ?");
+  await updateCredential.bind(counter, credentialId).run();
   const links = service === "security" ? [] : await activeLinks(env, credential.identity_id, service, credentialId);
   if (service === "security" && !credential.is_security_admin) throw new HttpError(403, "Security Centerを管理する権限がありません。");
-  if (service !== "security" && !links.length) throw new HttpError(403, "このサービスへ接続されたアカウントがありません。");
+  if (service !== "security" && !links.length) {
+    const canPrepare = prepareCloudKeys && await env.DB.prepare(`SELECT 1 FROM security_service_links l
+      WHERE l.identity_id = ? AND ${CLOUD_PREPARATION_LINK} LIMIT 1`).bind(credential.identity_id).first();
+    if (!canPrepare) throw new HttpError(403, "このサービスへ接続されたアカウントがありません。");
+  }
   await writeLocalAudit(env, {
     eventType: service === "security" ? "passkey_login_success" : "passkey_authentication_success",
     outcome: "success", identityId: credential.identity_id, authMethod: "passkey", service
@@ -584,6 +599,9 @@ async function createHandoff(request, env) {
   if (!runtime.enabled) throw new HttpError(503, "パスキー機能は一時停止中です。");
   const body = await readJson(request, 4096);
   const service = normalizeService(body.service);
+  if (body.credentialId !== undefined && body.credentialId !== identitySession.credentialId) {
+    throw new HttpError(401, "他の画面でパスキーが切り替わりました。もう一度ログインしてください。");
+  }
   const links = await activeLinks(env, identitySession.identityId, service, identitySession.credentialId);
   if (!links.length) throw new HttpError(403, "このサービスへ接続されたアカウントがありません。");
   // This reserved selection represents ordinary Cloud use, never an admin link.
@@ -822,23 +840,7 @@ async function saveOwnTCloudEnvelope(request, env) {
   const statements = [];
   let alreadyExisting = false;
   if (envelopeType === "client_private_prf") {
-    const fingerprint = await sha256(canonicalJwk(publicKeyJwk));
-    // The credential PK arbitrates concurrent setup requests. Never overwrite a
-    // vault, even if a preflight read or the supplied fingerprint agrees.
-    const inserted = await env.DB.prepare(`INSERT INTO security_tcloud_client_vaults
-      (credential_id, identity_id, public_key_jwk, public_key_fingerprint, encrypted_payload, payload_iv)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(credential_id) DO NOTHING`)
-      .bind(identitySession.credentialId, identitySession.identityId, JSON.stringify(publicKeyJwk), fingerprint, encryptedPayload, payloadIv).run();
-    const saved = await env.DB.prepare("SELECT * FROM security_tcloud_client_vaults WHERE credential_id = ?").bind(identitySession.credentialId).first();
-    const savedJwk = parseJson(saved?.public_key_jwk, null);
-    const savedFingerprint = saved?.public_key_fingerprint || (savedJwk ? await sha256(canonicalJwk(savedJwk)) : null);
-    if (!saved || saved.identity_id !== identitySession.identityId || savedFingerprint !== fingerprint
-      || !savedJwk || canonicalJwk(savedJwk) !== canonicalJwk(publicKeyJwk)
-      || saved.encrypted_payload !== encryptedPayload || saved.payload_iv !== payloadIv) {
-      throw new HttpError(409, "このパスキーのT-Cloudクライアント鍵は既に登録されています。既存の鍵を使用してください。");
-    }
-    alreadyExisting = !inserted.meta?.changes;
+    alreadyExisting = await saveCloudMemberVault(env, identitySession, { publicKeyJwk, encryptedPayload, payloadIv });
   } else {
     statements.push(env.DB.prepare(`INSERT INTO security_tcloud_key_envelopes
       (id, identity_id, credential_id, service_link_id, envelope_type, public_key_jwk, encrypted_payload, payload_iv)
@@ -867,6 +869,234 @@ async function saveOwnTCloudEnvelope(request, env) {
   const status = await tcloudSetupStatus(env, identitySession.identityId, identitySession.credentialId, {});
   if (status.tcloudReady) await env.DB.prepare("UPDATE security_setup_sessions SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identitySession.setupId).run();
   return json({ ok: true, existing: alreadyExisting });
+}
+
+async function saveCloudMemberVault(env, actor, { publicKeyJwk, encryptedPayload, payloadIv }, activeOnly = false) {
+  const fingerprint = await sha256(canonicalJwk(publicKeyJwk));
+  // The credential PK arbitrates concurrent setup requests. Never overwrite a
+  // vault, even if a preflight read or the supplied fingerprint agrees.
+  const inserted = await env.DB.prepare(`INSERT INTO security_tcloud_client_vaults
+    (credential_id, identity_id, public_key_jwk, public_key_fingerprint, encrypted_payload, payload_iv)
+    SELECT ?1, ?2, ?3, ?4, ?5, ?6 WHERE ${activeOnly ? CLOUD_KEY_ACTOR + ` AND EXISTS (
+      SELECT 1 FROM security_service_links l WHERE l.identity_id = ?2 AND l.service_account_id = 'folder-member'
+        AND ${CLOUD_PREPARATION_LINK})` : "1"}
+    ON CONFLICT(credential_id) DO NOTHING`)
+    .bind(actor.credentialId, actor.identityId, JSON.stringify(publicKeyJwk), fingerprint, encryptedPayload, payloadIv).run();
+  const saved = await env.DB.prepare("SELECT * FROM security_tcloud_client_vaults WHERE credential_id = ?").bind(actor.credentialId).first();
+  const savedJwk = parseJson(saved?.public_key_jwk, null);
+  const savedFingerprint = saved?.public_key_fingerprint || (savedJwk ? await sha256(canonicalJwk(savedJwk)) : null);
+  if (!saved || saved.identity_id !== actor.identityId || savedFingerprint !== fingerprint
+    || !savedJwk || canonicalJwk(savedJwk) !== canonicalJwk(publicKeyJwk)
+    || saved.encrypted_payload !== encryptedPayload || saved.payload_iv !== payloadIv) {
+    throw new HttpError(409, "このパスキーのT-Cloudクライアント鍵は既に登録されています。既存の鍵を使用してください。");
+  }
+  return !inserted.meta?.changes;
+}
+
+
+const CLOUD_PREPARATION_LINK = `l.service = 'cloud' AND (
+  (l.service_account_id = 'admin' AND l.identity_id = 'primary-admin' AND l.status = 'active')
+  OR (l.service_account_id = 'folder-member' AND l.cloud_root_folder_id IS NOT NULL AND l.status IN ('pending', 'active')))`;
+
+const CLOUD_KEY_ACTOR = `EXISTS (SELECT 1 FROM security_credentials c JOIN security_identities i ON i.id = c.identity_id
+  WHERE c.credential_id = ?1 AND c.identity_id = ?2 AND c.status = 'active' AND i.status = 'active')`;
+
+const CLOUD_KEY_SENDER = `EXISTS (SELECT 1 FROM security_tcloud_key_envelopes own
+  JOIN security_credentials c ON c.credential_id = own.credential_id AND c.identity_id = own.identity_id
+  JOIN security_identities i ON i.id = c.identity_id
+  JOIN security_service_links l ON l.id = own.service_link_id AND l.identity_id = i.id
+  WHERE c.credential_id = ?1 AND i.id = ?2 AND i.id = 'primary-admin' AND i.is_security_admin = 1
+    AND c.status = 'active' AND i.status = 'active' AND l.status = 'active'
+    AND l.service = 'cloud' AND l.service_account_id = 'admin' AND own.envelope_type = 'admin_private_prf')`;
+
+async function cloudKeyPreparation(request, env) {
+  const actor = await requireActiveIdentitySession(request, env);
+  const body = await readJson(request, 40000);
+  if (body.credentialId !== actor.credentialId) throw new HttpError(401, "他の画面でパスキーが切り替わりました。もう一度ログインしてください。");
+  const links = (await env.DB.prepare(`SELECT l.* FROM security_service_links l WHERE l.identity_id = ? AND ${CLOUD_PREPARATION_LINK}`)
+    .bind(actor.identityId).all()).results || [];
+  if (!links.length) throw new HttpError(403, "T-Cloudのサービス連携が見つかりません。");
+  const adminLink = links.find(link => link.service_account_id === "admin");
+  const memberLinks = links.filter(link => link.service_account_id === "folder-member");
+  const own = [actor.credentialId, actor.identityId];
+  const adminEnvelope = adminLink ? await env.DB.prepare(`SELECT encrypted_payload AS encryptedPayload, payload_iv AS payloadIv
+    FROM security_tcloud_key_envelopes WHERE credential_id = ? AND identity_id = ? AND service_link_id = ? AND envelope_type = 'admin_private_prf'`)
+    .bind(...own, adminLink.id).first() : null;
+  if (body.action === "member-vault") {
+    if (!memberLinks.length) throw new HttpError(403, "通常利用のT-Cloud連携が見つかりません。");
+    await saveCloudMemberVault(env, actor, await cloudPreparationVault(body.vault), true);
+    return json({ ok: true });
+  }
+  const sender = adminEnvelope && (body.action === "admin-grant" || body.action === "folder-grant" || body.action === "status")
+    ? await activeSecurityAdminSession(request, env) : null;
+  const canSend = sender?.identityId === actor.identityId && sender?.credentialId === actor.credentialId
+    && nowSeconds() - Number(sender.authenticatedAt) <= PRIVILEGED_LINK_REAUTH_SECONDS;
+  if (body.action === "folder-grant") {
+    if (!canSend) throw new HttpError(403, "委譲には鍵を準備済みの管理者パスキーでの本人確認が必要です。");
+    const wrappedKey = cloudPreparationBytes(body.wrappedKey, 1024);
+    const targetCredentialId = cloudPreparationCredential(body.targetCredentialId);
+    const recipientFingerprint = cloudPreparationBytes(body.recipientFingerprint, 43, 43);
+    if (typeof body.linkId !== "string" || !/^[A-Za-z0-9-]{1,64}$/.test(body.linkId)) throw new HttpError(400, "T-Cloud連携を確認してください。");
+    const result = await env.DB.batch([
+      env.DB.prepare(`INSERT INTO security_tcloud_key_envelopes
+        (id, identity_id, credential_id, service_link_id, envelope_type, wrapped_key)
+        SELECT ?3, i.id, c.credential_id, l.id, 'folder_key_rsa', ?4
+        FROM security_tcloud_client_vaults v
+        JOIN security_credentials c ON c.credential_id = v.credential_id AND c.identity_id = v.identity_id
+        JOIN security_identities i ON i.id = c.identity_id
+        JOIN security_service_links l ON l.identity_id = i.id
+        WHERE c.credential_id = ?5 AND l.id = ?6 AND v.public_key_fingerprint = ?7
+          AND c.status = 'active' AND i.status = 'active' AND ${CLOUD_PREPARATION_LINK} AND l.service_account_id = 'folder-member'
+          AND ${CLOUD_KEY_SENDER} ON CONFLICT(credential_id, service_link_id, envelope_type) DO NOTHING`)
+        .bind(...own, crypto.randomUUID(), wrappedKey, targetCredentialId, body.linkId, recipientFingerprint),
+      env.DB.prepare(`UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?3 AND service = 'cloud' AND service_account_id = 'folder-member' AND status = 'pending' AND ${CLOUD_KEY_SENDER}
+          AND EXISTS (SELECT 1 FROM security_tcloud_key_envelopes e JOIN security_credentials c ON c.credential_id = e.credential_id
+            JOIN security_identities i ON i.id = c.identity_id
+            WHERE e.service_link_id = ?3 AND e.credential_id = ?4 AND e.envelope_type = 'folder_key_rsa'
+              AND c.status = 'active' AND i.status = 'active')`)
+        .bind(...own, body.linkId, targetCredentialId)
+    ]);
+    if (result[0].meta?.changes) await writeLocalAudit(env, { eventType: "tcloud_folder_key_delegated", outcome: "success", service: "cloud",
+      identityId: actor.identityId, serviceLinkId: body.linkId, authMethod: "passkey" }, request);
+    return json({ ok: true });
+  }
+  if (!["status", "admin-vault", "admin-grant", "admin-accept"].includes(body.action)) throw new HttpError(400, "鍵の準備操作を確認してください。");
+  if (body.action !== "status" && (!adminLink || actor.identityId !== PRIMARY_ADMIN_ID)) {
+    throw new HttpError(403, "第一管理者の連携が必要です。");
+  }
+  if (body.action === "admin-vault") {
+    if (adminEnvelope) return json({ ok: true });
+    const vault = await cloudPreparationVault(body.vault);
+    const fingerprint = await sha256(canonicalJwk(vault.publicKeyJwk));
+    await env.DB.prepare(`INSERT INTO security_tcloud_admin_key_transfers
+      (credential_id, identity_id, service_link_id, public_key_jwk, public_key_fingerprint, receiver_ciphertext, receiver_iv)
+      SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE ${CLOUD_KEY_ACTOR}
+        AND EXISTS (SELECT 1 FROM security_service_links l WHERE l.id = ?3 AND l.identity_id = ?2 AND ${CLOUD_PREPARATION_LINK})
+      ON CONFLICT (credential_id) DO NOTHING`).bind(...own, adminLink.id, JSON.stringify(vault.publicKeyJwk), fingerprint, vault.encryptedPayload, vault.payloadIv).run();
+    return json({ ok: true });
+  }
+  const config = adminLink && (canSend || !adminEnvelope) ? await env.CLOUD_AUTH.getPrimaryAdminCryptoConfig() : null;
+  const adminPublicKey = config?.initialized ? config.publicKeyJwk : null;
+  const adminFingerprint = adminPublicKey ? await sha256(canonicalJwk(adminPublicKey)) : null;
+  if (body.action === "admin-grant") {
+    if (!canSend || !adminFingerprint || adminFingerprint !== body.adminFingerprint) throw new HttpError(403, "管理者鍵の世代または本人確認が一致しません。");
+    const targetCredentialId = cloudPreparationCredential(body.targetCredentialId);
+    const recipientFingerprint = cloudPreparationBytes(body.recipientFingerprint, 43, 43);
+    const ciphertext = cloudPreparationBytes(body.ciphertext, 15000);
+    const iv = cloudPreparationBytes(body.iv, 16, 16);
+    const wrappedKey = cloudPreparationBytes(body.wrappedKey, 1024);
+    const saved = await env.DB.prepare(`UPDATE security_tcloud_admin_key_transfers
+      SET source_credential_id = ?1, admin_key_fingerprint = ?6, transfer_ciphertext = ?7, transfer_iv = ?8, transfer_wrapped_key = ?9
+      WHERE credential_id = ?3 AND identity_id = ?2 AND service_link_id = ?4 AND public_key_fingerprint = ?5
+        AND credential_id != ?1 AND ${CLOUD_KEY_SENDER}
+        AND EXISTS (SELECT 1 FROM security_credentials c WHERE c.credential_id = ?3 AND c.identity_id = ?2 AND c.status = 'active')
+        AND NOT EXISTS (SELECT 1 FROM security_tcloud_key_envelopes e WHERE e.credential_id = ?3 AND e.service_link_id = ?4 AND e.envelope_type = 'admin_private_prf')
+        AND NOT (COALESCE(admin_key_fingerprint, '') = ?6 AND EXISTS (
+          SELECT 1 FROM security_credentials c WHERE c.credential_id = source_credential_id AND c.identity_id = ?2 AND c.status = 'active'))`)
+      .bind(...own, targetCredentialId, adminLink.id, recipientFingerprint, adminFingerprint, ciphertext, iv, wrappedKey).run();
+    if (saved.meta?.changes) await writeLocalAudit(env, { eventType: "tcloud_admin_key_delegated", outcome: "success", service: "cloud",
+      identityId: actor.identityId, serviceLinkId: adminLink.id, authMethod: "passkey" }, request);
+    return json({ ok: true });
+  }
+  if (body.action === "admin-accept") {
+    if (adminEnvelope) return json({ ok: true });
+    if (!adminFingerprint || body.adminFingerprint !== adminFingerprint) throw new HttpError(409, "T-Cloud管理者鍵の世代が変わりました。");
+    const encryptedPayload = cloudPreparationBytes(body.encryptedPayload, 15000);
+    const payloadIv = cloudPreparationBytes(body.payloadIv, 16, 16);
+    const transferCiphertext = cloudPreparationBytes(body.transferCiphertext, 15000);
+    const recipientFingerprint = cloudPreparationBytes(body.recipientFingerprint, 43, 43);
+    const result = await env.DB.batch([
+      env.DB.prepare(`INSERT INTO security_tcloud_key_envelopes
+        (id, identity_id, credential_id, service_link_id, envelope_type, encrypted_payload, payload_iv)
+        SELECT ?3, t.identity_id, t.credential_id, t.service_link_id, 'admin_private_prf', ?4, ?5
+        FROM security_tcloud_admin_key_transfers t
+        JOIN security_credentials source ON source.credential_id = t.source_credential_id AND source.identity_id = t.identity_id
+        JOIN security_service_links l ON l.id = t.service_link_id AND l.identity_id = t.identity_id
+        WHERE t.credential_id = ?1 AND t.identity_id = ?2 AND t.service_link_id = ?6 AND t.admin_key_fingerprint = ?7
+          AND source.status = 'active' AND t.transfer_ciphertext = ?8 AND t.public_key_fingerprint = ?9
+          AND l.service_account_id = 'admin' AND l.service = 'cloud' AND l.status = 'active' AND ${CLOUD_KEY_ACTOR}
+        ON CONFLICT(credential_id, service_link_id, envelope_type) DO NOTHING`)
+        .bind(...own, crypto.randomUUID(), encryptedPayload, payloadIv, adminLink.id, adminFingerprint, transferCiphertext, recipientFingerprint),
+      env.DB.prepare(`DELETE FROM security_tcloud_admin_key_transfers WHERE credential_id = ?1 AND identity_id = ?2
+        AND EXISTS (SELECT 1 FROM security_tcloud_key_envelopes e WHERE e.credential_id = ?1 AND e.identity_id = ?2
+          AND e.service_link_id = ?3 AND e.envelope_type = 'admin_private_prf')`).bind(...own, adminLink.id)
+    ]);
+    if (result[0].meta?.changes) {
+      await writeLocalAudit(env, { eventType: "tcloud_admin_key_received", outcome: "success", service: "cloud",
+        identityId: actor.identityId, serviceLinkId: adminLink.id, authMethod: "passkey" }, request);
+    } else if (!await env.DB.prepare(`SELECT 1 FROM security_tcloud_key_envelopes WHERE credential_id = ? AND identity_id = ?
+      AND service_link_id = ? AND envelope_type = 'admin_private_prf'`).bind(...own, adminLink.id).first()) {
+      throw new HttpError(409, "鍵の引き渡し状態が変わりました。もう一度確認してください。");
+    }
+    return json({ ok: true });
+  }
+  const readyLinks = await activeLinks(env, actor.identityId, "cloud", actor.credentialId);
+  const memberVault = memberLinks.length ? await env.DB.prepare(`SELECT public_key_jwk AS publicKey, encrypted_payload AS encryptedPayload,
+    payload_iv AS payloadIv FROM security_tcloud_client_vaults WHERE credential_id = ? AND identity_id = ?`).bind(...own).first() : null;
+  const receiver = adminLink && !adminEnvelope ? await env.DB.prepare(`SELECT public_key_fingerprint AS recipientFingerprint,
+    receiver_ciphertext AS encryptedPayload, receiver_iv AS payloadIv,
+    CASE WHEN admin_key_fingerprint = ?3 AND c.status = 'active' THEN transfer_ciphertext END AS ciphertext,
+    source_credential_id AS sourceCredentialId, transfer_iv AS iv, transfer_wrapped_key AS wrappedKey
+    FROM security_tcloud_admin_key_transfers t LEFT JOIN security_credentials c ON c.credential_id = t.source_credential_id
+    WHERE t.credential_id = ?1 AND t.identity_id = ?2 AND t.service_link_id = ?4`).bind(...own, adminFingerprint, adminLink.id).first() : null;
+  let recipients = { admin: [], folders: [] };
+  if (canSend && adminFingerprint) {
+    const [admin, folders] = await Promise.all([
+      env.DB.prepare(`SELECT t.credential_id AS credentialId, t.public_key_jwk AS publicKey, t.public_key_fingerprint AS recipientFingerprint
+        FROM security_tcloud_admin_key_transfers t JOIN security_credentials c ON c.credential_id = t.credential_id
+        LEFT JOIN security_credentials source ON source.credential_id = t.source_credential_id
+        WHERE t.identity_id = ?1 AND t.service_link_id = ?2 AND t.credential_id != ?3 AND c.identity_id = ?1 AND c.status = 'active'
+          AND NOT (COALESCE(t.admin_key_fingerprint, '') = ?4 AND COALESCE(source.status, '') = 'active')
+          AND NOT EXISTS (SELECT 1 FROM security_tcloud_key_envelopes e WHERE e.credential_id = t.credential_id
+            AND e.service_link_id = t.service_link_id AND e.envelope_type = 'admin_private_prf')`)
+        .bind(actor.identityId, adminLink.id, actor.credentialId, adminFingerprint).all(),
+      env.DB.prepare(`SELECT c.credential_id AS credentialId, l.id AS linkId, l.cloud_root_folder_id AS rootFolderId,
+        v.public_key_jwk AS publicKey, v.public_key_fingerprint AS recipientFingerprint
+        FROM security_tcloud_client_vaults v JOIN security_credentials c ON c.credential_id = v.credential_id AND c.identity_id = v.identity_id
+        JOIN security_identities i ON i.id = c.identity_id JOIN security_service_links l ON l.identity_id = i.id
+        WHERE c.status = 'active' AND i.status = 'active' AND ${CLOUD_PREPARATION_LINK} AND l.service_account_id = 'folder-member'
+          AND v.public_key_fingerprint IS NOT NULL AND NOT EXISTS (SELECT 1 FROM security_tcloud_key_envelopes e
+            WHERE e.credential_id = c.credential_id AND e.service_link_id = l.id AND e.envelope_type = 'folder_key_rsa')
+        ORDER BY l.id, c.credential_id LIMIT 50`).all()
+    ]);
+    recipients = {
+      admin: admin.results || [],
+      folders: (await Promise.all((folders.results || []).map(async item => {
+        const folder = await env.CLOUD_AUTH.getFolderCryptoRecord(item.rootFolderId).catch(() => null);
+        return folder ? { ...item, folder } : null;
+      }))).filter(Boolean)
+    };
+  }
+  return json({ links: await Promise.all(readyLinks.map(link => publicLink(env, link))),
+    hasMember: Boolean(memberLinks.length), memberVault, adminLinkId: adminLink?.id || null,
+    adminEnvelope, adminFingerprint, adminPublicKey, receiver, recipients });
+}
+
+async function cloudPreparationVault(value) {
+  const publicKeyJwk = validatePublicJwk(value?.publicKeyJwk);
+  cloudPreparationBytes(publicKeyJwk.n, 700, 342);
+  cloudPreparationBytes(publicKeyJwk.e, 10);
+  try {
+    await crypto.subtle.importKey("jwk", publicKeyJwk, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]);
+  } catch {
+    throw new HttpError(400, "鍵を受け取るための公開鍵を確認してください。");
+  }
+  return { publicKeyJwk, encryptedPayload: cloudPreparationBytes(value?.encryptedPayload, 15000),
+    payloadIv: cloudPreparationBytes(value?.payloadIv, 16, 16) };
+}
+
+function cloudPreparationCredential(value) {
+  const id = validCredentialId(value);
+  if (!id) throw new HttpError(400, "受け取り先のパスキーを確認してください。");
+  return id;
+}
+
+function cloudPreparationBytes(value, max, min = 1) {
+  if (typeof value !== "string" || value.length < min || value.length > max || !/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) {
+    throw new HttpError(400, "暗号化済みの鍵情報を確認してください。");
+  }
+  return value;
 }
 
 async function dashboard(env) {
@@ -1019,7 +1249,7 @@ async function identityDetail(id, env) {
   if (!identity) throw new HttpError(404, "Identityが見つかりません。");
   const [links, credentials, invitations, audits] = await Promise.all([
     env.DB.prepare("SELECT * FROM security_service_links WHERE identity_id = ? AND service NOT IN ('health', 'ai', 'downloader', 'downloader2') ORDER BY service, created_at").bind(id).all(),
-    env.DB.prepare("SELECT credential_id, transports_json, device_type, backed_up, prf_enabled, status, label, registered_at, approved_at, last_used_at, revoked_at FROM security_credentials WHERE identity_id = ? ORDER BY registered_at DESC").bind(id).all(),
+    env.DB.prepare("SELECT credential_id, transports_json, device_type, backed_up, prf_enabled, status, label, registered_at, approved_at, last_used_at, revoked_at, registered_via_invitation_id FROM security_credentials WHERE identity_id = ? ORDER BY registered_at DESC").bind(id).all(),
     env.DB.prepare("SELECT id, expires_at, status, created_at, used_at, revoked_at FROM security_invitations WHERE identity_id = ? ORDER BY created_at DESC LIMIT 20").bind(id).all(),
     env.DB.prepare("SELECT * FROM security_audit_events WHERE identity_id = ? AND occurred_at >= ? ORDER BY occurred_at DESC LIMIT 50").bind(id, auditRetentionCutoff(180)).all()
   ]);
@@ -1064,6 +1294,7 @@ async function identityDetail(id, env) {
     approvalCandidates.push({
       credentialId: credential.credential_id,
       status: credential.status,
+      invitedRegistration: Boolean(credential.registered_via_invitation_id),
       registeredAt: normalizeUtcTimestamp(credential.registered_at),
       deviceType: credential.device_type || null,
       backedUp: Boolean(credential.backed_up),
@@ -1161,14 +1392,13 @@ async function approveIdentity(identityId, request, env, admin) {
   const identity = await env.DB.prepare("SELECT * FROM security_identities WHERE id = ?").bind(identityId).first();
   if (!identity || !["pending_approval", "active"].includes(identity.status)) throw new HttpError(409, "承認待ちのIdentityではありません。");
   const credentialId = normalizeSecretText(body.credentialId, 2048);
-  const credential = await env.DB.prepare("SELECT credential_id, status FROM security_credentials WHERE identity_id = ? AND credential_id = ? AND status IN ('pending', 'active')")
+  const credential = await env.DB.prepare("SELECT credential_id, status, registered_via_invitation_id FROM security_credentials WHERE identity_id = ? AND credential_id = ? AND status IN ('pending', 'active')")
     .bind(identityId, credentialId).first();
   if (!credential) throw new HttpError(409, "承認待ちのパスキーが見つかりません。");
-  if (identityId === PRIMARY_ADMIN_ID) {
-    const setup = await tcloudSetupStatus(env, identityId, credentialId, {});
-    if (!setup.cloudLinks.some(link => link.accountId === "admin") || !setup.adminKeyReady || !setup.prfEnabled) {
-      throw new HttpError(409, "第一管理者パスキー登録処理が未完了です。このパスキー専用のT-Cloud管理者鍵を準備してから承認してください。");
-    }
+  if (identityId === PRIMARY_ADMIN_ID && credential.status === "pending") {
+    if (!credential.registered_via_invitation_id) throw new HttpError(409, "管理者パスワードで開始した復旧登録は、復旧画面で鍵の準備を完了してください。");
+    if (admin.identityId !== PRIMARY_ADMIN_ID || admin.credentialId === credentialId) throw new HttpError(403, "承認済みの第一管理者パスキーが必要です。");
+    requireFreshSecurityAdmin(admin);
   }
   const cloudLinks = await env.DB.prepare("SELECT * FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND service_account_id = 'folder-member' AND status IN ('pending', 'active')").bind(identityId).all();
   const pendingLinks = await env.DB.prepare("SELECT 1 AS ok FROM security_service_links WHERE identity_id = ? AND status = 'pending' AND service NOT IN ('health', 'ai', 'downloader', 'downloader2') LIMIT 1").bind(identityId).first();
@@ -1178,12 +1408,13 @@ async function approveIdentity(identityId, request, env, admin) {
   const existingFolderLinkIds = new Set((existingFolderEnvelopes.results || []).map((row) => row.service_link_id));
   const missingCloudLinks = (cloudLinks.results || []).filter((link) => !existingFolderLinkIds.has(link.id));
   if (credential.status === "active" && !pendingLinks && !missingCloudLinks.length) throw new HttpError(409, "承認待ちの連携が見つかりません。");
-  let cloudPasskeyReady = !(cloudLinks.results || []).length;
-  let validatedCloudEnvelopes = [];
+  const setup = identityId === PRIMARY_ADMIN_ID ? await tcloudSetupStatus(env, identityId, credentialId, {}) : null;
+  let cloudPasskeyReady = !missingCloudLinks.length && (!setup || setup.adminKeyReady);
+  const validatedCloudEnvelopes = [];
   if ((cloudLinks.results || []).length) {
     const clientEnvelope = await env.DB.prepare("SELECT public_key_jwk FROM security_tcloud_client_vaults WHERE identity_id = ? AND credential_id = ?").bind(identityId, credential?.credential_id || "").first();
-    if (clientEnvelope) {
-      const delegated = Array.isArray(body.cloudEnvelopes) ? body.cloudEnvelopes : [];
+    if (clientEnvelope && missingCloudLinks.length && Array.isArray(body.cloudEnvelopes) && body.cloudEnvelopes.length) {
+      const delegated = body.cloudEnvelopes;
       for (const link of missingCloudLinks) {
         const envelope = delegated.find((item) => item.serviceLinkId === link.id);
         if (!envelope?.wrappedKey) throw new HttpError(400, "T-Cloudフォルダ鍵の安全な委譲が完了していません。");
@@ -1191,7 +1422,7 @@ async function approveIdentity(identityId, request, env, admin) {
         if (!wrappedKey) throw new HttpError(400, "T-Cloudフォルダ鍵の安全な委譲を確認できません。");
         validatedCloudEnvelopes.push({ linkId: link.id, wrappedKey });
       }
-      cloudPasskeyReady = true;
+      cloudPasskeyReady = !setup || setup.adminKeyReady;
     }
   }
   const updates = [
@@ -1205,7 +1436,9 @@ async function approveIdentity(identityId, request, env, admin) {
     env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service NOT IN ('cloud', 'health', 'ai', 'downloader', 'downloader2')").bind(identityId),
     env.DB.prepare("UPDATE security_identities SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identityId)
   ];
-  if (cloudPasskeyReady) updates.push(env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service = 'cloud' AND service_account_id = 'folder-member'").bind(identityId));
+  if (!missingCloudLinks.length || validatedCloudEnvelopes.length === missingCloudLinks.length) {
+    updates.push(env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service = 'cloud' AND service_account_id = 'folder-member'").bind(identityId));
+  }
   updates.push(await localAuditStatement(env, { eventType: "identity_approved", outcome: "success", identityId, authMethod: "passkey", details: { approvedBy: admin.identityId, tcloudPasskeyReady: cloudPasskeyReady } }, request));
   await env.DB.batch(updates);
   return json({ ok: true, tcloudPasskeyReady: cloudPasskeyReady });
@@ -1287,6 +1520,7 @@ async function revokeCredential(credentialId, request, env, admin) {
   if (!credential) throw new HttpError(404, "パスキーが見つかりません。");
   await env.DB.batch([
     env.DB.prepare("UPDATE security_credentials SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP WHERE credential_id = ? AND status != 'revoked'").bind(credentialId),
+    env.DB.prepare("DELETE FROM security_tcloud_admin_key_transfers WHERE credential_id = ?").bind(credentialId),
     endActiveSessionsStatement(env, "credential_revoked", { credentialId, authMethod: "passkey" }),
     await localAuditStatement(env, { eventType: "passkey_revoked", outcome: "success", identityId: credential.identity_id, authMethod: "passkey", details: { revokedBy: admin.identityId } }, request)
   ]);
