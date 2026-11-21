@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { root, affected, changedFiles, ciPlan, commands, targets, installDirectories, downloader2NativeAffected, browserTests } from './verify-plan.mjs';
+import { root, affected, changedFiles, ciPlan, commands, targets, installDirectories, browserTests } from './verify-plan.mjs';
 import { dependencyInstallPlan, installArgs } from './install-verify-dependencies.mjs';
 import { localConfig } from './local-dev.mjs';
 import { assertPreviewSafe, prepareReleaseDependencies, releaseProfile } from './release.mjs';
@@ -98,9 +98,6 @@ test('Downloader 2 components select only Downloader 2 while unknown files remai
   ]) assert.deepEqual(affected([path]), ['downloader2'], path);
   assert.deepEqual(affected(['unknown-runtime/index.js']), ['site']);
   assert.deepEqual(affected(['docs/downloader2.md']), []);
-  assert.equal(downloader2NativeAffected(['downloader2-native/src/Program.cs']), true);
-  assert.equal(downloader2NativeAffected(['downloader2-extension/service-worker.js']), false);
-  assert.equal(downloader2NativeAffected(['docs/downloader2.md']), false);
 });
 
 test('T-Cloud Windows is verified on Windows without selecting a production Worker', () => {
@@ -147,20 +144,6 @@ test('affected mapping is order independent and unknown runtime files are not si
     assert.ok(commands('tooling').some(command => command.args?.includes('tools/test-web-app-build-freshness.mjs')));
   }
 });
-test('Downloader 2 Native CI isolates every fallible command in a fail-fast step', () => {
-  const workflow = readFileSync(resolve(root, '.github/workflows/verify.yml'), 'utf8');
-  const nativeJob = workflow.slice(workflow.indexOf('  downloader2-native:'), workflow.indexOf('\n  verify:', workflow.indexOf('  downloader2-native:')));
-  for (const [name, command] of [
-    ['Build Native solution', 'dotnet build downloader2-native/Tlain.Downloader2.slnx'],
-    ['Run Native tests', 'dotnet run --project downloader2-native/tests/Tlain.Downloader2.Tests/Tlain.Downloader2.Tests.csproj'],
-    ['Publish Native Host', 'dotnet publish downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj'],
-    ['Smoke test Native Messaging', 'node downloader2-native/tests/native-host-smoke.mjs'],
-    ['Build isolated E2E profile', 'dotnet build downloader2-native/src/Tlain.Downloader2.Host/Tlain.Downloader2.Host.csproj']
-  ]) {
-    assert.match(nativeJob, new RegExp(`- name: ${name}\\r?\\n\\s+shell: pwsh\\r?\\n\\s+run: ${command.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}`), name);
-  }
-  assert.doesNotMatch(nativeJob, /run: \|/);
-});
 test('Cloud media release gate isolates platform-specific WebKit diagnostics', () => {
   const workflow = readFileSync(resolve(root, '.github/workflows/verify.yml'), 'utf8');
   const nodeJob = workflow.slice(workflow.indexOf('  node:'), workflow.indexOf('\n  cloud-webkit-macos:'));
@@ -204,16 +187,23 @@ test('CI plans keep cumulative branch changes and main reversions without select
     const cloud = commit('cloud-worker/public/cloud.js', 'cloud');
     const head = commit('docs/follow-up.md', 'docs after unverified cloud push');
     const branch = { event: 'push', ref: 'refs/heads/codex/fixture', head, defaultBranch: 'main' };
-    assert.deepEqual(ciPlan({ ...branch, base: '0'.repeat(40) }, dir), { selected: ['cloud'], native: false });
-    assert.deepEqual(ciPlan({ ...branch, base: cloud }, dir), { selected: ['cloud'], native: false });
-    assert.deepEqual(ciPlan({ event: 'pull_request', base, head }, dir), { selected: ['cloud'], native: false });
+    assert.deepEqual(ciPlan({ ...branch, base: '0'.repeat(40) }, dir), ['cloud']);
+    assert.deepEqual(ciPlan({ ...branch, base: cloud }, dir), ['cloud']);
+    assert.deepEqual(ciPlan({ event: 'pull_request', base, head }, dir), ['cloud']);
     const main = { event: 'push', ref: 'refs/heads/main' };
-    assert.deepEqual(ciPlan({ ...main, base, head: cloud }, dir), { selected: ['cloud'], native: false });
-    assert.deepEqual(ciPlan({ ...main, base: cloud, head: base }, dir), { selected: ['cloud'], native: false });
-    assert.deepEqual(ciPlan({ ...main, base: cloud, head }, dir), { selected: [], native: false });
-    const native = commit('downloader2-native/src/fixture.cs', 'fixture');
-    assert.deepEqual(ciPlan({ ...branch, head: native }, dir), { selected: ['cloud', 'downloader2'], native: true });
-    assert.deepEqual(ciPlan({ event: 'workflow_dispatch' }, dir), { selected: targets, native: true });
+    assert.deepEqual(ciPlan({ ...main, base, head: cloud }, dir), ['cloud']);
+    assert.deepEqual(ciPlan({ ...main, base: cloud, head: base }, dir), ['cloud']);
+    assert.deepEqual(ciPlan({ ...main, base: cloud, head }, dir), []);
+    for (const path of ['downloader2-native/src/fixture.cs', 'downloader-worker/container/fixture.py',
+      'ai-worker/src/fixture.js', 'android-ai-chat/app/fixture.kt', 'health-worker/src/fixture.js']) {
+      const retired = commit(path, 'retired fixture');
+      assert.deepEqual(ciPlan({ ...branch, head: retired }, dir), ['cloud'], path);
+      assert.deepEqual(ciPlan({ ...main, base: retired + '^', head: retired }, dir), [], path);
+    }
+    const closure = commit('site-worker/retired-services.mjs', 'retired route response');
+    assert.deepEqual(ciPlan({ ...main, base: closure + '^', head: closure }, dir), ['site']);
+    const retiredTargets = ['ai', 'android-ai-chat', 'container-unit', 'downloader', 'downloader2', 'health'];
+    assert.deepEqual(ciPlan({ event: 'workflow_dispatch' }, dir), targets.filter(target => !retiredTargets.includes(target)));
     assert.throws(() => ciPlan({ ...branch, defaultBranch: 'missing-ref' }, dir));
     assert.throws(() => ciPlan({ ...main, base: 'missing-ref', head }, dir));
     assert.throws(() => ciPlan({ event: 'pull_request', head }, dir));

@@ -1,7 +1,7 @@
 version: 2
 updates:
   - package-ecosystem: npm
-    directories: ['/', '/cloud-worker', '/security-worker', '/diary-worker', '/billing-worker', '/downloader-worker', '/ai-worker']
+    directories: ['/', '/cloud-worker', '/security-worker', '/diary-worker', '/billing-worker']
     schedule:
       interval: weekly
       day: monday
