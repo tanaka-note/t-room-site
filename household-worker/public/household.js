@@ -218,9 +218,9 @@
         group.children.get(childKey).total+=t.amount;
       }
       if(t.type!==entryType||index++>=visibleEntries)continue;
-      const tr=el('tr');tr.dataset.id=t.id;cell(tr,t.date);cell(tr,t.description||'（内容なし）','description');cell(tr,legacy?'過去の振替（集計外）':(c?.parent||'その他')+' / '+(c?.name||'その他'));cell(tr,(t.type==='income'?'＋':t.type==='expense'?'−':'')+money(t.amount),'numeric');cell(tr,t.notes,'notes');
+      const tr=el('tr');tr.dataset.id=t.id;cell(tr,t.date);cell(tr,t.description||'（未入力）','description');cell(tr,legacy?'過去の振替（集計外）':(c?.parent||'その他')+' / '+(c?.name||'その他'));cell(tr,(t.type==='income'?'＋':t.type==='expense'?'−':'')+money(t.amount),'numeric');cell(tr,t.notes,'notes');
       if(session?.role==='owner'){const actions=cell(tr,undefined,'row-actions');if(!legacy)actions.append(button('編集',()=>openEntry(t)));actions.append(button('削除',()=>{const expected=revision,id=crypto.randomUUID();ask('この明細を削除しますか？',t.date+'\n'+t.description+'\n'+money(t.amount),()=>mutate('transaction.delete',{id:t.id},expected,id));},'danger'));}
-      ['日付','内容','分類','金額','メモ','操作'].forEach((label,i)=>{if(tr.cells[i])tr.cells[i].dataset.label=label;});fragment.append(tr);
+      ['日付','利用先・相手先','分類','金額','摘要','操作'].forEach((label,i)=>{if(tr.cells[i])tr.cells[i].dataset.label=label;});fragment.append(tr);
     }
     root.replaceChildren(fragment);$('more-entries').hidden=entryCount<=visibleEntries;$('entry-display').textContent=entryCount?`${Math.min(entryCount,visibleEntries)} / ${entryCount}件を表示`:'';$('income').textContent=money(income);$('expense').textContent=money(expense);$('net').textContent=money(income-expense);$('empty-entries').hidden=entryCount>0;$('entry-count').textContent=rows.length+'件';renderCategorySummary(groups,income,expense);
   }
