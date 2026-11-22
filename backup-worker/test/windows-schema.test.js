@@ -47,7 +47,11 @@ test('Security backup restores pending encrypted T-Cloud delivery in isolation',
     assert.equal(Object.hasOwn(backup.tables, 'security_tcloud_key_envelopes'), true);
     const bucket=new Bucket(),key='approval-security.json.gz';
     await verifiedPut(bucket,key,await compress(backup));
-    await restoreIsolated(bucket,key,'security');
+    const isolated=await restoreIsolated(bucket,key,'security');
+    try {
+      assert.equal(isolated.db.prepare("SELECT transfer_ciphertext FROM security_tcloud_admin_key_transfers WHERE credential_id='transfer-target'").get().transfer_ciphertext, 'sealed-transfer');
+      assert.equal(isolated.db.prepare("SELECT status FROM security_credentials WHERE credential_id='transfer-target'").get().status,'revoked');
+    } finally { isolated.db.close(); }
     db.exec("ALTER TABLE security_tcloud_admin_key_transfers ADD COLUMN unreviewed TEXT");
     await assert.rejects(assertSchema('security', schema()), /SchemaReviewRequired/);
   } finally { db.close(); }

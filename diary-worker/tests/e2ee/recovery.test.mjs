@@ -13,6 +13,7 @@ import { openRecoveryEnvelope } from '../../e2ee/recovery.mjs';
 import { createVault, DELEGATION_RECIPIENT, open, signed, unb64, unlockVault, validatePublicTrust } from '../../e2ee/crypto.mjs';
 import { diaryRecipientId, diaryKeyBundle, handleDiaryKeys } from '../../../security-worker/src/diary-keys.js';
 import { readDiaryKeyMetadata } from '../../../backup-worker/src/diary-encrypted.js';
+import { leaseBindings, leaseSQL, readRollout, releasePasskeyApproval, reservePasskeyApproval, writeLease } from '../../e2ee/rollout.mjs';
 
 let f;
 before(async () => { f = await systemFixture(); });
@@ -118,6 +119,22 @@ test('Diary delegation preserves old and new record keys and works with T-Cloud 
     assert.equal(reader.entry(fresh.id).title,fresh.title);
     reader.lock();
   }finally{isolated.close();await f.close();f=original;}
+});
+
+test('approval blocks overlapping Diary writes and invalidates old write leases without changing the session generation',async()=>{
+  const db=memoryDatabase();
+  try {
+    const id=crypto.randomUUID(),old=await writeLease(db);
+    await reservePasskeyApproval(db,id);
+    await assert.rejects(writeLease(db),/DiaryWritesPaused/);
+    await assert.rejects(reservePasskeyApproval(db,crypto.randomUUID()),/DiaryWritesPaused/);
+    await releasePasskeyApproval(db,id);
+    const current=await writeLease(db);
+    assert.equal((await readRollout(db)).generation,old.generation);
+    const matches=lease=>db.prepare('SELECT 1 AS valid WHERE 1=1'+leaseSQL(lease)).bind(...leaseBindings(lease)).first();
+    assert.equal(await matches(old),null);
+    assert.equal((await matches(current)).valid,1);
+  }finally{db.close();}
 });
 
 test('an inactive linked Diary account cannot block the remaining global administrator recovery',async()=>{

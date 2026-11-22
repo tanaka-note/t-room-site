@@ -7,6 +7,7 @@ import {EncryptedDiaryClient} from '../../diary-worker/e2ee/client.mjs';
 import {createStore} from '../../diary-worker/e2ee/store.mjs';
 import {saveExport,readExportManifest,readExportParts} from '../src/export-backup.js';
 import {DIARY_ENCRYPTED_MIGRATION,SECURITY_DIARY_MIGRATION} from '../src/diary-encrypted.js';
+import {SECURITY_TRANSFER_SUFFIX} from '../src/registry.js';
 import {restoreIsolated} from '../tools/restore-isolated.mjs';
 import {Bucket,d1} from './fixtures.mjs';
 import {exportEnv,exportFetcher} from './export-fixtures.mjs';
@@ -49,8 +50,8 @@ test('encrypted fixed exports include same-generation keys and restore over 10,0
     assert.equal(c.entry(post.id).title,'ENCRYPTED_EXPORT_PRIVATE_CANARY');assert.equal(c.entry(post.id).isFavorite,true);
     const stats=await scanBackupMetadata(bucket);assert.equal(stats.encryptedDaily.objectCount,1);assert.equal(stats.daily.objectCount,1);assert.ok(stats.d1Bytes>0);
     assert.equal(f.r2.size,0);
-    const securityMock=exportFetcher(f.central.sqlite,'security',{migration:SECURITY_DIARY_MIGRATION});
-    const securitySaved=await saveExport(exportEnv('security',f.central,bucket),'security',now,{fetcher:securityMock.fetcher,sleep});assert.match(securitySaved.daily,/^d1\/security\/v4/);
+    const securityMock=exportFetcher(f.central.sqlite,'security',{migration:SECURITY_DIARY_MIGRATION+SECURITY_TRANSFER_SUFFIX});
+    const securitySaved=await saveExport(exportEnv('security',f.central,bucket),'security',now,{fetcher:securityMock.fetcher,sleep});assert.match(securitySaved.daily,/^d1\/security\/v6/);
     securityRestore=await restoreIsolated(bucket,securitySaved.daily,'security');
     assert.equal(securityRestore.db.prepare('SELECT generation FROM security_diary_key_config').get().generation,1);
     assert.equal(securityRestore.db.prepare('SELECT COUNT(*) count FROM security_diary_key_vaults').get().count,4);
