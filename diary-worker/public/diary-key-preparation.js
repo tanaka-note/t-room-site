@@ -3,6 +3,7 @@ import {TRUST_PIN,resolveTrust,sealTrust,openTrust,sameTrust,sealPendingConfigur
 import {prepareKeyConfiguration,publicTrustPackage,scopeDefinitions} from './crypto/e2ee/setup.mjs';
 import {unlockCentralRecovery} from './crypto/e2ee/tcloud-recovery.mjs';
 import {rememberPreparedVault} from './crypto/e2ee/session.mjs';
+import {readDiaryStartup} from './crypto/e2ee/startup-read.mjs';
 
 function pinnedTrust() {
   return typeof localStorage==='undefined'?null:JSON.parse(localStorage.getItem(TRUST_PIN)||'null');
@@ -111,6 +112,16 @@ async function readPreparedProfile(api,session,authentication,check) {
 
 async function prepareKeys(api,session,authentication,check=()=>{},onProgress=()=>{},{reusePreparedProfile=false}={}) {
   if(!(authentication?.prfOutput instanceof Uint8Array)||authentication.prfOutput.length!==32)throw new Error('暗号化の利用準備にはPRF対応のパスキーが必要です。');
+  if (reusePreparedProfile && session.encryption.phase === 'encrypted') {
+    const request = api;
+    api = (path, options = {}) => {
+      if (options.method === 'POST') return request(path, options);
+      return readDiaryStartup(signal => {
+        check();
+        return request(path, {...options, signal});
+      });
+    };
+  }
   const assertOwn=value=>{
     check();
     if(value.accountId!==session.encryption.accountId||value.webAuthnCredentialId!==authentication.credentialId||typeof value.recipientId!=='string')throw Object.assign(new Error('ログイン状態が変わりました。パスキーでログインし直してください。'),{sessionChanged:true});

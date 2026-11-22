@@ -117,6 +117,55 @@ try {
     assert.equal(p.uploadState, 'uploaded');
   }
   {
+    const slots = 4;
+    const uploadsStarted = Promise.withResolvers();
+    const completeFirstUpload = Promise.withResolvers();
+    const deletionStarted = Promise.withResolvers();
+    const completeDeletion = Promise.withResolvers();
+    const completeOtherUploads = Promise.withResolvers();
+    let firstPhoto, posts = 0;
+    const { manager, state, photo } = fixture(async (url, init) => {
+      if (init.method === 'DELETE') {
+        deletionStarted.resolve();
+        await completeDeletion.promise;
+        return response(200, {});
+      }
+      const id = init.body.get('id');
+      if (++posts === slots) uploadsStarted.resolve();
+      if (id === firstPhoto.id) await completeFirstUpload.promise;
+      else await completeOtherUploads.promise;
+      return response(200, { photo: { id } });
+    });
+    firstPhoto = photo();
+    const uploading = [firstPhoto, ...Array.from({ length: slots - 1 }, () => photo())]
+      .map(manager.queueBackgroundPhotoUpload);
+    await uploadsStarted.promise;
+    const removing = manager.deleteStagedPhotoUpload(firstPhoto);
+    completeFirstUpload.resolve();
+    await deletionStarted.promise;
+    let lastUpload;
+    try {
+      const slotFreed = await Promise.race([
+        Promise.race(state.photoUploadActiveTasks).then(() => true),
+        new Promise(resolve => setImmediate(resolve, false))
+      ]);
+      assert.equal(slotFreed, false, 'removing an uploading photo must not wake waiters before its slot is free');
+      lastUpload = manager.queueBackgroundPhotoUpload(photo());
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(posts, slots, 'the additional photo waits during cleanup');
+      completeDeletion.resolve();
+      await removing;
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(posts, slots + 1, 'the queued upload starts after cleanup while other uploads remain active');
+    } finally {
+      completeDeletion.resolve();
+      completeOtherUploads.resolve();
+      await Promise.all([...uploading, removing, lastUpload]);
+    }
+    assert.equal(state.photoUploadActiveTasks.size, 0);
+    assert.equal(state.photoUploadPendingCount, 0);
+  }
+  {
     const posted = [];
     const { manager, state, photo } = fixture(async (url, init) => {
       posted.push(url); return response(200, { photo: { id: init.body.get('id') } });
@@ -133,7 +182,7 @@ try {
     assert.equal(state.photoUploadPendingCount, 0); assert.equal(state.photoUploadActiveTasks.size, 0);
   }
   for (const [sizes, expected] of [
-    [[16, 16, 16], 3],
+    [[16, 16, 16, 16, 16], 4],
     [[4206412, 3339996, 2836380], 3],
     [[6, 6, 6].map(size => size * 1024 * 1024), 2],
     [[9, 9, 9].map(size => size * 1024 * 1024), 1]
@@ -182,7 +231,7 @@ try {
       return response(200, { photo: { id } });
     });
     const photos = Array.from({ length: 6 }, () => photo());
-    for (const p of photos.slice(3)) laterIds.add(p.id);
+    for (const p of photos.slice(4)) laterIds.add(p.id);
     await Promise.all(photos.map(p => manager.queueBackgroundPhotoUpload(p)));
     assert.ok(photos.every(p => p.uploadState === 'uploaded'));
   }

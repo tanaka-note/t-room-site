@@ -87,17 +87,17 @@ export async function verifyCacheBudget(page) {
   assert.deepEqual(thumbnail,{lru:true,refused:true});
 }
 
-export async function waitForPreparedIndex(page) {
-  await page.waitForFunction(async()=>new Promise((resolve,reject)=>{
+export async function waitForPreparedIndex(page, sequence) {
+  await page.waitForFunction(async expectedSequence=>new Promise((resolve,reject)=>{
     const req=indexedDB.open('tlain-diary-encrypted-v1');req.onerror=reject;
     req.onsuccess=()=>{
       const db=req.result;if(!db.objectStoreNames.contains('indexes')){db.close();resolve(false);return;}
       const tx=db.transaction(['snapshots','indexes']);let found=false;
       const cursor=tx.objectStore('snapshots').openCursor();
-      cursor.onsuccess=()=>{const row=cursor.result;if(!row)return;const index=tx.objectStore('indexes').get(row.key);index.onsuccess=()=>{if(index.result?.sequence===row.value.sequence)found=true;row.continue();};};
+      cursor.onsuccess=()=>{const row=cursor.result;if(!row)return;const index=tx.objectStore('indexes').get(row.key);index.onsuccess=()=>{if(row.value.sequence===expectedSequence&&index.result?.sequence===expectedSequence)found=true;row.continue();};};
       tx.oncomplete=()=>{db.close();resolve(found);};tx.onerror=reject;
     };
-  }));
+  }), sequence);
 }
 
 export async function inspectLogoutStorage(page) {

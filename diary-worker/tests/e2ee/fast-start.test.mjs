@@ -132,6 +132,30 @@ test('a truncated local snapshot is refreshed instead of silently losing article
     await x.warm.sync();assert.equal(fullReads,1);assert.equal(x.warm.records.size,24);
   }finally{x.close();}
 });
+for (const rollback of [false, true]) test(`invalid cached payload uses a full online read and keeps the checkpoint (rollback: ${rollback})`, async () => {
+  const x = await setup(6);
+  try {
+    const [key, snapshot] = [...x.cache.snapshots][0];
+    x.cache.snapshots.set(key, {...snapshot, version: 999});
+    const online = x.warm.transport.snapshot;
+    const reads = [];
+    x.warm.transport.snapshot = async (h, since, options) => {
+      reads.push(since);
+      const fresh = await online(h, since, options);
+      return rollback ? {...fresh, sequence: snapshot.sequence - 1} : fresh;
+    };
+    if (rollback) {
+      await assert.rejects(x.warm.sync({parallelStartupRead: true}), /RollbackDetected/);
+      assert.equal(x.warm.records.size, 0);
+    } else {
+      await x.warm.sync({parallelStartupRead: true});
+      assert.equal(x.warm.records.size, 6);
+    }
+    assert.deepEqual(reads, [-1]);
+  } finally {
+    x.close();
+  }
+});
 test('a sealed derived index is bound to its household and the complete current directory',async()=>{
   const x=await setup();try{
     const [key,snapshot]=[...x.cache.snapshots][0],profile=x.warm.profile,directory=x.warm.directory;

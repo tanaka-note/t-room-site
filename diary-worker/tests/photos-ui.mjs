@@ -3,12 +3,13 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const [html, css, script, photoProcessing, photoUpload, richText, worker, wrangler, stagingMigration] = await Promise.all([
+const [html, css, script, photoProcessing, photoUpload, photoImages, richText, worker, wrangler, stagingMigration] = await Promise.all([
   readFile(`${root}/public/index.html`, "utf8"),
   readFile(`${root}/public/diary.css`, "utf8"),
   readFile(`${root}/public/diary.js`, "utf8"),
   readFile(`${root}/public/diary-photo-processing.js`, "utf8"),
   readFile(`${root}/public/diary-photo-upload.js`, "utf8"),
+  readFile(`${root}/public/diary-photo-images.js`, "utf8"),
   readFile(`${root}/public/diary-rich-text.js`, "utf8"),
   readFile(`${root}/src/index.js`, "utf8"),
   readFile(`${root}/wrangler.jsonc`, "utf8"),
@@ -47,7 +48,7 @@ assert.match(script, /\["dragenter", "dragover", "dragleave", "drop"\]/);
 assert.match(script, /prepareSelectedPhotos\(\[\.\.\.\(event\.dataTransfer\?\.files \|\| \[\]\)\], getEditorSelectionOffset\("end"\)\)/);
 assert.match(script, /photoPreparationPromise: null/);
 assert.match(script, /photoUploading: false/);
-assert.match(photoUpload, /PHOTO_UPLOAD_CONCURRENCY = 3/);
+assert.match(photoUpload, /PHOTO_UPLOAD_CONCURRENCY = 4/);
 assert.match(script, /queueBackgroundPhotoUpload\(photo\)/,
   "each prepared photo must be queued before posting");
 assert.match(photoUpload, /\/api\/photo-upload-sessions/);
@@ -63,7 +64,8 @@ assert.match(photoUpload, /status === 408 \|\| status === 429 \|\| status >= 500
 assert.match(photoProcessing, /String\(file\.type\)\.startsWith\("image\/"\)/);
 assert.match(script, /state\.editorPhotos = \(entry\?\.photos \|\| \[\]\)\.map/);
 assert.match(photoProcessing, /previewUrl: URL\.createObjectURL\(thumbnailBlob\)/);
-assert.match(script, /image\.src = photo\.thumbnailUrl \|\| photo\.previewUrl/);
+assert.match(script, /photoImages\.bind\(image, photo, "thumbnail"\)/);
+assert.ok(photoImages.includes('image.src=photo[`${kind}Url`]||photo.previewUrl'));
 assert.match(photoUpload, /function releaseUploadedPhotoPayload\(photo/);
 assert.match(photoUpload, /photo\.originalFile = null;[\s\S]*?photo\.displayBlob = null;[\s\S]*?photo\.thumbnailBlob = null;/,
   "successful staged uploads must release retry-only image payloads");

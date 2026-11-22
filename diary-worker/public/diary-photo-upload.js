@@ -1,5 +1,5 @@
 const PHOTO_UPLOAD_RETRY_DELAYS_MS = Object.freeze([1000, 3000, 7000]);
-const PHOTO_UPLOAD_CONCURRENCY = 3;
+const PHOTO_UPLOAD_CONCURRENCY = 4;
 const PHOTO_UPLOAD_PARALLEL_BYTES = 16 * 1024 * 1024;
 const PHOTO_UPLOAD_TIMEOUT_MS = 180000;
 const PHOTO_STATUS_TIMEOUT_MS = 10000;
@@ -99,24 +99,27 @@ export function createPhotoUploadManager({ state, api, basePath, getTargetEntryI
       if (photo.removed) return null;
       metrics.queueMs = Date.now() - queuedAt;
       activeBytes.set(photo.id, photoBytes(photo));
-      const activeTask = uploadPhotoToStaging(photo);
-      const settledTask = activeTask.catch(() => null);
-      state.photoUploadActiveTasks.add(settledTask);
-      try {
-        const result = await activeTask;
-        photo.uploadState = "uploaded";
-        photo.uploadError = null;
-        if (photo.removed) await deleteStagedPhotoUpload(photo, { waitForUpload: false });
-        releaseUploadedPhotoPayload(photo);
-        return result;
-      } catch (error) {
-        photo.uploadState = "failed";
-        photo.uploadError = error;
-        return null;
-      } finally {
-        activeBytes.delete(photo.id);
-        state.photoUploadActiveTasks.delete(settledTask);
-      }
+      // A waiting photo must wake only after this slot is free, including
+      // any cleanup of a photo that was removed during its upload.
+      const activeTask = (async () => {
+        try {
+          const result = await uploadPhotoToStaging(photo);
+          photo.uploadState = "uploaded";
+          photo.uploadError = null;
+          if (photo.removed) await deleteStagedPhotoUpload(photo, { waitForUpload: false });
+          releaseUploadedPhotoPayload(photo);
+          return result;
+        } catch (error) {
+          photo.uploadState = "failed";
+          photo.uploadError = error;
+          return null;
+        } finally {
+          activeBytes.delete(photo.id);
+          state.photoUploadActiveTasks.delete(activeTask);
+        }
+      })();
+      state.photoUploadActiveTasks.add(activeTask);
+      return activeTask;
     })();
     photo.uploadPromise = queued.finally(() => {
       metrics.elapsedMs = Date.now() - queuedAt;
