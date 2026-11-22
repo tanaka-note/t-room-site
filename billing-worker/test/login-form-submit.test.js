@@ -10,6 +10,7 @@ for (const fail of [false, true]) test(`passkey login restores loading state aft
   const label = { textContent: "パスキーでログイン" }, error = { textContent: "" }, calls = [];
   const prfOutput = Uint8Array.of(1, 2, 3);
   const context = { el: { "passkey-login": button, "passkey-login-label": label, "login-error": error },
+    importBillingModules: async () => {},
     choosePasskeyLink() {},
     TRoomPasskeys: { authenticate: async service => {
       assert.equal(service, "billing"); assert.equal(button.disabled, true); assert.equal(button["aria-busy"], "true");
@@ -18,7 +19,11 @@ for (const fail of [false, true]) test(`passkey login restores loading state aft
       return { handoff: { handoffToken: "fixture-token" }, prfOutput };
     } },
     api: async (path, options) => { calls.push(path); assert.equal(options.body.handoffToken, "fixture-token"); return {authenticated:true}; },
-    enterApp: async session => { assert.equal(session.authenticated, true); calls.push("enterApp"); }
+    enterApp: async session => {
+      assert.equal(session.authenticated, true);
+      assert.equal(label.textContent, "台帳を読み込み中…");
+      calls.push("enterApp");
+    }
   };
   vm.createContext(context);
   await vm.runInContext(`${handler};loginWithPasskey()`, context);

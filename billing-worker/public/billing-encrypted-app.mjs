@@ -35,25 +35,27 @@ function applyEdit(kind, action, id, previous, input, actor, clock) {
   };
 }
 
-export async function refreshBillingGrants(api, keys, authentication) {
-  if (!keys.primaryOwner || !globalThis.TRoomCrypto?.unlockAdminPrivateKeyWithPasskey) return;
-  const { ledgers } = await api("/encryption/ledgers");
-  const { recipients } = await api("/encryption/recipients");
-  const ready = recipients.filter(recipient => recipient.publicKey);
-  if (!ready.length) return;
-  const context = await api("/encryption/recovery-context");
+export async function refreshBillingGrants(api, authentication, signal) {
+  const request = (path, options) => {
+    signal?.throwIfAborted();
+    return api(path,{ ...options,signal });
+  };
+  const { ledgers } = await request("/encryption/pending-grants");
+  if (!ledgers.length) return;
+  const context = await request("/encryption/recovery-context");
   const recovery = await globalThis.TRoomCrypto.unlockAdminPrivateKeyWithPasskey(authentication.prfOutput,context.envelope);
   for (const scope of ledgers) {
+    signal?.throwIfAborted();
     const material = await unwrapBillingLedgerKey(scope.recoveryWrappedKey,scope,"recovery",recovery);
     try {
-      await distributeBillingKeys(api,scope,material,ready);
+      await distributeBillingKeys(request,{ ...scope, grants:[] },material,scope.recipients);
     } finally {
       material.fill(0);
     }
   }
 }
 
-export function encryptedBillingApp(api, session, holder) {
+export function encryptedBillingApp(api, session, holder, initial) {
   const revisions = new Map();
   const prepared = new Map();
   let closed = false;
@@ -65,11 +67,11 @@ export function encryptedBillingApp(api, session, holder) {
     assertOpen();
     const scope = ledgers.find(candidate => candidate.accountId === accountId);
     if (!scope) throw requestError("台帳を確認できません。",403);
-    if (!scope.grants.length) throw requestError("管理者からの暗号鍵の配布を待っています。",409);
     return scope;
   }
 
   async function keysFor(scope) {
+    if (!scope.grants.length) throw requestError("管理者からの暗号鍵の配布を待っています。",409);
     if (prepared.has(scope.ledgerId)) return prepared.get(scope.ledgerId);
     for (const grant of scope.grants) {
       const privateKey = grant.keySource === "billing" ? holder.recipient : holder.cloud;
@@ -92,7 +94,11 @@ export function encryptedBillingApp(api, session, holder) {
 
   async function read(scope, options) {
     assertOpen();
-    const result = await api(ledgerPath(scope),options);
+    return verify(scope,await api(ledgerPath(scope),options));
+  }
+
+  async function verify(scope, result) {
+    assertOpen();
     const previous = revisions.get(scope.ledgerId);
     const writer = holder.writerKeys.find(key => key.kty === result.writer?.kty && key.crv === result.writer.crv
       && key.x === result.writer.x && key.y === result.writer.y);
@@ -106,11 +112,12 @@ export function encryptedBillingApp(api, session, holder) {
     return result;
   }
 
-  async function summary(accountId,month,options) {
-    // Acquire the current grants on every protected load, including after a
-    // member's first login or an administrator update in another tab.
-    const scope = await scopeFor(accountId,options);
-    const [keys,data] = await Promise.all([keysFor(scope),read(scope,options)]);
+  async function summary(accountId,month,options,initialView) {
+    assertOpen();
+    const { scope, ledger } = initialView ?? await api(`/encryption/view?accountId=${encodeURIComponent(accountId)}`,options);
+    assertOpen();
+    if (scope.accountId !== accountId) throw requestError("台帳を確認できません。",403);
+    const [keys,data] = await Promise.all([keysFor(scope),ledger ? verify(scope,ledger) : null]);
     assertOpen();
     return readBillingEncryptedMonth({
       scope,keys,revision:data.revision,month,signal:options?.signal,
@@ -186,9 +193,11 @@ export function encryptedBillingApp(api, session, holder) {
     async request(path,options,currentAccount) {
       const url = new URL(path,"https://billing.invalid");
       if (url.pathname === "/accounts" && url.searchParams.get("includeSummary") === "1") {
-        const result = await api("/accounts",options);
-        const account = result.accounts[0];
-        return { ...result,summary:account ? await summary(account.id,url.searchParams.get("month"),options) : null };
+        const startup = initial;
+        initial = null;
+        const accounts = startup?.accounts ?? (await api("/accounts",options)).accounts;
+        const account = accounts[0];
+        return { accounts,summary:account ? await summary(account.id,url.searchParams.get("month"),options,startup?.view) : null };
       }
       if (url.pathname === "/summary") return summary(
         url.searchParams.get("accountId") || session.accountId,url.searchParams.get("month"),options);
@@ -198,6 +207,7 @@ export function encryptedBillingApp(api, session, holder) {
     },
     close() {
       closed = true;
+      initial = null;
       prepared.clear();
       revisions.clear();
     }

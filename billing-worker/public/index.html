@@ -62,17 +62,17 @@
   <title>請求書管理システム</title>
   <meta name="application-name" content="請求書管理システム">
   <meta name="theme-color" content="#577263">
-  <link rel="manifest" href="/billing/manifest.webmanifest?v=billing-08638a914fa1">
-  <script src="./pwa-install.js?v=billing-08638a914fa1"></script>
-  <link rel="stylesheet" href="./billing.css?v=billing-08638a914fa1">
-  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-08638a914fa1">
-  <script src="./troom-date-picker.js?v=billing-08638a914fa1" defer></script>
-  <script src="/diary/dialog-navigation.js?v=billing-08638a914fa1" defer></script>
-  <script src="./billing.js?v=billing-08638a914fa1" defer></script>
-  <meta name="troom-app-build" content="billing-08638a914fa1">
+  <link rel="manifest" href="/billing/manifest.webmanifest?v=billing-2ecae0e87bac">
+  <script src="./pwa-install.js?v=billing-2ecae0e87bac"></script>
+  <link rel="stylesheet" href="./billing.css?v=billing-2ecae0e87bac">
+  <link rel="stylesheet" href="./troom-date-picker.css?v=billing-2ecae0e87bac">
+  <script src="./troom-date-picker.js?v=billing-2ecae0e87bac" defer></script>
+  <script src="/diary/dialog-navigation.js?v=billing-2ecae0e87bac" defer></script>
+  <script src="./billing.js?v=billing-2ecae0e87bac" defer></script>
+  <meta name="troom-app-build" content="billing-2ecae0e87bac">
   <meta name="troom-auto-update" content="enabled">
-  <link rel="stylesheet" href="/billing/tlain-login.css?v=billing-08638a914fa1">
-  <script src="/billing/tlain-login.js?v=billing-08638a914fa1" defer></script>
+  <link rel="stylesheet" href="/billing/tlain-login.css?v=billing-2ecae0e87bac">
+  <script src="/billing/tlain-login.js?v=billing-2ecae0e87bac" defer></script>
 </head>
 <body>
   <main>
@@ -128,6 +128,8 @@
           <button id="logout-button" class="text-button" type="button">ログアウト</button>
         </div>
       </header>
+
+      <p id="billing-key-status" class="empty-message no-print" role="status" hidden></p>
 
       <div class="toolbar no-print">
         <label id="account-select-label" hidden>発行先
@@ -283,7 +285,7 @@
       <div class="logs-wrap"><table><thead><tr><th>日時</th><th>操作</th><th>操作した人</th><th>対象者</th></tr></thead><tbody id="logs-body"></tbody></table></div>
     </div>
   </dialog>
-  <script src="/security/passkey-client.js?v=billing-08638a914fa1" defer></script>
-  <script src="/assets/pwa-auto-update.js?v=billing-08638a914fa1" defer></script>
+  <script src="/security/passkey-client.js?v=billing-2ecae0e87bac" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=billing-2ecae0e87bac" defer></script>
 </body>
 </html>

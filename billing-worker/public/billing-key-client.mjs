@@ -1,12 +1,12 @@
 import { createBillingVault, unlockBillingVault } from "./billing-crypto.mjs";
 
-export async function prepareBillingVault(api, authentication) {
+export async function prepareBillingVault(api, authentication, initialContext) {
   const { credentialId, prfOutput } = authentication;
   if (!(prfOutput instanceof Uint8Array) || prfOutput.length !== 32) {
     throw new Error("請求書の暗号鍵を解除できるパスキーとブラウザをご利用ください。");
   }
   const path = "/encryption/vault";
-  const context = await api(path);
+  const context = initialContext ?? await api(path);
   if (context.credentialId !== credentialId || !context.supportsPrf) {
     throw new Error("ログインしたパスキーの暗号鍵を確認できません。");
   }
