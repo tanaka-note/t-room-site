@@ -54,7 +54,12 @@ const server=createServer(async(req,res)=>{
     const file=resolve(root,url.pathname==='/diary/'?'index.html':url.pathname.slice('/diary/'.length));
     if(!url.pathname.startsWith('/diary/')||!file.startsWith(root.replace(/\/$/,'')+sep)){res.writeHead(404);res.end();return;}
     res.setHeader('Content-Type',['.js','.mjs'].includes(extname(file))?'text/javascript':extname(file)==='.html'?'text/html':extname(file)==='.css'?'text/css':'application/octet-stream');res.end(await readFile(file));
-  }catch(error){errors.push(error.name);res.writeHead(500);res.end();}
+  }catch(error){
+    if(res.destroyed)return;
+    errors.push(error.name);
+    if(res.headersSent)res.destroy();
+    else{res.writeHead(500);res.end();}
+  }
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin='http://127.0.0.1:'+server.address().port;f.env.DIARY_ENCRYPTION_ORIGIN=origin;
 const browser=await chromium.launch({headless:true,executablePath:process.env.TROOM_CHROMIUM_EXECUTABLE});
@@ -151,7 +156,9 @@ try {
     // Closing the editor precedes the awaited post-save list refresh. Let that
     // foreground operation finish before testing an eligible warm-cache visit.
     await page.waitForFunction(()=>!document.querySelector('#save-entry-button').disabled&&document.querySelector('#entry-list').textContent.includes('SYNTHETIC_PRIVATE_POST'));
-    await waitForPreparedIndex(page);await page.evaluate(()=>sessionStorage.setItem('fixture-warm-index','1'));
+    const {sequence}=f.db.sqlite.prepare('SELECT MAX(seq) AS sequence FROM diary_e2ee_changes WHERE household=?').get(user.claims.households[0]);
+    await waitForPreparedIndex(page,sequence);
+    await page.evaluate(()=>sessionStorage.setItem('fixture-warm-index','1'));
   }
   await page.reload();await page.locator('#app-view').waitFor({state:'visible'});assert.equal(authentications,1,'same live session resumes without another WebAuthn operation');
   if(workerd){

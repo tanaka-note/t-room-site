@@ -102,7 +102,10 @@ export function createEncryptedDiaryApi(client,{session,nativeApi,media,onHouseh
       const {signal} = options;
       return waitForDiaryRead((async () => {
         signal?.throwIfAborted();
-        const [,households] = await Promise.all([synchronize(signal), nativeApi('/households', {signal})]);
+        const [,households] = await Promise.all([
+          synchronize(signal),
+          session.isGlobalOwner ? nativeApi('/households', {signal}) : {households: [], activeHouseholdId: client.household}
+        ]);
         signal?.throwIfAborted();
         await client.ensureList(url.searchParams);
         signal?.throwIfAborted();

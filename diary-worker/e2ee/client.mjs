@@ -297,8 +297,14 @@ export class EncryptedDiaryClient {
         cached=saved?saved.snapshot:await this.cache.get(cacheKey);
       }catch{/* A missing local snapshot uses the authoritative online path. */}
       if(cached){
-        validateSnapshot(cached);
-        if(cached.delta||cached.unchanged||cached.household!==this.household)throw new Error('InvalidCache');
+        try {
+          validateSnapshot(cached);
+          if(cached.delta||cached.unchanged||cached.household!==this.household)throw new Error('InvalidCache');
+        } catch {
+          // The cached payload is disposable, but its separate checkpoint is
+          // still required to detect rollback on the authoritative read.
+          cached=null;
+        }
       }
     }
     signal?.throwIfAborted();
@@ -314,8 +320,10 @@ export class EncryptedDiaryClient {
       this.assertOpen(generation);
       const controller=cached?new AbortController():null;
       if(controller) {
-        const deltaSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
-        pendingDelta=this.transport.snapshot(this.household,since,{signal:deltaSignal});
+        const cancelDelta = () => controller.abort(signal.reason);
+        signal?.addEventListener('abort', cancelDelta, {once:true});
+        pendingDelta=this.transport.snapshot(this.household,since,{signal:controller.signal})
+          .finally(()=>signal?.removeEventListener('abort', cancelDelta));
         void pendingDelta.catch(()=>{});
       }
       try {

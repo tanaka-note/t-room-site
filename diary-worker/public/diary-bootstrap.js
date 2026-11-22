@@ -52,9 +52,9 @@
     button.focus();
   }
 
-  async function api(path, body, headers={}) {
+  async function api(path, body, headers={}, signal) {
     const response = await fetch(`/diary/api${path}`, {
-      method: body ? "POST" : "GET", credentials: "same-origin", cache: "no-store",
+      method: body ? "POST" : "GET", credentials: "same-origin", cache: "no-store", signal,
       headers: { ...headers,...(body ? { "Content-Type": "application/json", "X-Diary-Request": "1" } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {})
     });
@@ -81,7 +81,7 @@
     if(authentication&&session.encryption) {
       try {
         const preparation=await import(new URL(`diary-key-preparation.js${scriptUrl.search}`,scriptUrl).href);
-        ({startupProfile}=await preparation.prepareDiaryKeys((path,options={})=>api(path,options.body,options.headers),session,authentication,()=>{},progress=>{message.textContent=preparation.diaryMigrationMessage(progress);},{reusePreparedProfile:true}));
+        ({startupProfile}=await preparation.prepareDiaryKeys((path,options={})=>api(path,options.body,options.headers,options.signal),session,authentication,()=>{},progress=>{message.textContent=preparation.diaryMigrationMessage(progress);},{reusePreparedProfile:true}));
       }catch(error){if(session.encryption.enabled||error.migrationPending||error.sessionChanged||[401,403].includes(error.status))throw error;preparationMessage='日記は利用できますが、暗号化の利用準備を完了できませんでした。対応するパスキーで次回ログイン時に再試行します。';}
     }
     return {preparationMessage,startupProfile};
