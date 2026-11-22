@@ -13,7 +13,8 @@ import {readSnapshotPages} from '../../e2ee/snapshot.mjs';
 import {entry} from './fixture.mjs';
 import {verifyCacheBudget,inspectLogoutStorage,waitForPreparedIndex} from './cache-browser-fixture.mjs';
 
-const f=await systemFixture(),user=f.users[process.argv.includes('--independent-editor')?'chiharu-admin':'main-user'],root=resolve(fileURLToPath(new URL('../../public/',import.meta.url)));
+const account = process.argv.includes('--owner') ? 'main-admin' : process.argv.includes('--independent-editor') ? 'chiharu-admin' : 'main-user';
+const f=await systemFixture(),user=f.users[account],root=resolve(fileURLToPath(new URL('../../public/',import.meta.url)));
 const wire=[],errors=[];let origin,authentications=0;
 const trust=await publicTrustPackage(f.configuration);
 const progressive=process.argv.includes('--progressive');let bodyIV,summaryIV,holdSnapshot=progressive,releaseSnapshot;
@@ -38,7 +39,11 @@ const server=createServer(async(req,res)=>{
   try {
     const url=new URL(req.url,origin);
     if(url.pathname.startsWith('/diary/api/')) {
-      if(holdSnapshot&&url.pathname==='/diary/api/encryption/snapshot'){holdSnapshot=false;await new Promise(resolve=>{releaseSnapshot=resolve;snapshotStarted();});}
+      if(holdSnapshot&&url.pathname==='/diary/api/encryption/snapshot'){
+        holdSnapshot=false;
+        await new Promise(resolve=>{releaseSnapshot=resolve;snapshotStarted();});
+        if (res.destroyed) return;
+      }
       const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=Buffer.concat(chunks);
       wire.push({path:url.pathname,method:req.method,body:body.toString(),...(url.pathname==='/diary/api/encryption/snapshot'?{snapshotSince:Number(url.searchParams.get('since'))}:{})});
       const reply=await f.worker.fetch(new Request(url,{method:req.method,headers:req.headers,...(body.length?{body}:{} )}),f.env,f.ctx);
@@ -52,11 +57,20 @@ const server=createServer(async(req,res)=>{
   }catch(error){errors.push(error.name);res.writeHead(500);res.end();}
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin='http://127.0.0.1:'+server.address().port;f.env.DIARY_ENCRYPTION_ORIGIN=origin;
-const browser=await chromium.launch({headless:true});
+const browser=await chromium.launch({headless:true,executablePath:process.env.TROOM_CHROMIUM_EXECUTABLE});
 async function pageFor(context) {
   await context.exposeBinding('fixtureAuthentication',()=>{authentications++;});
   await context.addInitScript(({prf,credentialId,trust,accountId})=>{window.TRoomPasskeys={authenticate:async()=>{await window.fixtureAuthentication();window.lastPRF=new Uint8Array(prf);return {credentialId,prfOutput:window.lastPRF,verified:{diaryTrust:trust},link:{accountId},handoff:{handoffToken:accountId,diaryTrust:trust}};}};},{prf:[...user.prf],credentialId:user.credentialId,trust,accountId:user.serviceAccountId});
   if(progressive)await context.addInitScript(({iv,summaryIV})=>{
+    const originalSetTimeout = window.setTimeout.bind(window);
+    window.setTimeout = (callback, delay, ...args) => {
+      const timer = originalSetTimeout(callback, delay, ...args);
+      if (delay === 45_000) window.expireDiaryRead = () => {
+        window.clearTimeout(timer);
+        callback(...args);
+      };
+      return timer;
+    };
     const native=crypto.subtle.decrypt.bind(crypto.subtle);let release;
     const gate=new Promise(resolve=>{release=resolve;});window.releaseOldBody=release;window.oldBodyBlocked=false;
     const holdSummary=sessionStorage.getItem('fixture-warm-index')==='1';sessionStorage.removeItem('fixture-warm-index');
@@ -75,7 +89,20 @@ try {
   await page.goto(origin+'/diary/');await page.locator('#passkey-login').click();await page.locator('#app-view').waitFor({state:'visible'});
   await page.waitForFunction(()=>window.lastPRF.every(value=>value===0));assert.equal(authentications,1);
   if(progressive) {
-    await snapshotRequested;assert.equal(await page.locator('#app-view').isVisible(),true,'the authorized app opens while snapshot HTTP is still pending');holdSnapshot=false;releaseSnapshot();
+    await snapshotRequested;
+    assert.equal(await page.locator('#app-view').isVisible(), true, 'the authorized app opens while snapshot HTTP is pending');
+    assert.equal(await page.locator('#entry-list').textContent(), '読み込んでいます...');
+    const stopped = page.waitForEvent('requestfailed', request => request.url().includes('/diary/api/encryption/snapshot?'));
+    await page.evaluate(() => window.expireDiaryRead());
+    await stopped;
+    const retry = page.locator('#retry-initial-load');
+    await retry.waitFor({state: 'visible'});
+    assert.equal(await page.locator('#entry-list').textContent(), '日記の読み込みが時間内に完了しませんでした。');
+    await retry.click();
+    await page.locator('#entry-list .diary-entry-card').first().waitFor({state: 'visible'});
+    assert.equal(authentications, 1, 'retry uses the current authenticated session');
+    assert.equal(await retry.isVisible(), false);
+    releaseSnapshot();
     await page.waitForFunction(()=>document.querySelector('#entry-list .diary-entry-card')||document.querySelector('#diary-search-status')?.textContent.includes('日記を準備できませんでした'));
     assert.ok(await page.locator('#entry-list .diary-entry-card').count(),`initial encrypted list failed: ${await page.locator('#entry-list').textContent()}`);
     await page.waitForFunction(()=>window.oldBodyBlocked);assert.ok(await page.locator('#diary-preparation-status').isVisible());
@@ -140,6 +167,7 @@ try {
     console.log('Encrypted photo selection: ordinary mobile account, 31 native source snapshots, source timestamp changes, encrypted metadata, original bytes, single commit and reload passed.');
   }
   await page.click('#logout-button');await page.locator('#passkey-login').waitFor({state:'visible'});
+  assert.equal(await page.locator('#tag-total-count').textContent(), 'タグ数 0');
   const storage=await inspectLogoutStorage(page);assert.equal(storage.keys,0);assert.ok(storage.cipherSnapshots>0);assert.equal(storage.containsPlaintext,false);
   if(workerd)assert.ok(storage.indexes>0,'logout preserves only encrypted derived indexes, never the unlocked device keys');
   await verifyCacheBudget(page);

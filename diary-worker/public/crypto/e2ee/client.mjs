@@ -48,6 +48,23 @@ async function creationIdentity(actor, household, requestId, payload) {
   const id=String((BigInt('0x'+[...digest.slice(0,7)].map(byte=>byte.toString(16).padStart(2,'0')).join(''))&((1n<<53n)-1n))||1n);
   return {id,creation:{...value,payloadHash:b64(await crypto.subtle.digest('SHA-256',encode(payload)))}};
 }
+const DIARY_READ_TIMEOUT_MS = 45_000;
+
+export async function waitForDiaryRead(pending, signal) {
+  if (!signal) return pending;
+  let abort;
+  const interrupted = new Promise((_, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, {once: true});
+    if (signal.aborted) abort();
+  });
+  try {
+    return await Promise.race([pending, interrupted]);
+  } finally {
+    signal.removeEventListener('abort', abort);
+  }
+}
+
 export class EncryptedDiaryClient {
   constructor({ transport, profile, anchor, minimumGeneration=1,documentFormat=1,cache=null,minimumSequence=0,lazy=false }) {
     this.transport = transport;
@@ -114,10 +131,12 @@ export class EncryptedDiaryClient {
     this.documentLoads=new WeakMap();this.onProgress({phase:'locked',completed:0,total:0});
     this.indexCacheState=null;
   }
-  async check() {
+  async check(signal) {
+    signal?.throwIfAborted();
     const generation=this.generation;
     this.assertOpen(generation);
-    const valid=await this.transport.valid();
+    const valid=await this.transport.valid(signal);
+    signal?.throwIfAborted();
     this.assertOpen(generation);
     if (!valid) {
       this.lock();
@@ -135,9 +154,16 @@ export class EncryptedDiaryClient {
     return this.profile.household;
   }
   sync(options={}) {
-    if(this.syncing?.generation===this.generation)return this.syncing.promise;
-    const pending={generation:this.generation,promise:this.syncSnapshot(options)};this.syncing=pending;
-    void pending.promise.finally(()=>{if(this.syncing===pending)this.syncing=null;}).catch(()=>{});
+    if (this.syncing?.generation === this.generation && !this.syncing.signal.aborted) return this.syncing.promise;
+    const signal = options.signal ?? AbortSignal.timeout(DIARY_READ_TIMEOUT_MS);
+    const pending = {
+      generation: this.generation, signal,
+      promise: waitForDiaryRead(this.syncSnapshot({...options, signal}), signal),
+    };
+    this.syncing = pending;
+    void pending.promise.finally(() => {
+      if (this.syncing === pending) this.syncing = null;
+    }).catch(() => {});
     return pending.promise;
   }
   async indexRecord(row,generation=this.generation) {
@@ -253,10 +279,11 @@ export class EncryptedDiaryClient {
     return state.pending;
   }
 
-  async syncSnapshot({sessionChecked=false,parallelStartupRead=false}={}) {
+  async syncSnapshot({sessionChecked=false,parallelStartupRead=false,signal}={}) {
+    signal?.throwIfAborted();
     const generation = this.generation;
     this.assertOpen(generation);
-    const sessionCheck=sessionChecked?null:this.check();
+    const sessionCheck=sessionChecked?null:this.check(signal);
     const overlap=parallelStartupRead&&!sessionChecked&&this.sequence===undefined&&Boolean(this.cache);
     if(overlap)void sessionCheck.catch(()=>{});
     else await sessionCheck;
@@ -274,8 +301,10 @@ export class EncryptedDiaryClient {
         if(cached.delta||cached.unchanged||cached.household!==this.household)throw new Error('InvalidCache');
       }
     }
+    signal?.throwIfAborted();
     if(saved)checkpoint=saved.checkpoint??0;
     else if(this.cache?.checkpoint)try{checkpoint=await this.cache.checkpoint(checkpointKey)??0;}catch{/* Local storage is optional. */}
+    signal?.throwIfAborted();
     if(!Number.isSafeInteger(checkpoint)||checkpoint<0)throw new Error('InvalidCache');
     let since=this.sequence??cached?.sequence??-1;
     let pendingDelta;
@@ -285,7 +314,8 @@ export class EncryptedDiaryClient {
       this.assertOpen(generation);
       const controller=cached?new AbortController():null;
       if(controller) {
-        pendingDelta=this.transport.snapshot(this.household,since,{signal:controller.signal});
+        const deltaSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+        pendingDelta=this.transport.snapshot(this.household,since,{signal:deltaSignal});
         void pendingDelta.catch(()=>{});
       }
       try {
@@ -295,6 +325,7 @@ export class EncryptedDiaryClient {
         controller?.abort();throw error;
       }
     }
+    signal?.throwIfAborted();
     const preparedIndex=cached?this.readPreparedIndex(cacheKey,cached,saved?(saved.index??null):undefined):Promise.resolve(null);
     // Verify/decrypt the small summaries while the remaining pages are in
     // flight. Nothing becomes visible until the complete fixed snapshot and
@@ -303,18 +334,25 @@ export class EncryptedDiaryClient {
     const onPage=since<0?async(rows,{total=0}={})=>{
       let cursor=0;
       await Promise.all(Array.from({length:Math.min(2,rows.length)},async()=>{
-        while(cursor<rows.length){const row=rows[cursor++],old=prefetched.get(row.id);prefetched.set(row.id,old&&equal(old.row,row)?old:await this.indexRecord(row,generation));}
+        while (cursor < rows.length) {
+          signal?.throwIfAborted();
+          const row = rows[cursor++], old = prefetched.get(row.id);
+          prefetched.set(row.id, old && equal(old.row, row) ? old : await this.indexRecord(row, generation));
+        }
       }));
+      signal?.throwIfAborted();
       if(this.lazy)this.onProgress({phase:'index',completed:prefetched.size,total});
     }:undefined;
-    let [snapshot,restored]=await Promise.all([pendingDelta??this.transport.snapshot(this.household,since,{onPage}),preparedIndex]);
+    let [snapshot,restored]=await Promise.all([pendingDelta??this.transport.snapshot(this.household,since,{onPage,signal}),preparedIndex]);
+    signal?.throwIfAborted();
     if(cached&&restored===false){
       // Never repair a damaged/context-mismatched local pair by trusting a
       // potentially incomplete cached snapshot. Retain the durable checkpoint
       // and validate a complete authoritative snapshot under current rights.
       this.assertOpen(generation);cached=null;since=-1;
-      snapshot=await this.transport.snapshot(this.household,since,{onPage});
+      snapshot=await this.transport.snapshot(this.household,since,{onPage,signal});
     }
+    signal?.throwIfAborted();
     if(generation!==this.generation||this.closed)throw new Error("SessionChanged");
     validateSnapshot(snapshot);
     if(snapshot.sequence<Math.max(this.minimumSequence,checkpoint)||snapshot.sequence<since)throw new Error('RollbackDetected');
@@ -338,7 +376,7 @@ export class EncryptedDiaryClient {
     if (snapshot.unchanged) {
       if (this.sequence !== snapshot.sequence)
         throw new Error("InvalidSnapshot");
-      await this.check();
+      await this.check(signal);
       for (const { row } of this.records.values())
         if (!canRead(this.actor, row)) throw new Error("AccessDenied");
       return this.records;
@@ -352,6 +390,7 @@ export class EncryptedDiaryClient {
     await Promise.all(
       Array.from({ length: 8 }, async () => {
         while (cursor < snapshot.records.length) {
+          signal?.throwIfAborted();
           const row = snapshot.records[cursor++];
           const prepared=prefetched.get(row.id);
           const saved=restored&&restored.get(row.id);
@@ -363,15 +402,18 @@ export class EncryptedDiaryClient {
             const key=this.keys.get(row.scope);if(!key)throw new Error('GrantDenied');
             records.set(row.id,{row,summary:saved.summary,order:saved.order,key,verifyOnHydrate:true});
           }else records.set(row.id,prepared&&equal(prepared.row,row)?prepared:await this.indexRecord(row,generation));
+          signal?.throwIfAborted();
           indexed++;if(this.lazy&&indexed%25===0)this.onProgress({phase:'index',completed:indexed,total:snapshot.records.length});
         }
       }),
     );
-    await this.check();
+    await this.check(signal);
+    signal?.throwIfAborted();
     if (generation !== this.generation) throw new Error("SessionChanged");
     if (snapshot.sequence < (this.sequence ?? -1))
       throw new Error("RollbackDetected");
     if(this.cache&&!cacheUnchanged){const value={version:1,household:this.household,sequence:snapshot.sequence,baseSequence:-1,delta:false,unchanged:false,removed:[],records:[...records.values()].map(r=>r.row)};try{await this.cache.put(cacheKey,value,checkpointKey);}catch(error){if(error.message==='CacheRollbackRejected')throw new Error('RollbackDetected');/* Storage availability cannot turn a durable save into a failed save. */}}
+    signal?.throwIfAborted();
     if(generation!==this.generation||this.closed)throw new Error('SessionChanged');
     for (const [id, previous] of this.records)
       if (!records.has(id))

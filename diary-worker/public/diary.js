@@ -36,6 +36,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     ({ WEATHER_LABELS, createWeatherIcon, createUnsetWeatherIcon } = weather);
   });
   const BASE_PATH = "/diary";
+  const INITIAL_ENTRIES_TIMEOUT_MS = 45_000;
   let sessionGeneration = 0;
   let loginAttempt = 0;
   let activeSessionContext = "";
@@ -114,6 +115,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     searchTimer: null,
     searchComposing: false,
     entriesAbortController: null,
+    initialEntriesAbortController: null,
     requestId: 0,
     deleteMode: null,
     photoDeleteTarget: null,
@@ -196,6 +198,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     listTitle: document.querySelector("#diary-recent-title"),
     entryList: document.querySelector("#entry-list"),
     loadMore: document.querySelector("#load-more-button"),
+    retryInitialLoad: document.querySelector("#retry-initial-load"),
+    preparationStatus: document.querySelector("#diary-preparation-status"),
     monthNavigation: document.querySelector("#month-navigation"),
     currentMonth: document.querySelector("#current-month-button"),
     previousMonth: document.querySelector("#previous-month-button"),
@@ -447,6 +451,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.draftButton.addEventListener("click", toggleDrafts);
     elements.trashButton.addEventListener("click", toggleTrash);
     elements.loadMore.addEventListener("click", handleLoadMore);
+    elements.retryInitialLoad.addEventListener("click", () => loadEntries(true, true));
     elements.currentMonth.addEventListener("click", returnToCurrentMonth);
     elements.previousMonth.addEventListener("click", () => changeBrowseMonth(-1));
     elements.nextMonth.addEventListener("click", () => changeBrowseMonth(1));
@@ -759,6 +764,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     cancelPositionRestoration();
     const restoreVersion = initialScrollIntent.interrupted&&!encryptedNavigationType ? -1 : positionVersion;
     const generation = ++sessionGeneration;
+    cancelInitialEntries();
     activeSessionContext = sessionContext(session);
     state.role = session.role;
     state.accountName = session.accountName;
@@ -790,7 +796,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.householdSwitcherWrap.hidden = true;
     elements.householdSwitcher.replaceChildren();
     elements.entryList.replaceChildren(createEmpty("読み込んでいます..."));
-    elements.tagList.replaceChildren();
+    clearTags();
     elements.bootView.hidden = true;
     elements.loginView.hidden = true;
     elements.appView.hidden = false;
@@ -828,12 +834,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       photoImages.reset();
       await api("/households/select", { method: "POST", body: { householdId } });
       sessionGeneration += 1;
+      cancelInitialEntries();
       cancelPendingEntrySearch();
       state.activeHouseholdId = householdId;
       updateDiaryReturnNavigation();
-      state.availableTags = [];
       clearArchive();
-      elements.tagList.replaceChildren();
+      clearTags();
       state.trash = false;
       state.drafts = false;
       state.query = "";
@@ -898,6 +904,28 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     finally{remoteRefreshRunning=false;if(remoteRefreshPending)window.setTimeout(()=>void refreshRemoteView(),0);}
   }
 
+  function cancelInitialEntries() {
+    state.initialEntriesAbortController?.abort();
+    elements.retryInitialLoad.hidden = true;
+    elements.preparationStatus.hidden = true;
+  }
+
+  async function readInitialEntries(parameters) {
+    cancelInitialEntries();
+    const controller = new AbortController();
+    state.initialEntriesAbortController = controller;
+    const timeout = window.setTimeout(() => {
+      controller.abort(new DOMException("日記の読み込みが時間内に完了しませんでした。", "TimeoutError"));
+    }, INITIAL_ENTRIES_TIMEOUT_MS);
+    try {
+      return await api(`/bootstrap?${parameters}`, { signal: controller.signal });
+    } finally {
+      window.clearTimeout(timeout);
+      if (state.initialEntriesAbortController === controller) state.initialEntriesAbortController = null;
+      controller.abort();
+    }
+  }
+
   async function loadEntries(reset, bootstrap = false, returnEntryCount = 0, background = false) {
     if (!bootstrap && !background) cancelPositionRestoration();
     const generation = sessionGeneration;
@@ -942,8 +970,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
         let result;
         if (bootstrap && pageGuard === 0) {
-          // Keep metadata alive when a user starts a search during initial loading.
-          const initial = await api(`/bootstrap?${parameters}`);
+          // A search may supersede the list while initial metadata is still needed.
+          const initial = await readInitialEntries(parameters);
           await readingToolsReady;
           if (generation !== sessionGeneration) return;
           if (!initial.session?.authenticated || sessionContext(initial.session) !== activeSessionContext) {
@@ -977,14 +1005,20 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       updateSearchStatus();
       return true;
     } catch (error) {
+      if (generation !== sessionGeneration) return;
+      if (bootstrap) {
+        elements.retryInitialLoad.hidden = false;
+        elements.preparationStatus.hidden = true;
+      }
       if (requestId !== state.requestId) return;
-      if(background){showToast(error.message);return false;}
-      elements.entryList.replaceChildren(createEmpty(error.message));
-      elements.searchStatus.textContent = error.message;
+      const message = error.name === "TimeoutError" ? "日記の読み込みが時間内に完了しませんでした。" : error.message;
+      if (background) { showToast(message); return false; }
+      elements.entryList.replaceChildren(createEmpty(message));
+      elements.searchStatus.textContent = message;
     } finally {
       if (state.entriesAbortController === abortController) state.entriesAbortController = null;
       if(remoteRefreshPending)window.setTimeout(()=>void refreshRemoteView(),0);
-      if (requestId === state.requestId) {
+      if (requestId === state.requestId && generation === sessionGeneration) {
         elements.loadMore.hidden = monthlyView ? state.monthExpanded || !state.hasMore : !state.hasMore;
         setBusy(elements.loadMore, false, monthlyView ? "もっと見る" : "さらに表示");
       }
@@ -1442,6 +1476,13 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     const focusedYear = document.activeElement?.id === "archive-year-select";
     elements.archiveList.replaceChildren(heading, grid);
     if (focusedYear) elements.archiveList.querySelector("select")?.focus({ preventScroll: true });
+  }
+
+  function clearTags() {
+    state.availableTags = [];
+    elements.tagTotalCount.textContent = "タグ数 0";
+    elements.tagList.replaceChildren();
+    elements.tagMore.hidden = true;
   }
 
   function renderTags(tags) {
@@ -4428,13 +4469,14 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     loginAttempt += 1;
     setBusy(document.querySelector("#passkey-login"), false, "パスキーでログイン");
     sessionGeneration += 1;
+    cancelInitialEntries();
     activeSessionContext = "";
     elements.entryForm.reset();elements.entryContent.replaceChildren();
     for(const input of document.querySelectorAll('dialog input,dialog textarea'))input.value='';
     for(const key of ['detailDate','detailPublishedAt','detailTitle','detailAuthor','detailDeletion','detailTags','detailContent','deleteConfirmMessage','editorMessage','entryTagSuggestions'])elements[key]?.replaceChildren();
     elements.entryList.replaceChildren();
     clearArchive();
-    elements.tagList.replaceChildren();
+    clearTags();
     elements.householdSwitcher.replaceChildren();
     elements.householdSwitcherWrap.hidden = true;
     elements.investmentSection.hidden = true;
@@ -4464,7 +4506,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.tag = "";
     state.tagQuery = "";
     state.favoritePage = false;
-    state.availableTags = [];
     state.trash = false;
     state.drafts = false;
     state.draftCount = 0;

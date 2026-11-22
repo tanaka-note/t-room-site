@@ -284,7 +284,8 @@ function entriesFixture({ count = 120, monthly = false, expanded = false, hook =
   const state = { entries: [], entryMap: new Map(), requestId: 0, monthExpanded: expanded, month: '2026-10',
     query: 'keyword', tag: 'tag', dateFrom: '2026-10-01', dateTo: '2026-10-31', favoritePage: true };
   const requests = [], renders = [], placeholders = [];
-  const elements = { entryList: { replaceChildren(value) { placeholders.push(value); } }, loadMore: {}, searchStatus: {} };
+  const elements = { entryList: { replaceChildren(value) { placeholders.push(value); } }, loadMore: {}, searchStatus: {},
+    retryInitialLoad: {}, preparationStatus: {} };
   const api = async (path, options) => {
     requests.push({ path, options });
     const url = new URL(path, 'https://fixture.test');
@@ -297,13 +298,16 @@ function entriesFixture({ count = 120, monthly = false, expanded = false, hook =
   const load = new Function('state', 'elements', 'api', 'renders', `
     let sessionGeneration = 1, remoteRefreshPending = false;
     const activeSessionContext = 'fixture', readingToolsReady = Promise.resolve();
-    const window = { clearTimeout() {} };
+    const window = { setTimeout, clearTimeout };
+    const INITIAL_ENTRIES_TIMEOUT_MS = 45_000, encryptionRuntime = null;
     const isMonthlyView = () => ${monthly};
     const cancelPositionRestoration = () => {};
     const createEmpty = value => value, setBusy = () => {}, updateListHeading = () => {}, updateSearchStatus = () => {};
     const sessionContext = () => 'fixture', applyHouseholds = () => {}, applyMeta = () => {};
     const preserveViewport = render => render(), renderEntries = () => renders.push(state.entries.map(e => e.id));
     const resetState = () => {}, showLogin = () => {}, showToast = () => {};
+    ${body('cancelInitialEntries')}
+    ${body('readInitialEntries')}
     ${body('loadEntries')}
     return { load: loadEntries, invalidateSession: () => { sessionGeneration++; } };`)(state, elements, api, renders);
   return { state, requests, renders, placeholders, ...load };

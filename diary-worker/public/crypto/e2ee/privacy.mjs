@@ -32,14 +32,22 @@ export async function createPrivateNavigation(client,{storage=sessionStorage,his
   };
   if(history.state?.[historyKey]&&!history.state[historyKey].encrypted){const state={...history.state};delete state[historyKey];history.replaceState(state,'',location.href);}
   const tagBinding={household:client.household,scope:publishedScope(client.household),id:'tag-route',revision:1,epoch:client.directory.epochs[publishedScope(client.household)],kind:'tag-route'};
-  async function prepareTags() {
+  async function prepareTags(signal) {
+    signal?.throwIfAborted();
     const tagKey=client.keys.get(tagBinding.scope);
     for(const {value} of client.meta().tags)if(!tags.has(value)) {
-      const box=await seal(tagKey,value,tagBinding);const segment=`e_${box.iv}.${box.ciphertext}`;tags.set(value,segment);routes.set(segment,value);
+      const box=await seal(tagKey,value,tagBinding);
+      signal?.throwIfAborted();
+      if (closed) return;
+      if (!tags.has(value)) {
+        const segment=`e_${box.iv}.${box.ciphertext}`;tags.set(value,segment);routes.set(segment,value);
+      }
     }
     const segment=location.pathname.match(/^\/diary\/tag\/([^/]+)\/?$/)?.[1];
     if(segment?.startsWith('e_')&&!routes.has(segment)) {
       const [iv,ciphertext]=segment.slice(2).split('.');const tag=await open(tagKey,{version:1,iv,ciphertext},tagBinding);
+      signal?.throwIfAborted();
+      if (closed) return;
       if(typeof tag!=='string'||tag.length>100)throw new Error('InvalidTagRoute');routes.set(segment,tag);tags.set(tag,segment);
     }else if(segment&&!segment.startsWith('e_')) {
       const tag=decodeURIComponent(segment),encoded=tags.get(tag);if(encoded)history.replaceState({},'',`/diary/tag/${encoded}/`);
