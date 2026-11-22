@@ -33,15 +33,16 @@ function proofMatches(expected, actual) {
 }
 
 async function listScopes(db, migration, session, primaryOwner, staging = false) {
-  const results = await db.prepare(`SELECT l.ledger_id,l.account_id,l.recovery_wrapped_key,
+  const scopes = db.prepare(`SELECT l.ledger_id,l.account_id,l.recovery_wrapped_key,
       a.display_name AS display_name
     FROM billing_encryption_candidate_ledgers l
     LEFT JOIN billing_accounts a ON a.id=l.account_id
     WHERE l.generation=? AND (?=1 OR (l.account_id=? AND a.is_active=1) OR (?=1 AND (l.account_id IS NULL OR a.is_active=1)))
-    ORDER BY l.account_id,l.ledger_id`).bind(migration, staging && primaryOwner ? 1 : 0, session.accountId, primaryOwner ? 1 : 0).all();
-  const grants = await db.prepare(`SELECT ledger_id,key_source,wrapped_key,identity_id,credential_id,service_link_id
+    ORDER BY l.account_id,l.ledger_id`).bind(migration, staging && primaryOwner ? 1 : 0, session.accountId, primaryOwner ? 1 : 0);
+  const grantsQuery = db.prepare(`SELECT ledger_id,key_source,wrapped_key,identity_id,credential_id,service_link_id
     FROM billing_encryption_grants WHERE generation=? AND identity_id=? AND credential_id=? AND service_link_id=?`)
-    .bind(migration, session.identityId, session.credentialId, session.serviceLinkId).all();
+    .bind(migration, session.identityId, session.credentialId, session.serviceLinkId);
+  const [results, grants] = await db.batch([scopes, grantsQuery]);
   const byLedger = new Map();
   for (const row of grants.results) {
     if (!byLedger.has(row.ledger_id)) byLedger.set(row.ledger_id, []);
@@ -56,6 +57,73 @@ async function listScopes(db, migration, session, primaryOwner, staging = false)
   }));
 }
 
+async function encryptedView(db, state, accountId, session, primary, HttpError) {
+  if (!primary && accountId !== session.accountId) throw new HttpError(403, "台帳を確認できません。");
+  const [scopes, grants, ledgers] = await db.batch([
+    db.prepare(`SELECT c.ledger_id,c.account_id,a.display_name
+      FROM billing_encryption_candidate_ledgers c JOIN billing_accounts a ON a.id=c.account_id
+      WHERE c.generation=? AND c.account_id=? AND a.is_active=1`).bind(state.generation,accountId),
+    db.prepare(`SELECT g.key_source,g.wrapped_key FROM billing_encryption_grants g
+      JOIN billing_encryption_candidate_ledgers c ON c.generation=g.generation AND c.ledger_id=g.ledger_id
+      WHERE g.generation=? AND c.account_id=? AND g.identity_id=? AND g.credential_id=? AND g.service_link_id=?`)
+      .bind(state.generation,accountId,session.identityId,session.credentialId,session.serviceLinkId),
+    db.prepare(`SELECT l.revision,l.digest,l.signature,l.writer_public_key,l.records_json
+      FROM billing_encryption_live_ledgers l JOIN billing_encryption_candidate_ledgers c
+        ON c.generation=l.generation AND c.ledger_id=l.ledger_id
+      JOIN billing_accounts a ON a.id=c.account_id AND a.is_active=1
+      WHERE l.generation=? AND c.account_id=? AND EXISTS (
+        SELECT 1 FROM billing_encryption_grants g WHERE g.generation=l.generation AND g.ledger_id=l.ledger_id
+        AND g.identity_id=? AND g.credential_id=? AND g.service_link_id=?)`)
+      .bind(state.generation,accountId,session.identityId,session.credentialId,session.serviceLinkId)
+  ]);
+  const row = scopes.results[0];
+  if (!row) throw new HttpError(403, "台帳を確認できません。");
+  const recipient = { identityId:session.identityId, credentialId:session.credentialId, serviceLinkId:session.serviceLinkId };
+  const scope = { ledgerId:row.ledger_id, generation:keyEpoch, accountId:row.account_id, displayName:row.display_name,
+    grants:grants.results.map(g=>({ keySource:g.key_source, wrappedKey:g.wrapped_key, recipient })) };
+  const ledger = ledgers.results[0];
+  if (scope.grants.length && !ledger) throw new HttpError(404, "暗号化台帳が見つかりません。");
+  return { scope, ledger: ledger ? serializeEncryptedLedger(ledger) : null };
+}
+
+function serializeEncryptedLedger(row) {
+  return { revision:row.revision, digest:row.digest, signature:row.signature,
+    writer:JSON.parse(row.writer_public_key), records:JSON.parse(row.records_json) };
+}
+
+function billingGrantTargets(recipients, accountId) {
+  return recipients.filter(item => item.publicKey && (item.accountId === accountId
+    || (item.accountId === "owner" && item.identityId === "primary-admin")));
+}
+
+const grantRecipientKey = (identity, credential, link, source) => JSON.stringify([identity,credential,link,source]);
+
+async function pendingBillingGrants(env, state, actor, HttpError) {
+  const [recipients, [scopes, grants]] = await Promise.all([
+    env.SECURITY.getBillingKeyRecipients(actor),
+    env.DB.batch([
+      env.DB.prepare(`SELECT c.ledger_id,c.account_id,c.recovery_wrapped_key
+        FROM billing_encryption_candidate_ledgers c LEFT JOIN billing_accounts a ON a.id=c.account_id
+        WHERE c.generation=? AND (c.account_id IS NULL OR a.is_active=1) ORDER BY c.account_id,c.ledger_id`).bind(state.generation),
+      env.DB.prepare(`SELECT ledger_id,identity_id,credential_id,service_link_id,key_source
+        FROM billing_encryption_grants WHERE generation=?`).bind(state.generation)
+    ])
+  ]);
+  if (!recipients) throw new HttpError(403, "鍵を配布する権限がありません。");
+  const existing = new Map();
+  for (const grant of grants.results) {
+    if (!existing.has(grant.ledger_id)) existing.set(grant.ledger_id,new Set());
+    existing.get(grant.ledger_id).add(grantRecipientKey(grant.identity_id,grant.credential_id,grant.service_link_id,grant.key_source));
+  }
+  return scopes.results.flatMap(scope => {
+    const delivered = existing.get(scope.ledger_id);
+    const targets = billingGrantTargets(recipients,scope.account_id).filter(recipient =>
+      !delivered?.has(grantRecipientKey(recipient.identityId,recipient.credentialId,recipient.serviceLinkId,recipient.keySource)));
+    return targets.length ? [{ ledgerId:scope.ledger_id,generation:keyEpoch,accountId:scope.account_id,
+      recoveryWrappedKey:scope.recovery_wrapped_key,recipients:targets }] : [];
+  });
+}
+
 async function saveGrants(env, state, actor, ledgerId, grants, HttpError) {
   if (!Array.isArray(grants) || grants.length > 500) throw new HttpError(400, "鍵の配布先を確認してください。");
   const ledger = await env.DB.prepare("SELECT account_id FROM billing_encryption_candidate_ledgers WHERE generation=? AND ledger_id=?")
@@ -64,8 +132,7 @@ async function saveGrants(env, state, actor, ledgerId, grants, HttpError) {
   const eligible = await env.SECURITY.getBillingKeyRecipients(actor);
   if (!eligible) throw new HttpError(403, "鍵を配布する権限がありません。");
   const key = (credential, link) => JSON.stringify([credential, link]);
-  const targets = new Map(eligible.filter(item => item.publicKey && (item.accountId === ledger.account_id
-    || (item.accountId === "owner" && item.identityId === "primary-admin")))
+  const targets = new Map(billingGrantTargets(eligible,ledger.account_id)
     .map(item => [key(item.credentialId,item.serviceLinkId), item]));
   const seen = new Set();
   const statements = grants.map(grant => {
@@ -141,17 +208,31 @@ async function commitEncryptedLedgers(env, state, session, writer, body, HttpErr
 }
 
 export async function billingEncryptionApi(request, env, url, path, session, helpers) {
-  const { json, readJson, HttpError, requireRecentPasskey, billingKeySession } = helpers;
+  const { json, readJson, HttpError, requireRecentPasskey, billingKeySession, listAccounts, getVaultContext } = helpers;
   const actor = billingKeySession(session);
   const method = request.method;
-  const state = await billingMigrationState(env.DB);
+  const startup = path === "/api/encryption/startup" && method === "GET";
+  const [state, vaultContext] = await Promise.all([
+    billingMigrationState(env.DB),
+    startup ? getVaultContext(actor) : null
+  ]);
   const active = Boolean(state?.activated_at);
   const primary = session.role === "owner" && session.accountId === "owner" && session.identityId === "primary-admin";
   const optIn = env.BILLING_MIGRATION_ENABLED === "true";
-  if (path === "/api/encryption/status" && method === "GET") {
-    return json({ mode: active ? "encrypted" : state ? "migrating" : "legacy",
+  if (startup || (path === "/api/encryption/status" && method === "GET")) {
+    const status = { mode: active ? "encrypted" : state ? "migrating" : "legacy",
       canStage: primary && optIn && !active, canMaintain: primary && active && Boolean(env.BILLING_BACKUP), checkpointEnabled: Boolean(env.BILLING_BACKUP),
-      canActivate: primary && env.BILLING_CUTOVER_ENABLED === "true" && !active });
+      canActivate: primary && env.BILLING_CUTOVER_ENABLED === "true" && !active };
+    if (!startup) return json(status);
+    if (!active || url.searchParams.get("maintenance") === "legacy") return json({ status,vaultContext });
+    const accounts = await listAccounts(env,session);
+    const account = accounts[0];
+    const view = account ? await encryptedView(env.DB,state,account.id,session,primary,HttpError) : null;
+    return json({ status,vaultContext,accounts,view });
+  }
+  if (path === "/api/encryption/view" && method === "GET" && active) {
+    const requested = url.searchParams.get("accountId") || session.accountId;
+    return json(await encryptedView(env.DB,state,requested,session,primary,HttpError));
   }
   if (path === "/api/encryption/ledgers" && method === "GET" && active) {
     return json({ ledgers: await listScopes(env.DB,state.generation,session,primary) });
@@ -163,10 +244,13 @@ export async function billingEncryptionApi(request, env, url, path, session, hel
     const row = await env.DB.prepare(`SELECT revision,digest,signature,writer_public_key,records_json
       FROM billing_encryption_live_ledgers WHERE generation=? AND ledger_id=?`).bind(state.generation,ledgerId).first();
     if (!row) throw new HttpError(404, "暗号化台帳が見つかりません。");
-    return json({ revision: row.revision, digest: row.digest, signature: row.signature,
-      writer: JSON.parse(row.writer_public_key), records: JSON.parse(row.records_json) });
+    return json(serializeEncryptedLedger(row));
   }
   if (!primary) throw new HttpError(403, "第一管理者のみ操作できます。");
+  if (path === "/api/encryption/pending-grants" && method === "GET" && active) {
+    requireRecentPasskey(session);
+    return json({ ledgers:await pendingBillingGrants(env,state,actor,HttpError) });
+  }
   if (path.startsWith(`${legacyPath}/`)) {
     const authorizeLegacy = async challenge => {
       if (!challenge) {

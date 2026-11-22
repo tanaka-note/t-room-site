@@ -154,8 +154,10 @@ async function handleApi(request, env, url, path, context, getSession) {
       startedAt: new Date().toISOString()
     });
     const headers = new Headers({ "Set-Cookie": sessionCookie(token, policy, url.protocol === "https:") });
-    await writeAudit(env, { eventType: "passkey_login_success", actorAccountId: account.id, targetAccountId: account.id });
-    await recordSecurityAudit(env, request, { service: "billing", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: account.role, authMethod: "passkey", sessionId, credentialId: handoff.credentialId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt: new Date().toISOString(), sessionVersion: billingSessionVersion(env, account.session_version), passkeySessionEpoch: handoff.sessionEpoch });
+    await Promise.all([
+      writeAudit(env, { eventType: "passkey_login_success", actorAccountId: account.id, targetAccountId: account.id }),
+      recordSecurityAudit(env, request, { service: "billing", eventType: "passkey_login_success", outcome: "success", identityId: handoff.identityId, serviceLinkId: handoff.serviceLinkId, serviceAccountId: account.id, role: account.role, authMethod: "passkey", sessionId, credentialId: handoff.credentialId, expiresAt: Math.floor(Date.now() / 1000) + policy.ttlSeconds, startedAt: new Date().toISOString(), sessionVersion: billingSessionVersion(env, account.session_version), passkeySessionEpoch: handoff.sessionEpoch })
+    ]);
     return json({
       authenticated: true, role: account.role, accountId: account.id, accountName: account.display_name,
       accountDisplayName: accountDisplayName({ service: "billing", accountId: account.id, role: account.role }, `${account.display_name}${account.role === "owner" ? "（管理者）" : ""}`),
@@ -195,9 +197,7 @@ async function handleApi(request, env, url, path, context, getSession) {
 
   if (env.BILLING_KEY_PREPARATION_ENABLED === "true" && path === "/api/encryption/vault") {
     if (request.method === "GET") {
-      const result = await env.SECURITY.getBillingVaultContext(billingKeySession(session));
-      if (!result) throw new HttpError(403, "請求書の暗号鍵を利用できません。");
-      return json(result);
+      return json(await getBillingVaultContext(env, billingKeySession(session)));
     }
     if (request.method === "POST") {
       requireRecentPasskey(session);
@@ -217,7 +217,8 @@ async function handleApi(request, env, url, path, context, getSession) {
   }
 
   if (env.BILLING_KEY_PREPARATION_ENABLED === "true" && path.startsWith("/api/encryption/")) {
-    return billingEncryptionApi(request, env, url, path, session, { json, readJson, HttpError, requireRecentPasskey, billingKeySession });
+    return billingEncryptionApi(request, env, url, path, session, { json, readJson, HttpError, requireRecentPasskey,
+      billingKeySession, listAccounts, getVaultContext: actor => getBillingVaultContext(env, actor) });
   }
   if (env.BILLING_KEY_PREPARATION_ENABLED === "true"
     && (path === "/api/summary" || path.startsWith("/api/entries") || path.startsWith("/api/settlements")
@@ -275,6 +276,12 @@ async function handleApi(request, env, url, path, context, getSession) {
   }
 
   throw new HttpError(404, "Not found");
+}
+
+async function getBillingVaultContext(env, actor) {
+  const result = await env.SECURITY.getBillingVaultContext(actor);
+  if (!result) throw new HttpError(403, "請求書の暗号鍵を利用できません。");
+  return result;
 }
 
 async function listAccounts(env, session) {

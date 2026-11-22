@@ -13,7 +13,7 @@ import { readExportManifest, saveExport } from "../../backup-worker/src/export-b
 import { Bucket } from "../../backup-worker/test/fixtures.mjs";
 import { exportEnv, exportFetcher } from "../../backup-worker/test/export-fixtures.mjs";
 import { restoreIsolated } from "../../backup-worker/tools/restore-isolated.mjs";
-import { encryptedBillingApp } from "../public/billing-encrypted-app.mjs";
+import { encryptedBillingApp, refreshBillingGrants } from "../public/billing-encrypted-app.mjs";
 import { prepareBillingVault } from "../public/billing-key-client.mjs";
 import { stageBillingMigration } from "../public/billing-migration-client.mjs";
 import { prepareBillingLegacyMaintenance, restoreBillingCheckpoint } from "../public/billing-checkpoint-restore.mjs";
@@ -22,6 +22,7 @@ import { fixture, seedLedger } from "./performance-fixture.mjs";
 test("ordinary admin login stages, restores and opens encrypted Billing; normal mutations preserve members and audit", async () => {
   const f = fixture();
   const ownerPRF = crypto.getRandomValues(new Uint8Array(32)), memberPRF = crypto.getRandomValues(new Uint8Array(32));
+  const lateMemberPRF = crypto.getRandomValues(new Uint8Array(32));
   try {
     f.securityDb.exec(readFileSync(new URL("../../security-worker/e2ee/billing-vaults.sql",import.meta.url),"utf8"));
     f.securityDb.exec(`INSERT INTO security_identities (id,display_name,status,is_security_admin)
@@ -29,9 +30,14 @@ test("ordinary admin login stages, restores and opens encrypted Billing; normal 
       INSERT INTO security_credentials (credential_id,identity_id,public_key,prf_salt,prf_enabled,status)
         VALUES ('YmlsbGluZy1vd25lcg','primary-admin','AQI','AQI',1,'active');
       UPDATE security_credentials SET prf_enabled=1 WHERE credential_id='Y3JlZGVudGlhbA';
-      UPDATE security_service_links SET status='disabled' WHERE id='link-owner';
+      UPDATE security_service_links SET status='disabled' WHERE id IN ('link-owner','link-machiko');
       INSERT INTO security_service_links (id,identity_id,service,service_account_id,display_label,status)
-        VALUES ('fixture-primary-billing','primary-admin','billing','owner','Fixture','active');`);
+        VALUES ('fixture-primary-billing','primary-admin','billing','owner','Fixture','active');
+      INSERT INTO security_identities (id,display_name,status) VALUES ('late-member','Late member','active');
+      INSERT INTO security_credentials (credential_id,identity_id,public_key,prf_salt,prf_enabled,status)
+        VALUES ('bGF0ZS1tZW1iZXI','late-member','AQI','AQI',1,'active');
+      INSERT INTO security_service_links (id,identity_id,service,service_account_id,display_label,status)
+        VALUES ('late-billing','late-member','billing','machiko','Late member','active');`);
     f.security.env.BILLING_AUTH = {
       describeAccount:async ({ accountId }) => ({ valid:true,role:accountId === "owner" ? "owner" : "member" }),
       listLinkTargets:async () => ({ targets:[
@@ -43,6 +49,7 @@ test("ordinary admin login stages, restores and opens encrypted Billing; normal 
     },false,["encrypt","decrypt"]);
     const recoveryPublicKey = await crypto.subtle.exportKey("jwk",recovery.publicKey);
     f.env.SECURITY.getBillingRecoveryContext = async () => ({ publicKey:recoveryPublicKey,envelope:{} });
+    globalThis.TRoomCrypto = { unlockAdminPrivateKeyWithPasskey: async () => recovery.privateKey };
     seedLedger(f);
     f.db.exec(`INSERT INTO billing_opening_balances VALUES ('chiharu','2026-08-01',225,'owner',CURRENT_TIMESTAMP);
       INSERT INTO billing_audit_logs(event_type,actor_account_id,target_account_id,entry_id,details_json)
@@ -105,11 +112,40 @@ test("ordinary admin login stages, restores and opens encrypted Billing; normal 
     assert.match(persisted.archiveSha256,/^[a-f0-9]{64}$/);
     assert.doesNotMatch(JSON.stringify(persisted),/Fixture owner|2026-10|amount_yen/);
     await assert.rejects(ownerApi("/summary?month=2026-10&accountId=chiharu"),error => error.status === 409);
-    const memberApp = encryptedBillingApp(memberApi,member.body,memberKeys);
-    const ownerApp = encryptedBillingApp(ownerApi,owner.body,ownerKeys);
     const path = "/summary?month=2026-10&accountId=chiharu";
+    const startupCalls = [];
+    const recordOwnerApi = async (path,options) => {
+      startupCalls.push(path);
+      return ownerApi(path,options);
+    };
+    const startup = await recordOwnerApi("/encryption/startup");
+    assert.equal(startup.status.mode,"encrypted");
+    const existingKeys = await prepareBillingVault(recordOwnerApi,ownerAuth,startup.vaultContext);
+    const ownerApp = encryptedBillingApp(recordOwnerApi,owner.body,existingKeys,startup);
+    assert.deepEqual((await ownerApp.request("/accounts?includeSummary=1&month=2026-10")).summary,legacy.body);
+    assert.deepEqual(startupCalls.splice(0),["/encryption/startup"]);
+    const memberApp = encryptedBillingApp(memberApi,member.body,memberKeys);
     assert.deepEqual(await ownerApp.request(path),legacy.body);
+    assert.deepEqual(startupCalls.splice(0),["/encryption/view?accountId=chiharu"]);
     assert.deepEqual(await memberApp.request(path),legacy.body);
+    await assert.rejects(memberApi("/encryption/pending-grants"),error => error.status === 403);
+    await refreshBillingGrants(recordOwnerApi,ownerAuth);
+    assert.deepEqual(startupCalls.splice(0),["/encryption/pending-grants"],"prepared recipients cause no recovery or grant writes");
+
+    const lateMember = await f.login("machiko","late-member","late-billing","bGF0ZS1tZW1iZXI");
+    const lateApi = transport(lateMember.cookie);
+    const lateAuth = { credentialId:"bGF0ZS1tZW1iZXI",prfOutput:lateMemberPRF };
+    const lateStartup = await lateApi("/encryption/startup");
+    assert.deepEqual(lateStartup.accounts.map(account=>account.id),["machiko"]);
+    assert.equal(lateStartup.view.ledger,null,"a member without a grant receives no encrypted ledger");
+    const lateKeys = await prepareBillingVault(lateApi,lateAuth,lateStartup.vaultContext);
+    const lateApp = encryptedBillingApp(lateApi,lateMember.body,lateKeys,lateStartup);
+    await assert.rejects(lateApp.request("/accounts?includeSummary=1&month=2026-10"),/暗号鍵の配布を待っています/);
+    await refreshBillingGrants(recordOwnerApi,ownerAuth);
+    assert.deepEqual(startupCalls.splice(0),["/encryption/pending-grants","/encryption/recovery-context","/encryption/grants"]);
+    assert.equal((await lateApp.request("/summary?month=2026-10")).account.id,"machiko");
+    await refreshBillingGrants(recordOwnerApi,ownerAuth);
+    assert.deepEqual(startupCalls.splice(0),["/encryption/pending-grants"]);
     await assert.rejects(memberApp.request("/summary?month=2026-10&accountId=machiko"),error => error.status === 403);
     const auditLedgerId = (await ownerApi("/encryption/ledgers")).ledgers.find(item=>item.accountId===null).ledgerId;
     await assert.rejects(memberApi(`/encryption/ledger?ledger=${auditLedgerId}`),error => error.status === 403);
@@ -192,8 +228,10 @@ test("ordinary admin login stages, restores and opens encrypted Billing; normal 
     f.securityDb.exec("UPDATE security_service_links SET status='disabled' WHERE id='link-chiharu'");
     await assert.rejects(memberApp.request(path),error => error.status === 401);
   } finally {
+    delete globalThis.TRoomCrypto;
     ownerPRF.fill(0);
     memberPRF.fill(0);
+    lateMemberPRF.fill(0);
     f.close();
   }
 });

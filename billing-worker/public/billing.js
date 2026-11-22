@@ -5,6 +5,7 @@
     summary: null,
     summaryGeneration: 0,
     summaryController: null,
+    distributionController: null,
     uncertainOperationView: null,
     entryInitialSnapshot: null,
     dateDraft: null,
@@ -114,14 +115,21 @@
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
     el["passkey-login-label"].textContent = "確認中…";
+    const modules = importBillingModules();
+    // Load the cryptography while the native passkey prompt is running.
+    modules.catch(() => {});
     let authentication;
     try {
       authentication = await TRoomPasskeys.authenticate("billing", choosePasskeyLink);
       const session = await api("/passkey/handoff", { method: "POST", body: { handoffToken: authentication.handoff.handoffToken } });
-      const staged = session.prepareEncryptionKey && await prepareEncryptedSession(session,authentication);
-      if (staged === "legacy-maintenance") return;
+      el["passkey-login-label"].textContent = "台帳を読み込み中…";
+      const preparation = session.prepareEncryptionKey ? await prepareEncryptedSession(session,authentication,modules) : null;
+      if (preparation?.maintenance) return;
       await enterApp(session);
-      if (staged) setSummaryStatus("暗号化した台帳を保存しました。バックアップの復元確認後に切り替わります。");
+      if (preparation?.distribute && state.session === session) {
+        void distributeAfterLogin(preparation.distribute,authentication.prfOutput.slice());
+      }
+      if (preparation?.staged) setSummaryStatus("暗号化した台帳を保存しました。バックアップの復元確認後に切り替わります。");
     } catch (error) {
       el["login-error"].textContent = error.message;
     } finally {
@@ -136,39 +144,78 @@
     return TRoomPasskeys.chooseLinkDialog(links, "billing");
   }
 
-  async function prepareEncryptedSession(session, authentication) {
+  function importBillingModule(name) {
     const assetVersion = document.querySelector('meta[name="troom-app-build"]')?.content ?? "";
-    const importModule = name => import(`${basePath()}/${name}?v=${encodeURIComponent(assetVersion)}`);
-    const [status, { prepareBillingVault }] = await Promise.all([
-      api("/encryption/status"), importModule("billing-key-client.mjs"),
+    return import(`${basePath()}/${name}?v=${encodeURIComponent(assetVersion)}`);
+  }
+
+  function importBillingModules() {
+    const assetVersion = document.querySelector('meta[name="troom-app-build"]')?.content ?? "";
+    return Promise.all([
+      importBillingModule("billing-key-client.mjs"),
+      importBillingModule("billing-encrypted-app.mjs"),
       import(`/cloud/crypto-vault.js?v=${encodeURIComponent(assetVersion)}`)
     ]);
-    const keys = await prepareBillingVault(api,authentication);
+  }
+
+  async function prepareEncryptedSession(session, authentication, modules) {
+    const startupQuery = legacyMode ? "?maintenance=legacy" : "";
+    const [startup, [{ prepareBillingVault }, { encryptedBillingApp, refreshBillingGrants }]] = await Promise.all([
+      api(`/encryption/startup${startupQuery}`), modules
+    ]);
+    const { status, vaultContext } = startup;
+    const keys = await prepareBillingVault(api,authentication,vaultContext);
     if (legacyMode) {
       if (!status.canMaintain) throw new Error("暗号化後の旧バックアップは第一管理者が操作できます。");
-      const { prepareBillingLegacyMaintenance } = await importModule("billing-checkpoint-restore.mjs");
+      const { prepareBillingLegacyMaintenance } = await importBillingModule("billing-checkpoint-restore.mjs");
       const client = await prepareBillingLegacyMaintenance(api, keys, authentication);
       renderLegacyStatus(await client.status());
       state.legacyMaintenance = client;
       el["login-view"].hidden = true;
       el["legacy-view"].hidden = false;
       el["legacy-verify"].focus();
-      return "legacy-maintenance";
+      return { maintenance:true };
     }
     let staged = null;
     if (status.canStage) {
-      const { stageBillingMigration } = await importModule("billing-migration-client.mjs");
-      const restore = status.checkpointEnabled ? (await importModule("billing-checkpoint-restore.mjs")).restoreBillingCheckpoint : null;
+      const { stageBillingMigration } = await importBillingModule("billing-migration-client.mjs");
+      const restore = status.checkpointEnabled ? (await importBillingModule("billing-checkpoint-restore.mjs")).restoreBillingCheckpoint : null;
       staged = await stageBillingMigration(api,keys,authentication,(count,total) => {
         el["passkey-login-label"].textContent = `暗号化を準備中（${count}/${total}）`;
       },{ restore,activate:status.canActivate });
     }
     if (status.mode === "encrypted" || staged?.activated) {
-      const { encryptedBillingApp, refreshBillingGrants } = await importModule("billing-encrypted-app.mjs");
-      await refreshBillingGrants(api,keys,authentication);
-      state.encryptedApp = encryptedBillingApp(api,session,keys);
+      const needsOwnGrant = keys.primaryOwner && startup.view
+        && !startup.view.scope.grants.some(grant => grant.keySource === "billing" || keys.cloud);
+      // A newly prepared administrator passkey needs its own grant before it
+      // can open the first ledger. Established administrators can open it first.
+      if (needsOwnGrant) {
+        await refreshBillingGrants(api,authentication);
+        startup.view = null;
+      }
+      state.encryptedApp?.close();
+      state.encryptedApp = encryptedBillingApp(api,session,keys,startup);
+      return { distribute:keys.primaryOwner && !needsOwnGrant ? refreshBillingGrants : null };
     }
-    return Boolean(staged && !staged.activated);
+    return { staged:Boolean(staged) };
+  }
+
+  async function distributeAfterLogin(distribute, prfOutput) {
+    const controller = new AbortController();
+    state.distributionController?.abort();
+    state.distributionController = controller;
+    const notice = el["billing-key-status"];
+    try {
+      await distribute(api,{ prfOutput },controller.signal);
+    } catch {
+      if (!controller.signal.aborted && state.distributionController === controller) {
+        notice.textContent = "暗号鍵を配布できませんでした。配布を再開するには、パスキーでログインし直してください。";
+        notice.hidden = false;
+      }
+    } finally {
+      prfOutput.fill(0);
+      if (state.distributionController === controller) state.distributionController = null;
+    }
   }
 
   function renderLegacyStatus({ entries, settlements, openingBalances, auditDetails, cleanedAt }) {
@@ -229,6 +276,7 @@
   }
 
   async function logout() {
+    state.distributionController?.abort();
     dialogs.reset();
     try { await api("/logout", { method: "POST", body: {} }); } catch { /* local view still closes */ }
     state.session = null;
@@ -271,6 +319,9 @@
 
   function showLogin() {
     el["boot-view"].hidden = true;
+    state.distributionController?.abort();
+    el["billing-key-status"].hidden = true;
+    el["billing-key-status"].textContent = "";
     state.session = null;
     state.encryptedApp?.close();
     state.encryptedApp = null;
