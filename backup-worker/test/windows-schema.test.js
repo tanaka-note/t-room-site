@@ -24,16 +24,30 @@ test(`${service} backup accepts only the exact optional Windows authorization sc
     await assert.rejects(assertSchema(service,schema()),/SchemaReviewRequired/);
   } finally {db.close();}
 });
-test('Security backup accepts the reviewed T-Cloud transfer table without restoring unfinished delivery', async () => {
+test('Security backup restores pending encrypted T-Cloud delivery in isolation', async () => {
   const db = database('security');
   try {
     const schema = () => db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY type,name").all();
     await assertSchema('security', schema());
     db.exec(readFileSync(new URL('../../security-worker/migrations/0034_tcloud_admin_key_transfers.sql', import.meta.url), 'utf8'));
     await assertSchema('security', schema());
+    db.exec(`INSERT OR IGNORE INTO security_identities(id,display_name,status,is_security_admin) VALUES('primary-admin','Fixture','active',1);
+      INSERT OR IGNORE INTO security_service_links(id,identity_id,service,service_account_id,display_label,status)
+        VALUES('approval-cloud','primary-admin','cloud','admin','Fixture Cloud','active');
+      INSERT INTO security_credentials(credential_id,identity_id,public_key,prf_salt,status)
+        VALUES('transfer-source','primary-admin','public-fixture','salt-fixture','active'),
+          ('transfer-target','primary-admin','public-fixture','salt-fixture','active');
+      INSERT INTO security_tcloud_admin_key_transfers
+        SELECT 'transfer-target','primary-admin',id,'public-envelope','public-fingerprint','sealed-receiver','receiver-iv',
+          'transfer-source','admin-fingerprint','sealed-transfer','transfer-iv','sealed-wrapper'
+        FROM security_service_links WHERE identity_id='primary-admin' AND service='cloud' AND service_account_id='admin' AND status='active';`);
     const backup = await capture(d1(db), 'security');
-    assert.equal(Object.hasOwn(backup.tables, 'security_tcloud_admin_key_transfers'), false);
+    assert.equal(backup.tables.security_tcloud_admin_key_transfers.rowCount, 1);
+    assert.equal(backup.tables.security_tcloud_admin_key_transfers.rows[0].transfer_ciphertext, 'sealed-transfer');
     assert.equal(Object.hasOwn(backup.tables, 'security_tcloud_key_envelopes'), true);
+    const bucket=new Bucket(),key='approval-security.json.gz';
+    await verifiedPut(bucket,key,await compress(backup));
+    await restoreIsolated(bucket,key,'security');
     db.exec("ALTER TABLE security_tcloud_admin_key_transfers ADD COLUMN unreviewed TEXT");
     await assert.rejects(assertSchema('security', schema()), /SchemaReviewRequired/);
   } finally { db.close(); }

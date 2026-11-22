@@ -10,8 +10,9 @@ import { bindingOf } from '../../e2ee/record.mjs';
 import { prepareKeyConfiguration, publicTrustPackage } from '../../e2ee/setup.mjs';
 import {prepareRotation} from '../../e2ee/rotation.mjs';
 import { openRecoveryEnvelope } from '../../e2ee/recovery.mjs';
-import { createVault, open, signed, unb64, validatePublicTrust } from '../../e2ee/crypto.mjs';
+import { createVault, DELEGATION_RECIPIENT, open, signed, unb64, unlockVault, validatePublicTrust } from '../../e2ee/crypto.mjs';
 import { diaryRecipientId, diaryKeyBundle, handleDiaryKeys } from '../../../security-worker/src/diary-keys.js';
+import { readDiaryKeyMetadata } from '../../../backup-worker/src/diary-encrypted.js';
 
 let f;
 before(async () => { f = await systemFixture(); });
@@ -64,6 +65,59 @@ test('central control does not depend on signed household property order',async(
   f.central.sqlite.prepare('UPDATE security_diary_key_config SET directory_json=?').run(JSON.stringify(reordered));
   try {assert.equal((await central('/control',{expectedGeneration:1,next:'paused',evidence:null})).status,200);}
   finally {f.central.sqlite.prepare('UPDATE security_diary_key_config SET directory_json=?').run(original);f.db.sqlite.exec("UPDATE diary_e2ee_control SET phase='encrypted',generation=1");}
+});
+
+test('Diary delegation preserves old and new record keys and works with T-Cloud unavailable',async()=>{
+  const original=f;
+  f=await systemFixture();
+  const isolated=memoryDatabase();
+  try{
+    let author=await client();
+    author.keys.delete('tanaka-household:published');
+    const legacy=(await author.saveEntry(entry({title:'legacy before delegation'}))).entry;
+    author.lock();
+    const first=(await (await central('/admin')).json()),records=(await (await central('/recovery-records')).json()).records;
+    const installed=await prepareKeyConfiguration({status:first,recoveryPrivateKey:f.recovery.privateKey,
+      trustedAnchor:f.configuration.anchor,recoveryRecords:records,enableDelegation:true});
+    await central('/config',installed);
+    assert.ok(installed.directory.value.delegationPublicKey);
+    assert.notDeepEqual(installed.directory.value.delegationPublicKey,first.recoveryPublicKey);
+    assert.deepEqual(Object.keys(installed.delegation.value.wrapped),[owner().recipientId]);
+    author=await client();
+    author.keys.delete('tanaka-household:published');
+    const fresh=(await author.saveEntry(entry({title:'new after delegation'}))).entry;
+    author.lock();
+    const inventory=(await (await central('/recovery-records')).json()).records;
+    assert.equal(Boolean(inventory.find(row=>row.id===String(legacy.id)).keyBox[DELEGATION_RECIPIENT]),false);
+    assert.ok(inventory.find(row=>row.id===String(fresh.id)).keyBox[DELEGATION_RECIPIENT]);
+    f.centralEnv.CLOUD_AUTH={getPrimaryAdminCryptoConfig:async()=>{throw new Error('T-Cloud request not allowed here');}};
+    const actor=owner(),prior=f.users['wife-admin'],credentialId='new-diary-only-credential';
+    const recipientId=await diaryRecipientId(credentialId,prior.serviceLinkId),prf=crypto.getRandomValues(new Uint8Array(32));
+    const target={...prior,credentialId,recipientId,prf,vault:await createVault(prf,recipientId)};
+    f.central.sqlite.prepare("INSERT INTO security_credentials(credential_id,identity_id,public_key,prf_salt,status,prf_enabled) VALUES(?,?,'fixture','salt','active',1)").run(credentialId,prior.identityId);
+    await central('/vault',{serviceLinkId:target.serviceLinkId,vault:target.vault},target);
+    const config=await handleDiaryKeys('/api/diary/admin',new Request('https://fixture.test/security/api/diary/admin'),
+      f.centralEnv,{...actor,authenticatedAt:Date.now()/1000},{...f.helpers,approval:{identityId:target.identityId,credentialId:target.credentialId}});
+    const status=await config.json();
+    assert.equal(status.adminEnvelope,null);
+    const operator={recipientId:status.operator.recipientId,recipientKey:(await unlockVault(actor.prf,status.operator.recipientId,status.operator.vault)).rsa};
+    const next=await prepareKeyConfiguration({status,trustedAnchor:installed.anchor,recoveryRecords:inventory,operator});
+    assert.equal(next.recordGrants[recipientId].length,2);
+    await central('/config',next);
+    const metadata=await readDiaryKeyMetadata(f.central);
+    assert.deepEqual(metadata.delegation,next.delegation);
+    const packet=await backup(f.db,metadata);
+    await restoreEmpty(isolated,packet,{anchor:installed.anchor,minimumGeneration:next.directory.value.generation});
+    assert.deepEqual(isolated.sqlite.prepare('SELECT * FROM diary_e2ee_records ORDER BY id').all(),
+      f.db.sqlite.prepare('SELECT * FROM diary_e2ee_records ORDER BY id').all());
+    f.users['wife-admin']=target;
+    prior.prf.fill(0);
+    const reader=await client(target);
+    await reader.sync();
+    assert.equal(reader.entry(legacy.id).title,legacy.title);
+    assert.equal(reader.entry(fresh.id).title,fresh.title);
+    reader.lock();
+  }finally{isolated.close();await f.close();f=original;}
 });
 
 test('an inactive linked Diary account cannot block the remaining global administrator recovery',async()=>{

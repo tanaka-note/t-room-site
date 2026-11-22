@@ -10,11 +10,11 @@ const title = "パスキーの登録が完了しました。";
 const message = "管理者の確認後、利用できるようになります。しばらくお待ちください。";
 const credentialId = "Zml4dHVyZS1jcmVkZW50aWFs";
 const cloudLinks = [{ id: "fixture-link", accountId: "folder-member", rootFolderId: 2 }];
-let setup, scenario, statusFails, registrations, reads, bodies;
+let setup, scenario, statusFails, registrations, reads, bodies, receiveNonce;
 function reset(name = "normal") {
   setup = { active: false, resumable: false };
   scenario = name; statusFails = false;
-  registrations = 0; reads = 0; bodies = [];
+  registrations = 0; reads = 0; bodies = []; receiveNonce = null;
 }
 const files = new Map([
   ...["index.html", "security.js", "security.css", "security-display.js", "passkey-client.js"].map(name =>
@@ -47,6 +47,14 @@ const server = createServer(async (request, response) => {
       if (input.vault) {
         assert.equal(input.linkId, cloudLinks[0].id);
         assert.ok(input.vault.publicKeyJwk.n && input.vault.encryptedPayload && input.vault.payloadIv);
+        if (!input.proof) {
+          receiveNonce = crypto.randomUUID();
+          const publicKey = await crypto.subtle.importKey("jwk", input.vault.publicKeyJwk, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]);
+          const encrypted = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, publicKey, new TextEncoder().encode(receiveNonce));
+          return json({ challengeId: "receiver-proof", encrypted: Buffer.from(encrypted).toString("base64url") });
+        }
+        assert.equal(input.proof.challengeId, "receiver-proof");
+        assert.equal(input.proof.nonce, receiveNonce);
         setup.clientKeyReady = true;
         return json({ ok: true });
       }

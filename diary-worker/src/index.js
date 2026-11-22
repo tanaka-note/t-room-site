@@ -10,7 +10,7 @@ import { proxyDiaryAuthentication,diaryEncryptionOrigin,assertDiaryEncryptionOri
 import { drainEncryptedMedia } from "../e2ee/media.mjs";
 import { parseRecord } from "../e2ee/store.mjs";
 import { encryptionEnabled,encryptionStatus,handleEncryptedApi,photoMigrationEnabled } from "../e2ee/http.mjs";
-import { readRollout,transitionRollout } from "../e2ee/rollout.mjs";
+import { readRollout,transitionRollout,reservePasskeyApproval,releasePasskeyApproval } from "../e2ee/rollout.mjs";
 import { foregroundSessionActivity, serviceRollingSession, renewServiceSession, ROLLING_SESSION_VERSION } from "../../assets/passkey-rolling.mjs";
 import { createDiaryEntryDomain } from "./entry-domain.js";
 import { deleteAlbumPhoto } from "./photo-deletion.js";
@@ -125,6 +125,8 @@ export class SecurityIntegration extends WorkerEntrypoint {
   async stageEncryptionRotation(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return stageRotation(this.env.DB,input); }
   async commitEncryptionRotation(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return commitRotation(this.env.DB,input); }
   async encryptionRollout() { if(!encryptionEnabled(this.env))return {enabled:false};return readRollout(this.env.DB); }
+  async reservePasskeyApproval(id) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return reservePasskeyApproval(this.env.DB,id); }
+  async releasePasskeyApproval(id) { return releasePasskeyApproval(this.env.DB,id); }
   async transitionEncryption(input) { if(!encryptionEnabled(this.env))throw new Error("EncryptionDisabled");return transitionRollout(this.env.DB,input); }
   async encryptionRetainedScopes() {
     const rows=(await this.env.DB.prepare('SELECT household_id, json_group_array(DISTINCT owner_account_id) retained_for FROM diary_trash_scopes GROUP BY household_id,entry_id').all()).results;

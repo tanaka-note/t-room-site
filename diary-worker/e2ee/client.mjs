@@ -600,6 +600,7 @@ export class EncryptedDiaryClient {
         { ...binding, kind: "record-key" },
         this.directory.members.filter((m) => m.scopes.includes(scope)),
         this.directory.recoveryPublicKey,
+        this.directory.delegationPublicKey,
       );
     }
     const envelope = await seal(

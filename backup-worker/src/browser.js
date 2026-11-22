@@ -1,4 +1,7 @@
-import { SERVICES } from './registry.js';
+import { SERVICES, SECURITY_TRANSFER_SUFFIX } from './registry.js';
+import { exportPrefix } from './export-backup.js';
+import { SECURITY_BILLING_MIGRATION } from './billing-encrypted.js';
+import { SECURITY_DIARY_MIGRATION } from './diary-encrypted.js';
 import { scheduledBackupServices } from './dispatch.js';
 import { listObjects } from './backup.js';
 import { runState } from './monitor.js';
@@ -38,7 +41,10 @@ export async function storageSnapshot(env, refresh = false, cache = globalThis.c
   for (const id of serviceIds) {
     const spec = SERVICES[id];
     try {
-      const additional = id==='security' ? ['d1/security/v4','d1/security/v5'] : id==='billing' ? ['d1/billing/v4'] : id==='cloud'?['d1/cloud/v4']:[];
+      const additional = id==='security' ? ['d1/security/v4','d1/security/v5',...[
+        spec.migration,SECURITY_DIARY_MIGRATION,SECURITY_BILLING_MIGRATION
+      ].map(migration=>exportPrefix(id,migration+SECURITY_TRANSFER_SUFFIX).slice(0,-1))]
+        : id==='billing' ? ['d1/billing/v4'] : id==='cloud'?['d1/cloud/v4']:[];
       const [v3Daily, v3Monthly, v2Daily, v2Monthly, legacyDaily, legacyMonthly, storedDataBytes,...newer] = await Promise.all([
         listObjects(env.BACKUP, `d1/${id}/v3/daily/`), listObjects(env.BACKUP, `d1/${id}/v3/monthly/`),
         listObjects(env.BACKUP, `d1/${id}/v2/daily/`), listObjects(env.BACKUP, `d1/${id}/v2/monthly/`),

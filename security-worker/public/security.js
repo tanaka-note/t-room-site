@@ -347,24 +347,30 @@
           ? await TRoomCrypto.cloudPasskeyPreparation(prfOutput) : null;
         while (preparation.tasks.length) {
           const task = preparation.tasks[0];
-          let vault;
+          let vault, privateKey;
           if (task.service === "diary") {
             const { createVault, unlockVault } = await import("/security/diary-crypto/e2ee/crypto.mjs");
             vault = await createVault(prfOutput, task.recipientId);
-            await unlockVault(prfOutput, task.recipientId, vault);
+            ({ rsa: privateKey } = await unlockVault(prfOutput, task.recipientId, vault));
           } else if (task.service === "household") {
             const { createClientVault, unlockClient } = await import("/household/household-crypto.mjs");
             vault = await createClientVault(prfOutput);
-            await unlockClient(prfOutput, vault);
+            privateKey = await unlockClient(prfOutput, vault);
           } else if (task.service === "billing") {
             const { createBillingVault, unlockBillingVault } = await import("/billing/billing-crypto.mjs");
             vault = await createBillingVault(prfOutput, preparation.credentialId, { signing: task.primaryOwner });
-            await unlockBillingVault(prfOutput, preparation.credentialId, vault);
+            ({ recipient: privateKey } = await unlockBillingVault(prfOutput, preparation.credentialId, vault));
           } else {
-            const { publicKeyJwk, encryptedPayload, payloadIv } = await (task.accountId === "admin" ? keys.createReceiver() : keys.createMemberVault());
+            const prepared = await (task.accountId === "admin" ? keys.createReceiver() : keys.createMemberVault());
+            const { publicKeyJwk, encryptedPayload, payloadIv } = prepared;
+            privateKey = prepared.privateKey;
             vault = { publicKeyJwk, encryptedPayload, payloadIv };
           }
-          await post("/invite/preparation", { linkId: task.id, vault });
+          const { challengeId, encrypted } = await post("/invite/preparation", { linkId: task.id, vault });
+          const proof = new Uint8Array(await crypto.subtle.decrypt({ name: "RSA-OAEP" }, privateKey, TRoomPasskeys.fromBase64Url(encrypted)));
+          try {
+            await post("/invite/preparation", { linkId: task.id, vault, proof: { challengeId, nonce: new TextDecoder().decode(proof) } });
+          } finally { proof.fill(0); }
           preparation = await post("/invite/preparation", {});
           if (preparation.tasks.some(link => link.id === task.id)) throw new Error("鍵の準備を確認できませんでした。もう一度お試しください。");
         }
@@ -566,7 +572,9 @@
       .filter(item => item.status === "active"
         ? item.missingCloudKeys || item.missingDiaryKeys || item.missingHouseholdKeys || item.missingBillingKeys
         : data.identity.id !== "primary-admin" || item.invitedRegistration)
-      .map(item => `<button data-approve-credential="${escapeHtml(item.credentialId)}">${escapeHtml(formatDate(item.registeredAt))}の${item.status === "active" ? "鍵を補完" : "登録を承認"}</button>`)
+      .map(item => `<button data-approve-credential="${escapeHtml(item.credentialId)}">${escapeHtml(formatDate(item.registeredAt))}の${item.status === "active" ? "鍵を補完" : "登録を承認"}</button>`
+        + (item.status === "pending" && item.invitedRegistration
+          ? `<button class="secondary" data-continue-credential="${escapeHtml(item.credentialId)}">鍵の準備再開リンクを発行</button>` : ""))
       .join("");
     $("#identity-detail").innerHTML = `
       <section class="detail-section detail-summary"><h2>${escapeHtml(data.identity.displayName)}</h2><p class="status-${escapeHtml(data.identity.status)}">${escapeHtml(display.identityStatusLabel(data.identity.status))}</p><small>${data.identity.lastLoginAt ? `最終認証 ${escapeHtml(formatDate(data.identity.lastLoginAt))}` : "認証履歴なし"}${data.identity.lastSeenAt ? ` / 最終アクセス ${escapeHtml(formatDate(data.identity.lastSeenAt))}` : ""}</small></section>
@@ -611,6 +619,18 @@
     $("#reinvite-expiry").onchange = () => { $("#reinvite-custom-row").hidden = $("#reinvite-expiry").value !== "custom"; };
     $("#reinvite-submit").onclick = (event) => reinvite(id, event.currentTarget);
     document.querySelectorAll("[data-approve-credential]").forEach((button) => button.addEventListener("click", (event) => approve(id, event.currentTarget, button.dataset.approveCredential)));
+    document.querySelectorAll("[data-continue-credential]").forEach(button => button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        await freshAdminAuthentication();
+        const result = await post(`/identities/${encodeURIComponent(id)}/invite-continuation`, { credentialId: button.dataset.continueCredential });
+        renderInvitationResult($("#detail-result"), result);
+      } catch (error) {
+        showMessage(error.message, true);
+      } finally {
+        button.disabled = false;
+      }
+    }));
     document.querySelectorAll("[data-revoke-credential]").forEach((button) => button.addEventListener("click", () => revokeCredential(button.dataset.revokeCredential, button)));
     document.querySelectorAll("[data-revoke-invitation]").forEach((button) => button.addEventListener("click", () => revokeInvitation(button.dataset.revokeInvitation, button)));
     document.querySelectorAll("[data-remove-link]").forEach((button) => button.addEventListener("click", () => removeLink(button.dataset.removeLink, button)));

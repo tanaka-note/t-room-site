@@ -1,6 +1,7 @@
 import {issueDiaryMaintenance,verifyDiaryMaintenance} from './diary-maintenance.js';
 import {diaryEncryptionOrigin} from '../../diary-worker/e2ee/origin.mjs';
-import { b64,encode,fingerprint,verifyDirectory,verifySigned,validateEnvelope,validatePublicKey,recoveryWrappedBytes,unb64 } from '../../diary-worker/e2ee/crypto.mjs';
+import { b64,encode,fingerprint,verifyDirectory,verifySigned,validateEnvelope,validatePublicKey,recoveryWrappedBytes,unb64,DELEGATION_RECIPIENT } from '../../diary-worker/e2ee/crypto.mjs';
+import { delegationInventoryDigest } from '../../diary-worker/e2ee/recovery.mjs';
 import { canRead } from '../../diary-worker/e2ee/policy.mjs';
 import { verifyRecord } from '../../diary-worker/e2ee/record.mjs';
 import {publicTrustPackage} from '../../diary-worker/e2ee/setup.mjs';
@@ -52,7 +53,9 @@ async function accountClaims(env,accountId) {
 }
 async function config(env) {
   const row=await env.DB.prepare('SELECT * FROM security_diary_key_config WHERE id=1').first();
-  return row?{generation:row.generation,anchor:JSON.parse(row.anchor_json),directory:JSON.parse(row.directory_json),recoveryEnvelope:JSON.parse(row.recovery_json)}:null;
+  if(!row)return null;
+  const {delegation,...recoveryEnvelope}=JSON.parse(row.recovery_json);
+  return {generation:row.generation,anchor:JSON.parse(row.anchor_json),directory:JSON.parse(row.directory_json),recoveryEnvelope,...(delegation?{delegation}:{})};
 }
 
 // Public trust is endorsed by the same Security Center authentication which
@@ -137,7 +140,8 @@ export async function diaryKeyBundle(env,input) {
       }catch{rekeyRequired=true;}
     }
   }));
-  return {...current,recipientId,webAuthnCredentialId:input.credentialId,serviceLinkId:link.id,accountId:link.accountId,vault:JSON.parse(row.vault_json),grants:JSON.parse(row.grants_json),recordGrants:JSON.parse(row.record_grants_json),rekeyRequired};
+  const {delegation,...publicConfig}=current;
+  return {...publicConfig,recipientId,webAuthnCredentialId:input.credentialId,serviceLinkId:link.id,accountId:link.accountId,vault:JSON.parse(row.vault_json),grants:JSON.parse(row.grants_json),recordGrants:JSON.parse(row.record_grants_json),rekeyRequired};
 }
 
 async function writerReadiness(env,current) {
@@ -229,8 +233,9 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
   if(actor.identityId!=='primary-admin')fail(403,'AccessDenied');
   if(path==='/api/diary/recovery-records'&&request.method==='GET')return json(await env.DIARY_AUTH.encryptionRecoveryRecords({after:new URL(request.url).searchParams.get('after')||'',limit:20}));
   if(path==='/api/diary/admin'&&request.method==='GET') {
-    const current=await config(env),cloud=await env.CLOUD_AUTH.getPrimaryAdminCryptoConfig();
-    const adminEnvelope=await env.DB.prepare("SELECT encrypted_payload encryptedPayload,payload_iv payloadIv FROM security_tcloud_key_envelopes WHERE identity_id='primary-admin' AND credential_id=? AND envelope_type='admin_private_prf'").bind(actor.credentialId).first();
+    const current=await config(env),independent=Boolean(approval&&current?.delegation);
+    const cloud=independent?null:await env.CLOUD_AUTH.getPrimaryAdminCryptoConfig();
+    const adminEnvelope=independent?null:await env.DB.prepare("SELECT encrypted_payload encryptedPayload,payload_iv payloadIv FROM security_tcloud_key_envelopes WHERE identity_id='primary-admin' AND credential_id=? AND envelope_type='admin_private_prf'").bind(actor.credentialId).first();
     const rows=(await env.DB.prepare(`SELECT v.* FROM security_diary_key_vaults v
       JOIN security_credentials c ON c.credential_id=v.credential_id JOIN security_identities i ON i.id=v.identity_id
       JOIN security_service_links l ON l.id=v.service_link_id
@@ -238,9 +243,19 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
         OR (c.credential_id=? AND i.id=? AND c.status IN ('pending','active')
           AND i.status IN ('pending_approval','active') AND l.status IN ('pending','active'))`)
       .bind(approval?.credentialId ?? null,approval?.identityId ?? null).all()).results;
-    const members=[];for(const row of rows){const claims=await activeAccountClaims(env,row.account_id);if(!claims)continue;members.push({identityId:row.identity_id,serviceLinkId:row.service_link_id,credentialId:row.recipient_id,webAuthnCredentialId:row.credential_id,...claims,...JSON.parse(row.vault_json),privateEnvelope:undefined});}
+    const members=[];let operator=null;
+    for(const row of rows){
+      const claims=await activeAccountClaims(env,row.account_id);if(!claims)continue;
+      const {publicKey,signPublicKey,privateEnvelope}=JSON.parse(row.vault_json);
+      members.push({identityId:row.identity_id,serviceLinkId:row.service_link_id,credentialId:row.recipient_id,webAuthnCredentialId:row.credential_id,...claims,publicKey,signPublicKey});
+      if(claims.isGlobalOwner&&row.identity_id===actor.identityId&&row.credential_id===actor.credentialId&&current?.delegation?.value.wrapped[row.recipient_id]
+        &&links.some(link=>link.id===row.service_link_id&&link.accountId===row.account_id)) {
+        operator={recipientId:row.recipient_id,vault:{publicKey,signPublicKey,privateEnvelope}};
+      }
+    }
+    if(independent&&!operator)fail(403,'DiaryDelegationUnavailable');
     const households=await env.DIARY_AUTH.encryptionHouseholds();
-    return json({config:current,recoveryPublicKey:cloud?.publicKeyJwk||null,adminEnvelope,members,households,
+    return json({config:current,recoveryPublicKey:independent?current.directory.value.recoveryPublicKey:cloud?.publicKeyJwk||null,adminEnvelope,operator,members,households,
       writerReadiness:await writerReadiness(env,current),scopeAccounts:(await env.DIARY_AUTH.encryptionScopeAccounts()).filter(Boolean),retainedScopes:await env.DIARY_AUTH.encryptionRetainedScopes(),rollout:await env.DIARY_AUTH.encryptionRollout()});
   }
   if(path==='/api/diary/control'&&request.method==='POST') {
@@ -332,15 +347,17 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
     const rotation=current&&!rotationBegin?await env.DIARY_AUTH.encryptionRotationStatus():null;
     const rotated=Boolean(rotation?.status==='committed'&&equal(rotation.configuration,body)&&rotation.manifest.value.sourceGeneration===current.generation);
     const rekey=rotationBegin||rotated;
-    if(!exact(body,['expectedGeneration','anchor','directory','recoveryEnvelope','grants','recordGrants'])||!Number.isSafeInteger(body.expectedGeneration)||body.expectedGeneration<0)fail(409,'DiaryKeyGenerationConflict');
-    const retry=Boolean(current&&body.expectedGeneration===current.generation-1&&equal(body.anchor,current.anchor)&&equal(body.directory,current.directory)&&equal(body.recoveryEnvelope,current.recoveryEnvelope));
+    if(!exact(body,['expectedGeneration','anchor','directory','recoveryEnvelope','grants','recordGrants',...(body.delegation?['delegation']:[])])||!Number.isSafeInteger(body.expectedGeneration)||body.expectedGeneration<0)fail(409,'DiaryKeyGenerationConflict');
+    const retry=Boolean(current&&body.expectedGeneration===current.generation-1&&equal(body.anchor,current.anchor)&&equal(body.directory,current.directory)&&equal(body.recoveryEnvelope,current.recoveryEnvelope)&&equal(body.delegation??null,current.delegation??null));
     if(!retry&&body.expectedGeneration!==(current?.generation||0))fail(409,'DiaryKeyGenerationConflict');
     const anchor=current?.anchor||body.anchor;
     if(current&&!equal(anchor,body.anchor))fail(409,'DiaryAuthorityImmutable');
     const directory=await verifyDirectory(body.directory,anchor,body.expectedGeneration+1);
     if(directory.generation!==body.expectedGeneration+1)fail(409,'DiaryKeyGenerationConflict');
-    const cloud=await env.CLOUD_AUTH.getPrimaryAdminCryptoConfig();
-    if(!cloud?.publicKeyJwk||directory.recoveryFingerprint!==await fingerprint(cloud.publicKeyJwk)||body.recoveryEnvelope?.recoveryFingerprint!==directory.recoveryFingerprint||body.recoveryEnvelope?.authority!==await fingerprint(anchor)||body.recoveryEnvelope?.generation!==directory.generation)fail(400,'DiaryRecoveryMismatch');
+    const recoveryPublicKey=current?.delegation?current.directory.value.recoveryPublicKey:(await env.CLOUD_AUTH.getPrimaryAdminCryptoConfig())?.publicKeyJwk;
+    if(!recoveryPublicKey||directory.recoveryFingerprint!==await fingerprint(recoveryPublicKey)||body.recoveryEnvelope?.recoveryFingerprint!==directory.recoveryFingerprint||body.recoveryEnvelope?.authority!==await fingerprint(anchor)||body.recoveryEnvelope?.generation!==directory.generation)fail(400,'DiaryRecoveryMismatch');
+    if(Boolean(directory.delegationPublicKey)!==Boolean(body.delegation)||current?.delegation&&!body.delegation)fail(409,'DiaryDelegationRequired');
+    if(current?.delegation&&!rekey&&!equal(directory.delegationPublicKey,current.directory.value.delegationPublicKey))fail(409,'DiaryDelegationKeyChanged');
     validateEnvelope(body.recoveryEnvelope.envelope);
     if(!exact(body.recoveryEnvelope,['version','generation','authority','recoveryFingerprint','envelope','wrappedKey'])||body.recoveryEnvelope.version!==1||unb64(body.recoveryEnvelope.wrappedKey,684).length!==recoveryWrappedBytes(directory.recoveryPublicKey))fail(400,'DiaryRecoveryMismatch');
     if(!equal(directory.households,await env.DIARY_AUTH.encryptionHouseholds()))fail(403,'DiaryHouseholdsMismatch');
@@ -360,7 +377,7 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
       if(recoveryRecords.size>5000||page.nextCursor&&page.nextCursor<=after)fail(409,'DiaryRecoveryInventoryChanged');
       after=page.nextCursor;
     }while(after);}
-    const statements=[];
+    const statements=[],delegates=[];
     for(const member of directory.members) {
       if(member.active===false)fail(409,"RekeyRequired");
       const row=await env.DB.prepare('SELECT * FROM security_diary_key_vaults WHERE recipient_id=?').bind(member.credentialId).first();
@@ -368,6 +385,7 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
         && approval.links.some(link=>link.id===row.service_link_id&&link.accountId===row.account_id);
       if(!row||member.accountId!==row.account_id||member.serviceLinkId!==row.service_link_id||member.identityId!==row.identity_id||member.webAuthnCredentialId!==row.credential_id||(!inApproval&&!(await liveLinks(env,row.identity_id,row.credential_id)).some(link=>link.id===row.service_link_id&&link.accountId===row.account_id)))fail(403,'DiaryRecipientMismatch');
       const vault=JSON.parse(row.vault_json),claims=await accountClaims(env,row.account_id);
+      if(member.identityId==='primary-admin'&&claims.isGlobalOwner)delegates.push(member.credentialId);
       if(!equal(member.publicKey,vault.publicKey)||!equal(member.signPublicKey,vault.signPublicKey)||member.canManageEntries!==claims.canManageEntries||!equal(member.households,claims.households))fail(403,'DiaryRecipientMismatch');
       for(const scope of member.scopes)if(!canRead(claims,scopeRecord(scope,directory.households)))fail(403,'DiaryScopeDenied');
       const grants=body.grants[member.credentialId];if(!Array.isArray(grants)||grants.length!==member.scopes.length)fail(400,'IncompleteGrants');
@@ -387,6 +405,16 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
           WHERE EXISTS (SELECT 1 FROM security_audit_events WHERE event_id=?)`).bind(...params,approval.eventId)
         :env.DB.prepare('INSERT INTO security_diary_key_grants VALUES(?,?,?,?,?)').bind(...params));
     }
+    if(body.delegation) {
+      const value=await verifySigned(body.delegation,anchor);
+      if(!exact(value,['generation','envelope','wrapped','legacyDigest'])||value.generation!==directory.generation||!delegates.length||!exact(value.wrapped,delegates)
+        ||Object.values(value.wrapped).some(wrapped=>unb64(wrapped,512).length!==384))fail(400,'InvalidDiaryDelegation');
+      validateEnvelope(value.envelope);
+      const legacy=[...recoveryRecords.values()].filter(row=>!row.keyBox[DELEGATION_RECIPIENT]).map(row=>[row.id,row.attestation.signature]);
+      if(!retry&&value.legacyDigest!==await delegationInventoryDigest(legacy))fail(409,'DiaryDelegationRecordChanged');
+    }
+    const packedRecovery=JSON.stringify({...body.recoveryEnvelope,...(body.delegation?{delegation:body.delegation}:{})});
+    if(new TextEncoder().encode(packedRecovery).length>1_800_000)fail(413,'DiaryDelegationTooLarge');
     if(rotationBegin) {
       if(retry)fail(409,'DiaryKeyGenerationConflict');
       return json(await env.DIARY_AUTH.beginEncryptionRotation({configuration:body,manifest:input.manifest,anchor,currentDirectory:await verifyDirectory(current.directory,anchor,current.generation)}));
@@ -397,14 +425,14 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
       const publish=current
         ?env.DB.prepare(`UPDATE security_diary_key_config SET generation=?,anchor_json=?,directory_json=?,recovery_json=?
           WHERE id=1 AND generation=? AND EXISTS (SELECT 1 FROM security_audit_events WHERE event_id=?)`)
-          .bind(directory.generation,JSON.stringify(anchor),JSON.stringify(body.directory),JSON.stringify(body.recoveryEnvelope),body.expectedGeneration,approval.eventId)
+          .bind(directory.generation,JSON.stringify(anchor),JSON.stringify(body.directory),packedRecovery,body.expectedGeneration,approval.eventId)
         :env.DB.prepare(`INSERT INTO security_diary_key_config SELECT 1,?,?,?,?
           WHERE EXISTS (SELECT 1 FROM security_audit_events WHERE event_id=?)`)
-          .bind(directory.generation,JSON.stringify(anchor),JSON.stringify(body.directory),JSON.stringify(body.recoveryEnvelope),approval.eventId);
+          .bind(directory.generation,JSON.stringify(anchor),JSON.stringify(body.directory),packedRecovery,approval.eventId);
       return { statements:[publish,...statements],expectedGeneration:body.expectedGeneration };
     }
     if(retry)return json({ok:true,generation:directory.generation});
-    const update=current?env.DB.prepare('UPDATE security_diary_key_config SET generation=?,anchor_json=?,directory_json=?,recovery_json=? WHERE id=1 AND generation=?').bind(directory.generation,JSON.stringify(anchor),JSON.stringify(body.directory),JSON.stringify(body.recoveryEnvelope),body.expectedGeneration):env.DB.prepare('INSERT INTO security_diary_key_config VALUES(1,?,?,?,?)').bind(directory.generation,JSON.stringify(anchor),JSON.stringify(body.directory),JSON.stringify(body.recoveryEnvelope));
+    const update=current?env.DB.prepare('UPDATE security_diary_key_config SET generation=?,anchor_json=?,directory_json=?,recovery_json=? WHERE id=1 AND generation=?').bind(directory.generation,JSON.stringify(anchor),JSON.stringify(body.directory),packedRecovery,body.expectedGeneration):env.DB.prepare('INSERT INTO security_diary_key_config VALUES(1,?,?,?,?)').bind(directory.generation,JSON.stringify(anchor),JSON.stringify(body.directory),packedRecovery);
     // Duplicate generations fail the transaction, preserving all existing grants.
     await env.DB.batch([update,...statements]);
     const saved=await config(env);if(saved.generation!==directory.generation||!equal(saved.directory,body.directory))fail(409,'DiaryKeyGenerationConflict');

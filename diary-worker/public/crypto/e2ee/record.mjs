@@ -1,5 +1,6 @@
 import {
   RECOVERY_RECIPIENT,
+  DELEGATION_RECIPIENT,
   b64,
   encode,
   unb64,
@@ -128,7 +129,7 @@ export function validateRecord(row) {
     !row.keyBox ||
     typeof row.keyBox !== "object" ||
     Array.isArray(row.keyBox) ||
-    Object.keys(row.keyBox).length > 100
+    Object.keys(row.keyBox).length > 102
   )
     throw new Error("InvalidRecord");
   for (const [id, value] of Object.entries(row.keyBox))
@@ -178,6 +179,7 @@ export async function verifyRecord(row,directory,{currentRecipients=false}={}) {
     .map((m) => m.credentialId)
     .sort();
   expected.push(RECOVERY_RECIPIENT);
+  if (directory.delegationPublicKey) expected.push(DELEGATION_RECIPIENT);
   expected.sort();
   const actual = Object.keys(row.keyBox).sort();
   if (actual.length && (!actual.includes(RECOVERY_RECIPIENT)||actual.some(id=>!expected.includes(id))||currentRecipients&&b64(encode(actual))!==b64(encode(expected))))

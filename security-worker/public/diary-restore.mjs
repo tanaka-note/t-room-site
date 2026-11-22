@@ -2210,6 +2210,7 @@ var encoder = new TextEncoder();
 var decoder = new TextDecoder("utf-8", { fatal: true });
 var VERSION = 1;
 var RECOVERY_RECIPIENT = "__recovery__";
+var DELEGATION_RECIPIENT = "__diary_delegation__";
 var canonical = (value) => Array.isArray(value) ? value.map(canonical) : value && typeof value === "object" ? Object.fromEntries(
   Object.keys(value).sort().map((k) => [k, canonical(value[k])])
 ) : value;
@@ -2307,11 +2308,15 @@ async function verifyDirectory(packet, anchor, minimumGeneration = 1) {
       throw new Error("InvalidDirectory");
   if (!recoveryWrappedBytes(value.recoveryPublicKey) || await fingerprint(value.recoveryPublicKey) !== value.recoveryFingerprint)
     throw new Error("InvalidDirectory");
+  if (value.delegationPublicKey) {
+    validatePublicKey(value.delegationPublicKey, "recipient");
+    if (await fingerprint(value.delegationPublicKey) === value.recoveryFingerprint) throw new Error("InvalidDirectory");
+  }
   if (value.recoveryAuthority && b64(encode(value.recoveryAuthority)) !== b64(encode(anchor)))
     throw new Error("InvalidRecoveryAuthority");
   const ids = /* @__PURE__ */ new Set();
   for (const member of value.members) {
-    if (member.credentialId === RECOVERY_RECIPIENT || ids.has(member.credentialId) || !/^[\w-]{1,2048}$/.test(member.credentialId) || !token2(member.accountId) || !Array.isArray(member.scopes) || new Set(member.scopes).size !== member.scopes.length || member.scopes.some((s) => !Object.hasOwn(value.epochs, s)) || await fingerprint(member.publicKey) !== member.fingerprint || typeof member.canManageEntries !== "boolean" || !Array.isArray(member.households) || member.households.some((h) => !Object.hasOwn(value.households, h)))
+    if ([RECOVERY_RECIPIENT, DELEGATION_RECIPIENT].includes(member.credentialId) || ids.has(member.credentialId) || !/^[\w-]{1,2048}$/.test(member.credentialId) || !token2(member.accountId) || !Array.isArray(member.scopes) || new Set(member.scopes).size !== member.scopes.length || member.scopes.some((s) => !Object.hasOwn(value.epochs, s)) || await fingerprint(member.publicKey) !== member.fingerprint || typeof member.canManageEntries !== "boolean" || !Array.isArray(member.households) || member.households.some((h) => !Object.hasOwn(value.households, h)))
       throw new Error("InvalidDirectory");
     validatePublicKey(member.publicKey, "recipient");
     validatePublicKey(member.signPublicKey, "signing");
@@ -2395,7 +2400,7 @@ function validateRecord(row) {
     throw new Error("InvalidRecord");
   validateEnvelope(row.envelope);
   validateEnvelope(row.summary);
-  if (!exact(row.attestation, ["writer", "signature", ...row.attestation?.recovery ? ["recovery"] : []]) || !/^[\w-]{1,2048}$/.test(row.attestation.writer) || unb64(row.attestation.signature, 100).length !== 64 || !row.keyBox || typeof row.keyBox !== "object" || Array.isArray(row.keyBox) || Object.keys(row.keyBox).length > 100)
+  if (!exact(row.attestation, ["writer", "signature", ...row.attestation?.recovery ? ["recovery"] : []]) || !/^[\w-]{1,2048}$/.test(row.attestation.writer) || unb64(row.attestation.signature, 100).length !== 64 || !row.keyBox || typeof row.keyBox !== "object" || Array.isArray(row.keyBox) || Object.keys(row.keyBox).length > 102)
     throw new Error("InvalidRecord");
   for (const [id, value] of Object.entries(row.keyBox))
     if (!/^[\w-]{1,2048}$/.test(id) || !(id === RECOVERY_RECIPIENT ? [384, 512] : [384]).includes(
@@ -2426,6 +2431,7 @@ async function verifyRecord(row, directory, { currentRecipients = false } = {}) 
     throw new Error("KeyEpochConflict");
   const expected = directory.members.filter((m) => m.scopes.includes(row.scope)).map((m) => m.credentialId).sort();
   expected.push(RECOVERY_RECIPIENT);
+  if (directory.delegationPublicKey) expected.push(DELEGATION_RECIPIENT);
   expected.sort();
   const actual = Object.keys(row.keyBox).sort();
   if (actual.length && (!actual.includes(RECOVERY_RECIPIENT) || actual.some((id) => !expected.includes(id)) || currentRecipients && b64(encode(actual)) !== b64(encode(expected))))
@@ -2626,7 +2632,14 @@ var FLOOR = TRUST_PIN + "-floor";
 
 // diary-worker/e2ee/backup.mjs
 var exact2 = (value, keys) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).sort().join(",") === [...keys].sort().join(",");
-async function validateKeyMetadata({ vaults, grants, recordGrants = {}, recoveryEnvelope }, directory, anchor = null) {
+async function validateKeyMetadata({ vaults, grants, recordGrants = {}, recoveryEnvelope, delegation }, directory, anchor = null) {
+  if (Boolean(directory.delegationPublicKey) !== Boolean(delegation)) throw new Error("InvalidKeyMetadata");
+  if (delegation) {
+    const value = anchor ? await verifySigned(delegation, anchor) : delegation.value;
+    const recipients = Object.keys(value?.wrapped || {});
+    if (!exact2(delegation, ["value", "signature"]) || !exact2(value, ["generation", "envelope", "wrapped", "legacyDigest"]) || unb64(value.legacyDigest, 43).length !== 32 || value.generation !== directory.generation || !recipients.length || recipients.some((id) => unb64(value.wrapped[id], 512).length !== 384 || !directory.members.some((member) => member.credentialId === id && member.identityId === "primary-admin" && member.active !== false))) throw new Error("InvalidKeyMetadata");
+    validateEnvelope(value.envelope);
+  }
   for (const vault of Object.values(vaults || {})) {
     if (!exact2(vault, ["publicKey", "signPublicKey", "privateEnvelope", ...Object.hasOwn(vault, "trust") ? ["trust"] : []]) || [vault.publicKey, vault.signPublicKey].some(
       (key) => !key || ["d", "p", "q", "dp", "dq", "qi", "oth", "k"].some(
@@ -3790,8 +3803,32 @@ function cloudVersionsSpec() {
     knownTables: [...spec.knownTables, "cloud_file_versions"]
   };
 }
+var SECURITY_TRANSFER_TABLE = "security_tcloud_admin_key_transfers";
+var SECURITY_TRANSFER_SUFFIX = "+tcloud-transfers";
+function securityTransferSpec(spec) {
+  const columns = [
+    "credential_id",
+    "identity_id",
+    "service_link_id",
+    "public_key_jwk",
+    "public_key_fingerprint",
+    "receiver_ciphertext",
+    "receiver_iv",
+    "source_credential_id",
+    "admin_key_fingerprint",
+    "transfer_ciphertext",
+    "transfer_iv",
+    "transfer_wrapped_key"
+  ];
+  return {
+    ...spec,
+    migration: spec.migration + SECURITY_TRANSFER_SUFFIX,
+    tables: [...spec.tables, { name: SECURITY_TRANSFER_TABLE, columns, sourceColumns: columns.join(",") }]
+  };
+}
 function archiveSpec(service, migration) {
   const spec = SERVICES[service];
+  if (service === "security" && migration === spec.migration + SECURITY_TRANSFER_SUFFIX) return securityTransferSpec(spec);
   if (service === "cloud" && migration === CLOUD_VERSIONS_MIGRATION) return cloudVersionsSpec();
   if (service === "cloud" && migration === "0012_favorites.sql") {
     const legacyColumn = (column) => column !== "trash_operation_id" && column !== "purge_id";
@@ -3913,6 +3950,10 @@ async function assertEncryptedSchema(service, rows2) {
   await assertSchema(service, rows2.filter((row) => !encrypted(row)));
 }
 async function assertArchiveSchema(service, migration, rows2) {
+  if (service === "security" && migration?.endsWith(SECURITY_TRANSFER_SUFFIX)) {
+    if (!rows2.some((row) => row.name === SECURITY_TRANSFER_TABLE)) throw new Error("SchemaReviewRequired");
+    migration = migration.slice(0, -SECURITY_TRANSFER_SUFFIX.length);
+  }
   if (service === "billing" && migration === BILLING_ENCRYPTED_MIGRATION) {
     if (!rows2.some((row) => row.name === "billing_encryption_live_ledgers")) throw new Error("SchemaReviewRequired");
     return assertSchema(service, rows2);
@@ -4062,6 +4103,11 @@ var FORMAT = "troom-d1-export-v3";
 var PART_BYTES = 1024 * 1024;
 var MAX_PARTS = 2e4;
 function exportSpec(service, migration) {
+  if (service === "security" && migration?.endsWith(SECURITY_TRANSFER_SUFFIX)) {
+    const base = migration.slice(0, -SECURITY_TRANSFER_SUFFIX.length);
+    if (![SERVICES.security.migration, SECURITY_DIARY_MIGRATION, SECURITY_BILLING_MIGRATION].includes(base)) throw new Error("SnapshotInvalid");
+    return securityTransferSpec(exportSpec(service, base));
+  }
   if (service === "billing" && migration === BILLING_ENCRYPTED_MIGRATION) return billingEncryptedSpec(SERVICES.billing);
   if (service === "security" && migration === SECURITY_BILLING_MIGRATION) return {
     ...SERVICES.security,
@@ -4079,7 +4125,7 @@ function exportSpec(service, migration) {
   if (!Object.hasOwn(SERVICES, service)) throw new Error("SourceUnavailable");
   return service === "cloud" ? archiveSpec(service, migration) : SERVICES[service];
 }
-var exportPrefix = (service, migration) => service === "diary" ? migration === DIARY_ENCRYPTED_MIGRATION ? "v10/" : "v9/" : service === "cloud" && migration === CLOUD_VERSIONS_MIGRATION ? "d1/cloud/v4/" : migration === SECURITY_BILLING_MIGRATION ? "d1/security/v5/" : migration === BILLING_ENCRYPTED_MIGRATION ? "d1/billing/v4/" : service === "security" && migration === SECURITY_DIARY_MIGRATION ? "d1/security/v4/" : `d1/${service}/v3/`;
+var exportPrefix = (service, migration) => service === "diary" ? migration === DIARY_ENCRYPTED_MIGRATION ? "v10/" : "v9/" : service === "cloud" && migration === CLOUD_VERSIONS_MIGRATION ? "d1/cloud/v4/" : migration === SECURITY_BILLING_MIGRATION ? "d1/security/v5/" : migration === BILLING_ENCRYPTED_MIGRATION ? "d1/billing/v4/" : service === "security" && migration?.endsWith(SECURITY_TRANSFER_SUFFIX) ? `d1/security/v6/${migration.slice(0, -SECURITY_TRANSFER_SUFFIX.length)}/` : service === "security" && migration === SECURITY_DIARY_MIGRATION ? "d1/security/v4/" : `d1/${service}/v3/`;
 function validateExportManifest(manifest, service) {
   const spec = service === "household" ? archiveSpec(service, manifest?.expectedMigration) : exportSpec(service, manifest?.expectedMigration), prefix = exportPrefix(service, manifest?.expectedMigration);
   if (manifest?.format !== FORMAT || manifest.service !== service || manifest.database !== spec.database || manifest.expectedMigration !== spec.migration || manifest.consistency !== "single-database-export" || !Number.isFinite(Date.parse(manifest.scheduledFor)) || !Number.isFinite(Date.parse(manifest.createdAt)) || !Number.isFinite(Date.parse(manifest.completedAt)) || typeof manifest.bookmark !== "string" || !manifest.bookmark || manifest.bookmark.length > 256 || !Array.isArray(manifest.schema) || !Array.isArray(manifest.parts) || manifest.parts.length > MAX_PARTS || Object.keys(manifest.tables || {}).sort().join(",") !== spec.tables.map((t) => t.name).sort().join(",")) throw new Error("SnapshotInvalid");

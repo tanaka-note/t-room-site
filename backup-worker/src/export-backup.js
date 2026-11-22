@@ -1,6 +1,6 @@
 import {verifyLegacyCoverage,requireFrozenMigration} from '../../diary-worker/e2ee/migration-store.mjs';
 import {DIARY_ENCRYPTED_MIGRATION,SECURITY_DIARY_MIGRATION,ENCRYPTED_DIARY_TABLES,SECURITY_DIARY_TABLES,readDiaryKeyMetadata,sameKeyMetadata,verifyEncryptedDiaryRow} from './diary-encrypted.js';
-import { SERVICES,archiveSpec,CLOUD_VERSIONS_MIGRATION } from './registry.js';
+import { SERVICES,archiveSpec,CLOUD_VERSIONS_MIGRATION,securityTransferSpec,SECURITY_TRANSFER_SUFFIX,SECURITY_TRANSFER_TABLE } from './registry.js';
 import { BACKUP_TABLES } from '../../diary-worker/src/backup.js';
 import { assertSchema,assertArchiveSchema,assertEncryptedSchema } from './schema-guard.js';
 import { compress, decode, digest, verifiedPut, verifiedGeneration } from './integrity.js';
@@ -22,6 +22,11 @@ export const DATABASES = {
 };
 
 export function exportSpec(service,migration) {
+  if(service==='security'&&migration?.endsWith(SECURITY_TRANSFER_SUFFIX)) {
+    const base=migration.slice(0,-SECURITY_TRANSFER_SUFFIX.length);
+    if(![SERVICES.security.migration,SECURITY_DIARY_MIGRATION,SECURITY_BILLING_MIGRATION].includes(base))throw new Error('SnapshotInvalid');
+    return securityTransferSpec(exportSpec(service,base));
+  }
   if(service==='billing'&&migration===BILLING_ENCRYPTED_MIGRATION)return billingEncryptedSpec(SERVICES.billing);
   if(service==='security'&&migration===SECURITY_BILLING_MIGRATION)return {...SERVICES.security,migration,
     tables:[...SERVICES.security.tables,...SECURITY_DIARY_TABLES,SECURITY_BILLING_VAULTS]};
@@ -37,6 +42,7 @@ export const exportPrefix = (service,migration) => service === 'diary' ? (migrat
   : service==='cloud'&&migration===CLOUD_VERSIONS_MIGRATION?'d1/cloud/v4/'
   : migration===SECURITY_BILLING_MIGRATION?'d1/security/v5/'
   : migration===BILLING_ENCRYPTED_MIGRATION?'d1/billing/v4/'
+  : service==='security'&&migration?.endsWith(SECURITY_TRANSFER_SUFFIX)?`d1/security/v6/${migration.slice(0,-SECURITY_TRANSFER_SUFFIX.length)}/`
   : service==='security'&&migration===SECURITY_DIARY_MIGRATION?'d1/security/v4/':`d1/${service}/v3/`;
 export const exportDay = now => new Date(now + 9 * 3600000).toISOString().slice(0, 10);
 
@@ -64,7 +70,7 @@ async function schemaMetadata(db, service, spec) {
       schema = schema.filter(row => !referenceRows.includes(row));
     }
   }
-  if([BILLING_ENCRYPTED_MIGRATION,SECURITY_BILLING_MIGRATION].includes(spec.migration))await assertArchiveSchema(service,spec.migration,schema);
+  if([BILLING_ENCRYPTED_MIGRATION,SECURITY_BILLING_MIGRATION].includes(spec.migration)||service==='security'&&spec.migration.endsWith(SECURITY_TRANSFER_SUFFIX))await assertArchiveSchema(service,spec.migration,schema);
   else if([DIARY_ENCRYPTED_MIGRATION,SECURITY_DIARY_MIGRATION].includes(spec.migration)||service==='diary'&&schema.some(row=>row.name==='diary_e2ee_control'))await assertEncryptedSchema(service,schema);
   else await assertSchema(service, schema);
   return { tables, schema };
@@ -176,6 +182,9 @@ export async function saveExport(env, service, now, { fetcher = fetch, sleep = m
   if (service==='security' && migration===SECURITY_DIARY_MIGRATION && env.SECURITY_DB
     && await env.SECURITY_DB.prepare("SELECT 1 AS present FROM sqlite_schema WHERE type='table' AND name='security_billing_vaults'").first()) {
     migration=SECURITY_BILLING_MIGRATION;
+  }
+  if(service==='security'&&env.SECURITY_DB&&await env.SECURITY_DB.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?").bind(SECURITY_TRANSFER_TABLE).first()) {
+    migration=(migration||SERVICES.security.migration)+SECURITY_TRANSFER_SUFFIX;
   }
   if(service==='cloud'&&env.CLOUD_DB&&await env.CLOUD_DB.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='cloud_file_versions'").first())migration=CLOUD_VERSIONS_MIGRATION;
   const spec = exportSpec(service,migration), bucket = exportBucket(env, service), prefix = exportPrefix(service,migration), day = exportDay(now);

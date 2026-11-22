@@ -28,7 +28,9 @@ export async function readDiaryKeyMetadata(db) {
     db.prepare('SELECT * FROM security_diary_key_grants WHERE generation=(SELECT generation FROM security_diary_key_config WHERE id=1)'),
   ]);
   const config=configs.results[0];if(!config)throw new Error('DiaryKeyMetadataUnavailable');
-  const metadata={anchor:JSON.parse(config.anchor_json),directory:JSON.parse(config.directory_json),recoveryEnvelope:JSON.parse(config.recovery_json),vaults:{},grants:{},recordGrants:{}};
+  const {delegation,...recoveryEnvelope}=JSON.parse(config.recovery_json);
+  const metadata={anchor:JSON.parse(config.anchor_json),directory:JSON.parse(config.directory_json),recoveryEnvelope,
+    ...(delegation?{delegation}:{}),vaults:{},grants:{},recordGrants:{}};
   const directory=await verifyDirectory(metadata.directory,metadata.anchor,config.generation);
   if(directory.generation!==config.generation)throw new Error('DiaryKeyGenerationConflict');
   for(const member of directory.members) {

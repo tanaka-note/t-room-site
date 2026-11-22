@@ -5,6 +5,7 @@ const encoder = new TextEncoder(),
   decoder = new TextDecoder("utf-8", { fatal: true });
 export const VERSION = 1;
 export const RECOVERY_RECIPIENT = "__recovery__";
+export const DELEGATION_RECIPIENT = "__diary_delegation__";
 const canonical = (value) =>
   Array.isArray(value)
     ? value.map(canonical)
@@ -368,12 +369,16 @@ export async function verifyDirectory(packet, anchor, minimumGeneration = 1) {
     (await fingerprint(value.recoveryPublicKey)) !== value.recoveryFingerprint
   )
     throw new Error("InvalidDirectory");
+  if (value.delegationPublicKey) {
+    validatePublicKey(value.delegationPublicKey, "recipient");
+    if (await fingerprint(value.delegationPublicKey) === value.recoveryFingerprint) throw new Error("InvalidDirectory");
+  }
   if (value.recoveryAuthority && b64(encode(value.recoveryAuthority)) !== b64(encode(anchor)))
     throw new Error("InvalidRecoveryAuthority");
   const ids = new Set();
   for (const member of value.members) {
     if (
-      member.credentialId === RECOVERY_RECIPIENT ||
+      [RECOVERY_RECIPIENT, DELEGATION_RECIPIENT].includes(member.credentialId) ||
       ids.has(member.credentialId) ||
       !/^[\w-]{1,2048}$/.test(member.credentialId) ||
       !token(member.accountId) ||
@@ -404,12 +409,16 @@ export async function recipientKeyBox(
   binding,
   members,
   recoveryPublicKey,
+  delegationPublicKey,
 ) {
   if (!recoveryPublicKey) throw new Error("RecoveryKeyRequired");
-  members = [
+  return wrapKeyForRecipients(key, binding, [
     ...members,
     { credentialId: RECOVERY_RECIPIENT, publicKey: recoveryPublicKey },
-  ];
+    ...(delegationPublicKey ? [{ credentialId: DELEGATION_RECIPIENT, publicKey: delegationPublicKey }] : []),
+  ]);
+}
+export async function wrapKeyForRecipients(key, binding, members) {
   const raw = new Uint8Array(await crypto.subtle.exportKey("raw", key));
   try {
     const entries = await Promise.all(
@@ -439,7 +448,7 @@ export async function recipientKeyBox(
   }
 }
 export async function openRecipientKey(box,binding,credentialId,privateKey,{extractable=false}={}) {
-  if(extractable&&credentialId!==RECOVERY_RECIPIENT)throw new Error("RecoveryOnly");
+  if(extractable&&![RECOVERY_RECIPIENT,DELEGATION_RECIPIENT].includes(credentialId))throw new Error("RecoveryOnly");
   if (!box?.[credentialId]) throw new Error("GrantDenied");
   const raw = new Uint8Array(
     await crypto.subtle.decrypt(

@@ -1080,8 +1080,17 @@ export function cloudVersionsSpec() {
     tables:[...spec.tables,{name:'cloud_file_versions',columns:versionColumns,sourceColumns:versionColumns.join(',')}],
     knownTables:[...spec.knownTables,'cloud_file_versions']};
 }
+export const SECURITY_TRANSFER_TABLE = 'security_tcloud_admin_key_transfers';
+export const SECURITY_TRANSFER_SUFFIX = '+tcloud-transfers';
+export function securityTransferSpec(spec) {
+  const columns=['credential_id','identity_id','service_link_id','public_key_jwk','public_key_fingerprint',
+    'receiver_ciphertext','receiver_iv','source_credential_id','admin_key_fingerprint','transfer_ciphertext','transfer_iv','transfer_wrapped_key'];
+  return {...spec,migration:spec.migration+SECURITY_TRANSFER_SUFFIX,
+    tables:[...spec.tables,{name:SECURITY_TRANSFER_TABLE,columns,sourceColumns:columns.join(',')}]};
+}
 export function archiveSpec(service,migration) {
   const spec=SERVICES[service];
+  if(service==='security'&&migration===spec.migration+SECURITY_TRANSFER_SUFFIX)return securityTransferSpec(spec);
   if(service==='cloud'&&migration===CLOUD_VERSIONS_MIGRATION)return cloudVersionsSpec();
   if (service === 'cloud' && migration === '0012_favorites.sql') {
     const legacyColumn = column => column !== 'trash_operation_id' && column !== 'purge_id';

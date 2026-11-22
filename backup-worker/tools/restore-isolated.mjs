@@ -6,7 +6,7 @@ import {validateKeyMetadata} from '../../diary-worker/e2ee/backup.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import { SERVICES,archiveSpec } from '../src/registry.js';
+import { SERVICES,archiveSpec,SECURITY_TRANSFER_SUFFIX } from '../src/registry.js';
 import { validateSnapshot } from '../src/backup.js';
 import { verifiedGeneration } from '../src/integrity.js';
 import { BACKUP_TABLES } from '../../diary-worker/src/backup.js';
@@ -71,10 +71,12 @@ export async function restoreIsolated(bucket, key, service, {anchor,minimumGener
   if(service==='household')tables=recoverySpec(service,verified.payload.expectedMigration).tables;
   if(service==='cloud')tables=archiveSpec(service,verified.payload.expectedMigration).tables;
   const exported=verified.payload.format==='troom-d1-export-v3';
+  const approvalBackup=service==='security'&&verified.payload.expectedMigration.endsWith(SECURITY_TRANSFER_SUFFIX);
+  const baseMigration=approvalBackup?verified.payload.expectedMigration.slice(0,-SECURITY_TRANSFER_SUFFIX.length):verified.payload.expectedMigration;
   const encryptedDiary=service==='diary'&&verified.payload.expectedMigration===DIARY_ENCRYPTED_MIGRATION;
-  const encryptedSecurity=service==='security'&&[SECURITY_DIARY_MIGRATION,SECURITY_BILLING_MIGRATION].includes(verified.payload.expectedMigration);
+  const encryptedSecurity=service==='security'&&[SECURITY_DIARY_MIGRATION,SECURITY_BILLING_MIGRATION].includes(baseMigration);
   const encryptedBilling=service==='billing'&&verified.payload.expectedMigration===BILLING_ENCRYPTED_MIGRATION;
-  const billingVaults=service==='security'&&verified.payload.expectedMigration===SECURITY_BILLING_MIGRATION;
+  const billingVaults=service==='security'&&baseMigration===SECURITY_BILLING_MIGRATION;
   let diaryDirectory;
   if(encryptedDiary){
     if(!anchor)throw new Error('DiaryTrustedAnchorRequired');
@@ -82,7 +84,7 @@ export async function restoreIsolated(bucket, key, service, {anchor,minimumGener
     diaryDirectory=await verifyDirectory(metadata.directory,anchor,minimumGeneration);
     await validateKeyMetadata(metadata,diaryDirectory,anchor);
   }
-  if(encryptedDiary||encryptedSecurity||encryptedBilling)tables=exportSpec(service,verified.payload.expectedMigration).tables;
+  if(encryptedDiary||encryptedSecurity||encryptedBilling||approvalBackup)tables=exportSpec(service,verified.payload.expectedMigration).tables;
   if(exported)await assertArchiveSchema(service,verified.payload.expectedMigration,verified.payload.schema);
   const db=new DatabaseSync(':memory:');
   try {
@@ -132,7 +134,7 @@ export async function restoreIsolated(bucket, key, service, {anchor,minimumGener
     if(['billing','payments','inventory','calendar','portfolio'].includes(service)) db.exec(`UPDATE ${service}_accounts SET is_active=0,session_version=session_version+1`);
     if(service==='diary') db.exec('UPDATE diary_accounts SET active=0,session_version=session_version+1,must_change_password=1');
     if(service==='ai') db.exec("UPDATE ai_accounts SET status='disabled'; UPDATE ai_request_claims SET status='failed',error_code='isolated_restore' WHERE status='processing'");
-    if(encryptedDiary)db.exec("UPDATE diary_e2ee_control SET phase='paused',ever_encrypted=1,evidence=json_remove(evidence,'$.photoMigration')");
+    if(encryptedDiary)db.exec("UPDATE diary_e2ee_control SET phase='paused',ever_encrypted=1,evidence=json_remove(evidence,'$.photoMigration','$.passkeyApproval')");
     // Rebuild only derived Windows state in this new, isolated database. Device
     // grants are excluded from the durable allowlist and never become active.
     if(service==='cloud'&&db.prepare("SELECT 1 FROM sqlite_schema WHERE name='cloud_windows_catalog_control' AND type='table'").get()) {

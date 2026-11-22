@@ -80,7 +80,7 @@ function fixture({ legacy = false, bootstrap = false } = {}) {
   for (const name of ["validatePublicJwk", "canonicalJwk", "saveCloudMemberVault", "requireFreshSecurityAdmin", "credentialForIdentity",
     "tcloudSetupStatus", "setupStatus", "resumeSetup", "prfVerify", "saveOwnTCloudEnvelope", "approvalCredential", "approvalCloudKeys",
     "householdApprovalTargets", "approvalHouseholdKeys", "billingApprovalTargets", "approvalBillingKeys",
-    "prepareIdentityApproval", "approveIdentity", "activeLinks", "tcloudEnvelopeBundle", "createHandoff"]) vm.runInContext(extract(name), context);
+    "prepareIdentityApproval", "approveIdentity", "commitIdentityApproval", "activeLinks", "tcloudEnvelopeBundle", "createHandoff"]) vm.runInContext(extract(name), context);
   env.CLOUD_AUTH = { getPrimaryAdminCryptoConfig: async () => ({ initialized: true, publicKeyJwk: vault.publicKeyJwk }) };
   env.BILLING_AUTH = { approvalKeys: async () => ({ active: false }) };
   const beforeA = db.prepare("SELECT * FROM security_credentials WHERE credential_id='credential-A'").get();

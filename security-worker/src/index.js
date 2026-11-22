@@ -381,6 +381,11 @@ async function handleApi(request, env, url, path, context = null) {
       ? prepareIdentityApproval(approveMatch[1], request, env, admin)
       : approveIdentity(approveMatch[1], request, env, admin);
   }
+  const continuationMatch = path.match(/^\/api\/identities\/([A-Za-z0-9_-]{1,64})\/invite-continuation$/);
+  if (continuationMatch && request.method === "POST") {
+    requireMutation(request, url);
+    return issueInviteContinuation(continuationMatch[1], request, env, admin);
+  }
   const disableIdentityMatch = path.match(/^\/api\/identities\/([A-Za-z0-9_-]{1,64})\/disable$/);
   if (disableIdentityMatch && request.method === "POST") {
     requireMutation(request, url);
@@ -477,8 +482,30 @@ async function inviteResumeCredential(env, token) {
   return env.DB.prepare(`SELECT c.*, invitation.link_set_hash FROM security_invitations invitation
     JOIN security_credentials c ON c.registered_via_invitation_id = invitation.id AND c.identity_id = invitation.identity_id
     JOIN security_identities i ON i.id = c.identity_id
-    WHERE invitation.token_hash = ? AND invitation.status = 'used' AND invitation.expires_at > ?
+    WHERE invitation.status = 'used'
+      AND ((invitation.token_hash = ?1 AND invitation.expires_at > ?2) OR EXISTS (
+        SELECT 1 FROM security_challenges continuation WHERE continuation.invitation_id = invitation.id
+          AND continuation.identity_id = i.id AND continuation.service = 'invite_continuation'
+          AND continuation.challenge_hash = ?1 AND continuation.expires_at > ?2 AND continuation.consumed_at IS NULL))
       AND i.status IN ('active', 'pending_approval') AND c.status = 'pending'`).bind(await sha256(token), nowSeconds()).first();
+}
+
+async function issueInviteContinuation(identityId, request, env, admin) {
+  const body = await readJson(request, 4096);
+  const credential = await approvalCredential(env, identityId, validCredentialId(body.credentialId), admin);
+  if (credential.status !== "pending" || !credential.registered_via_invitation_id) {
+    throw new HttpError(409, "続ける招待登録を確認できません。");
+  }
+  const token = randomToken(32);
+  const expiresAt = nowSeconds() + 3600;
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE security_challenges SET consumed_at=? WHERE invitation_id=? AND service='invite_continuation' AND consumed_at IS NULL`)
+      .bind(nowSeconds(), credential.registered_via_invitation_id),
+    env.DB.prepare(`INSERT INTO security_challenges (id,purpose,challenge_hash,identity_id,invitation_id,service,expires_at)
+      VALUES (?,'prf_assertion',?,?,?,'invite_continuation',?)`)
+      .bind(crypto.randomUUID(), await sha256(token), identityId, credential.registered_via_invitation_id, expiresAt)
+  ]);
+  return json({ invitationUrl: `/security/#invite=${token}`, expiresAt });
 }
 
 async function resumeInvitePreparation(request, env, url) {
@@ -589,6 +616,20 @@ async function invitePreparation(request, env) {
   }
   const link = tasks.find(item => item.id === body.linkId);
   if (!link) throw new HttpError(409, "受取鍵の準備状況が変わりました。もう一度確認してください。");
+  const packetFingerprint = await sha256(JSON.stringify(body.vault));
+  const proofBinding = nonce => JSON.stringify([setup.id, setup.credential_id, link.id, packetFingerprint, nonce]);
+  if (!body.proof) {
+    const jwk = link.service === "billing" ? body.vault.recipient?.publicKey : body.vault.publicKey || body.vault.publicKeyJwk;
+    const publicKey = await crypto.subtle.importKey("jwk", validatePublicJwk(jwk), { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]);
+    const nonce = randomToken(32);
+    const encrypted = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, publicKey, new TextEncoder().encode(nonce));
+    const challengeId = await storeChallenge(env, "prf_assertion", proofBinding(nonce), setup.identity_id, null, "invite_vault");
+    return json({ challengeId, encrypted: bytesToBase64Url(encrypted) });
+  }
+  const challenge = await consumeChallenge(env, body.proof.challengeId, "prf_assertion", setup.identity_id);
+  if (challenge.service !== "invite_vault" || !await challenge.challenge(proofBinding(normalizeSecretText(body.proof.nonce, 64)))) {
+    throw new HttpError(401, "パスキーの受取鍵を確認できません。");
+  }
   const actor = { identityId: setup.identity_id, credentialId: setup.credential_id };
   if (link.service === "diary") {
     return diaryApprovalOperation("/vault", request.url, env, { ...actor, authenticatedAt: setup.last_user_verification_at },
@@ -931,7 +972,7 @@ async function prfVerify(request, env, url) {
   const identitySession = await requireSetupOrIdentitySession(request, env);
   const body = await readJson(request, 100000);
   const challenge = await consumeChallenge(env, body.challengeId, "prf_assertion", identitySession.identityId);
-  if (challenge.service === "invite_resume") throw new HttpError(401, "招待画面からパスキーの準備を続けてください。");
+  if (challenge.service) throw new HttpError(401, "招待画面からパスキーの準備を続けてください。");
   const credentialId = validCredentialId(body.response?.id);
   if (credentialId !== identitySession.credentialId) throw new HttpError(403, "パスキーが一致しません。");
   const credential = await credentialForIdentity(env, credentialId, identitySession.identityId);
@@ -1740,13 +1781,8 @@ async function approveIdentity(identityId, request, env, admin) {
   }
   const audit = await localAuditEvent(env, { eventType: "identity_approved", outcome: "success", identityId,
     authMethod: "passkey", details: { approvedBy: admin.identityId, tcloudPasskeyReady: true } }, request);
-  let diary;
-  if (diaryTargets.length) {
-    if (!body.diaryConfiguration || diaryTargets.some(link => !link.recipientId)) {
-      throw new HttpError(409, "日記の鍵の引き渡しが完了していません。");
-    }
-    diary = await diaryApprovalOperation("/config", request.url, env, admin,
-      { identityId, credentialId, links: diaryTargets, eventId: audit.eventId }, body.diaryConfiguration);
+  if (diaryTargets.length && (!body.diaryConfiguration || diaryTargets.some(link => !link.recipientId))) {
+    throw new HttpError(409, "日記の鍵の引き渡しが完了していません。");
   }
   for (const target of householdTargets) {
     const packet = Array.isArray(body.householdEnvelopes)
@@ -1761,6 +1797,22 @@ async function approveIdentity(identityId, request, env, admin) {
     const packet = Array.isArray(body.billingEnvelopes) && body.billingEnvelopes.find(item => item.linkId === target.serviceLinkId);
     const saved = packet && await env.BILLING_AUTH.approvalKeys(target, packet.ledgers);
     if (!saved?.active || !saved.ready) throw new HttpError(409, "請求書の台帳鍵の状態が変わりました。もう一度承認してください。");
+  }
+  const lease = diaryTargets.length ? await env.DIARY_AUTH.reservePasskeyApproval(audit.eventId).catch(() => {
+    throw new HttpError(409, "日記のデータ更新が進行中です。時間を置いて承認を再開してください。");
+  }) : null;
+  try {
+    const diary = lease ? await diaryApprovalOperation("/config", request.url, env, admin,
+      { identityId, credentialId, links: diaryTargets, eventId: audit.eventId }, body.diaryConfiguration) : null;
+    return await commitIdentityApproval(env, { identityId, credentialId, credential, cloud, cloudStatements, admin, audit, diary, lease });
+  } finally {
+    if (lease) await env.DIARY_AUTH.releasePasskeyApproval(audit.eventId).catch(() => {});
+  }
+}
+
+async function commitIdentityApproval(env, { identityId, credentialId, credential, cloud, cloudStatements, admin, audit, diary, lease }) {
+  if (lease && Date.now() >= lease.expiresAt - 5000) {
+    throw new HttpError(409, "日記の鍵を照合する時間が切れました。もう一度承認してください。");
   }
   const ready = `NOT EXISTS (SELECT 1 FROM security_service_links l WHERE l.identity_id = ?2 AND ${CLOUD_PREPARATION_LINK}
     AND NOT EXISTS (SELECT 1 FROM security_tcloud_key_envelopes e WHERE e.identity_id = ?2 AND e.credential_id = ?1
@@ -1784,9 +1836,9 @@ async function approveIdentity(identityId, request, env, admin) {
             AND l.service_account_id = json_extract(expected.value, '$.service_account_id')
             AND l.cloud_root_folder_id IS json_extract(expected.value, '$.cloud_root_folder_id')
             AND l.status = json_extract(expected.value, '$.status')))
-        ${diary ? "AND COALESCE((SELECT generation FROM security_diary_key_config WHERE id=1),0)=?6" : ""}`)
+        ${diary ? "AND COALESCE((SELECT generation FROM security_diary_key_config WHERE id=1),0)=?6 AND unixepoch()*1000<?7" : ""}`)
       .bind(credentialId, identityId, cloud?.adminFingerprint || null, admin.credentialId, JSON.stringify(credential.links),
-        ...(diary ? [diary.expectedGeneration] : []))
+        ...(diary ? [diary.expectedGeneration, lease.expiresAt] : []))
   ];
   // changes() is evaluated inside the same D1 batch. A lost guard must not
   // activate links or emit a successful approval audit.

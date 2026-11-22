@@ -14,11 +14,33 @@ export async function readRollout(db) {
 
 export async function writeLease(db,operation='save') {
   const control=await readRollout(db);
-  if(operation==='import'?control.phase!=='migrating':control.phase!=='encrypted')fail('DiaryWritesPaused',423);
+  if((operation==='import'?control.phase!=='migrating':control.phase!=='encrypted')||
+    Number(control.evidence?.passkeyApproval?.expiresAt)>Date.now())fail('DiaryWritesPaused',423);
   return control;
 }
 
-export const leaseSQL = lease => lease ? ' AND (SELECT generation FROM diary_e2ee_control WHERE id=1)=?' : '';
+export const leaseSQL = lease => lease ? ` AND (SELECT generation||':'||COALESCE(json_extract(evidence,'$.passkeyApprovalEpoch'),0)
+  FROM diary_e2ee_control WHERE id=1)=?` : '';
+export const leaseBindings = lease => lease ? [`${lease.generation}:${lease.evidence?.passkeyApprovalEpoch??0}`] : [];
+
+export async function reservePasskeyApproval(db,id) {
+  if(!/^[0-9a-f-]{36}$/.test(id))fail('InvalidPasskeyApproval',400);
+  const now=Date.now(),expiresAt=now+60000;
+  // Invalidate in-flight writes without invalidating existing login sessions.
+  const saved=await db.prepare(`UPDATE diary_e2ee_control
+    SET evidence=json_set(COALESCE(evidence,'{}'),'$.passkeyApproval',json(?),
+      '$.passkeyApprovalEpoch',COALESCE(json_extract(evidence,'$.passkeyApprovalEpoch'),0)+1)
+    WHERE id=1 AND phase IN ('legacy','encrypted') AND json_extract(evidence,'$.photoMigration') IS NULL
+      AND COALESCE(json_extract(evidence,'$.passkeyApproval.expiresAt'),0)<=?`)
+    .bind(JSON.stringify({id,expiresAt}),now).run();
+  if(!saved.meta?.changes)fail('DiaryWritesPaused',423);
+  return {id,expiresAt};
+}
+
+export async function releasePasskeyApproval(db,id) {
+  await db.prepare(`UPDATE diary_e2ee_control SET evidence=NULLIF(json_remove(evidence,'$.passkeyApproval'),'{}')
+    WHERE id=1 AND json_extract(evidence,'$.passkeyApproval.id')=?`).bind(id).run();
+}
 
 function requireOperator(actor) {
   if(!actor?.active||!actor.isGlobalOwner||!actor.credentialId)fail('AccessDenied',403);
@@ -46,6 +68,7 @@ async function verifyCutover(db,packet,directory,actor) {
 export async function transitionRollout(db,{actor,expectedGeneration,next,evidence,directory}) {
   requireOperator(actor);
   const current=await readRollout(db);
+  if(Number(current.evidence?.passkeyApproval?.expiresAt)>Date.now())fail('DiaryWritesPaused',423);
   if(current.evidence?.photoMigration)fail('PhotoMigrationChecking',423);
   if(current.generation!==expectedGeneration)fail('RolloutConflict');
   const allowed={legacy:['migrating'],migrating:['legacy','paused','encrypted'],encrypted:['paused'],paused:current.everEncrypted?['encrypted']:['legacy','migrating'],restoring:['paused']};
