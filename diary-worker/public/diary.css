@@ -591,8 +591,8 @@ button {
   text-decoration: none;
 }
 
-.diary-tag:hover,
-.diary-tag:focus-visible,
+a.diary-tag:hover,
+a.diary-tag:focus-visible,
 .diary-tag[aria-current="page"] {
   border-color: rgba(15, 118, 110, 0.36);
   background: #eaf3ef;

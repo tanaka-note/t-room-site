@@ -43,7 +43,7 @@ assert.match(script, /numeric: true/);
 assert.match(script, /applyRouteState\(\)/);
 assert.match(script, /\/diary\\\/tag\\\/\(\[\^\/\]\+\)/);
 assert.match(script, /#\$\{tag\}の日記一覧/);
-assert.match(script, /createTagLink\(tag, `#\$\{tag\}`\)/);
+assert.match(script, /createTagElement\(tag, `#\$\{tag\}`\)/);
 assert.match(script, /elements\.tagList\.replaceChildren\(\.\.\.sortedTags\.map/);
 assert.match(script, /elements\.tagMore\.hidden = state\.tagDirectory/);
 assert.match(script, /onTagDirectory \? "タグ一覧" : "日記"/);
@@ -56,7 +56,7 @@ assert.doesNotMatch(script, /\.slice\(0,\s*6\)/);
 assert.match(script, /setRangeText\(tag, context\.start, context\.end, "end"\)/);
 assert.match(script, /\["ArrowDown", "ArrowUp", "Enter", "Escape"\]/);
 assert.match(script, /scrollIntoView\(\{ block: "nearest" \}\)/);
-assert.match(script, /link\.href\s*=\s*encryptionRuntime\?encryptionRuntime\.tagRoute\(tag\):`\$\{BASE_PATH\}\/tag\/\$\{encodeURIComponent\(tag\)\}\//);
+assert.match(script, /const href = encryptionRuntime\s*\? encryptionRuntime\.tagRoute\(tag\)\s*: `\$\{BASE_PATH\}\/tag\/\$\{encodeURIComponent\(tag\)\}\//);
 assert.match(style, /\.diary-tag-cloud \{[^}]*max-height:[^}]*overflow-y: auto;/s);
 assert.match(style, /overscroll-behavior-y: auto/);
 assert.match(style, /\.tag-directory-link \{/);
@@ -86,7 +86,7 @@ const elements = {
 const context = vm.createContext({
   state, elements, tagCollator: new Intl.Collator("ja-JP"),
   tagSortKey: (value) => value,
-  createTagLink: (value, label) => ({ value, label, setAttribute() {} }),
+  createTagElement: (value, label) => ({ value, label, setAttribute() {} }),
   createEmpty: (text) => ({ text })
 });
 vm.runInContext(renderSource, context);

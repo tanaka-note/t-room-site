@@ -119,7 +119,9 @@ try {
   assert.equal(requests.filter(r=>r.path.endsWith('/passkey/handoff')).length,handoffsBefore,'the second tab resumes the same live session');
   assert.equal(await page.inputValue('#entry-title'),'SYNTHETIC_UNSAVED_TITLE');assert.equal(await page.locator('#entry-content').textContent(),'SYNTHETIC_UNSAVED_BODY');assert.equal(await page.locator('#editor-dialog').evaluate(node=>node.open),true);
   const other=await writer();
-  const external=(await other.saveEntry({entryDate:new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'}),title:'SYNTHETIC_EXTERNAL_POST',content:'SYNTHETIC_EXTERNAL_BODY',tags:[],weather:null,status:'published'})).entry;
+  const sharedTag = 'SYNTHETIC_PUBLISHED_TAG';
+  const draftOnlyTag = 'SYNTHETIC_DRAFT_ONLY_TAG';
+  const external=(await other.saveEntry({entryDate:new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Tokyo'}),title:'SYNTHETIC_EXTERNAL_POST',content:'SYNTHETIC_EXTERNAL_BODY',tags:[sharedTag],weather:null,status:'published'})).entry;
   await page.evaluate(()=>window.syntheticSyncTimers.forEach(fn=>fn()));
   await page.locator(`#entry-list [data-entry-id="${external.id}"]`).waitFor({state:'attached'});
   assert.equal(await page.inputValue('#entry-title'),'SYNTHETIC_UNSAVED_TITLE','background list refresh must not overwrite an editor');
@@ -129,10 +131,29 @@ try {
   assert.equal(await page.locator('#editor-dialog').evaluate(node=>node.open),false,'a real logout still clears every tab');
   await second.close();await page.click('#passkey-login');await page.locator('#app-view').waitFor({state:'visible'});await selectHousehold(page);
   await page.locator(`#entry-list [data-entry-id="${external.id}"]`).click();await page.click('#edit-entry-button');
-  await page.fill('#entry-title','SYNTHETIC_EDIT_DRAFT');await page.click('#save-draft-button');await page.locator('#editor-dialog').waitFor({state:'hidden'});
+  await page.fill('#entry-title', 'SYNTHETIC_EDIT_DRAFT');
+  await page.fill('#entry-tags', [sharedTag, draftOnlyTag].join('、'));
+  await page.click('#save-draft-button');
+  await page.locator('#editor-dialog').waitFor({state: 'hidden'});
   const draft=f.db.sqlite.prepare("SELECT id FROM diary_e2ee_records WHERE state='draft' AND source_id=?").get(String(external.id));assert.ok(draft);
+
+  await page.reload();
+  await page.locator('#app-view').waitFor({state: 'visible'});
+  await selectHousehold(page);
+  const draftButton = page.locator('#draft-button');
+  if (await draftButton.getAttribute('aria-pressed') !== 'true') await draftButton.click();
+  const draftCard = page.locator('#entry-list .diary-entry-card').filter({hasText: 'SYNTHETIC_EDIT_DRAFT'});
+  await draftCard.waitFor({state: 'visible', timeout: 10000});
+  assert.equal(await draftCard.locator('span.diary-tag').textContent(), '#' + draftOnlyTag);
+  assert.match(await draftCard.getByRole('link', {name: '#' + sharedTag}).getAttribute('href'), /^\/diary\/tag\/e_/);
+
   await other.sync();await other.saveEntry({...other.entry(external.id),title:'SYNTHETIC_OTHER_DEVICE_UPDATED'},String(external.id));
-  await page.locator(`#entry-list [data-entry-id="${draft.id}"]`).click();await page.fill('#entry-title','SYNTHETIC_CONTINUED_DRAFT');await page.click('#save-draft-button');await page.locator('#editor-dialog').waitFor({state:'hidden'});
+  await page.locator(`#entry-list [data-entry-id="${draft.id}"]`).click();
+  await page.locator('#editor-dialog').waitFor({state: 'visible'});
+  assert.equal(await page.inputValue('#entry-title'), 'SYNTHETIC_EDIT_DRAFT');
+  assert.equal(await page.locator('#entry-content').textContent(), 'SYNTHETIC_EXTERNAL_BODY');
+  assert.equal(await page.inputValue('#entry-tags'), [sharedTag, draftOnlyTag].join('、'));
+  await page.fill('#entry-title','SYNTHETIC_CONTINUED_DRAFT');await page.click('#save-draft-button');await page.locator('#editor-dialog').waitFor({state:'hidden'});
   await page.locator(`#entry-list [data-entry-id="${draft.id}"]`).click();await page.click('#save-entry-button');
   await page.waitForFunction(()=>!document.querySelector('#save-entry-button').disabled&&document.querySelector('#editor-message').textContent);
   assert.equal(await page.inputValue('#entry-title'),'SYNTHETIC_CONTINUED_DRAFT');assert.equal(await page.locator('#editor-dialog').evaluate(node=>node.open),true);

@@ -1498,9 +1498,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       || tagCollator.compare(String(left.value || ""), String(right.value || ""))
     ));
     elements.tagList.replaceChildren(...sortedTags.map((item) => {
-      const link = createTagLink(item.value, `#${item.value} ${item.count}`);
-      if (state.tag === item.value) link.setAttribute("aria-current", "page");
-      return link;
+      const element = createTagElement(item.value, `#${item.value} ${item.count}`);
+      if (state.tag === item.value) element.setAttribute("aria-current", "page");
+      return element;
     }));
     elements.tagMore.hidden = state.tagDirectory;
   }
@@ -4187,24 +4187,27 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function createTagElements(tags, searchTerms = []) {
     return (tags || []).map((tag) => {
-      const link = createTagLink(tag, `#${tag}`);
-      if (!searchTerms.length) return link;
+      const element = createTagElement(tag, `#${tag}`);
+      if (!searchTerms.length) return element;
       // Match each tag independently; the display-only # is not searchable.
       const label = document.createElement("span");
       label.textContent = tag;
       highlightSearchTerms(label, searchTerms);
-      link.replaceChildren(document.createTextNode("#"), label);
-      return link;
+      element.replaceChildren(document.createTextNode("#"), label);
+      return element;
     });
   }
 
-  function createTagLink(tag, label) {
-    const link = document.createElement("a");
-    link.className = "diary-tag";
-    link.dataset.tag = tag;
-    link.href=encryptionRuntime?encryptionRuntime.tagRoute(tag):`${BASE_PATH}/tag/${encodeURIComponent(tag)}/`;
-    link.textContent = label;
-    return link;
+  function createTagElement(tag, label) {
+    const href = encryptionRuntime
+      ? encryptionRuntime.tagRoute(tag)
+      : `${BASE_PATH}/tag/${encodeURIComponent(tag)}/`;
+    const element = document.createElement(href ? "a" : "span");
+    element.className = "diary-tag";
+    element.dataset.tag = tag;
+    element.textContent = label;
+    if (href) element.href = href;
+    return element;
   }
 
   function applyRouteState() {
