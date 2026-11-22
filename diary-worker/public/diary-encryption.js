@@ -47,7 +47,7 @@ async function createEncryptedDiary(session,authentication,startupProfile) {
   resetFirstView();
   const transport={
     backgroundReady:()=>firstView,
-    valid:async()=>{const generation=client.generation;try{const result=await nativeApi('/session');const valid=generation===client.generation&&!client.switching&&result.authenticated&&result.encryption?.enabled&&result.encryption.protocol===DIARY_READER_PROTOCOL&&result.encryption.accountId===expectedAccount&&result.encryption.webAuthnCredentialId===expectedCredential&&result.activeHouseholdId===client.household&&result.encryption.generation===initial.rollout.generation&&(!liveSession.keySession||JSON.stringify(liveSession.keySession)===JSON.stringify(result.keySession));if(valid){deadline=result.expiresAt||deadline;liveSession=result;await persistDevice();}return valid;}catch(error){if([401,403].includes(error.status))return false;throw error;}},
+    valid:async signal=>{const generation=client.generation;try{const result=await nativeApi('/session',{signal});signal?.throwIfAborted();const valid=generation===client.generation&&!client.switching&&result.authenticated&&result.encryption?.enabled&&result.encryption.protocol===DIARY_READER_PROTOCOL&&result.encryption.accountId===expectedAccount&&result.encryption.webAuthnCredentialId===expectedCredential&&result.activeHouseholdId===client.household&&result.encryption.generation===initial.rollout.generation&&(!liveSession.keySession||JSON.stringify(liveSession.keySession)===JSON.stringify(result.keySession));if(valid){deadline=result.expiresAt||deadline;liveSession=result;await persistDevice();}return valid;}catch(error){if([401,403].includes(error.status))return false;throw error;}},
     timestamp:async()=>(await request('/time')).timestamp,
     snapshot:(household,since,{onPage,signal}={})=>readSnapshotPages(
       options=>request(`/snapshot?${new URLSearchParams(Object.entries(options).filter(([,value])=>value!==null))}`,{signal}),
@@ -79,7 +79,7 @@ async function createEncryptedDiary(session,authentication,startupProfile) {
     },
     onPhotoExpiry:expiresAt=>{deadline=Math.max(deadline||0,expiresAt);}
   });
-  api=createEncryptedDiaryApi(client,{session,nativeApi,media,parallelStartupRead:Boolean(startupProfile),prepareNavigation:()=>navigation.prepareTags(),onHousehold:async household=>{
+  api=createEncryptedDiaryApi(client,{session,nativeApi,media,parallelStartupRead:Boolean(startupProfile),prepareNavigation:signal=>navigation.prepareTags(signal),onHousehold:async household=>{
     const reply=await request('/profile');
     if(reply.profile.actor.accountId!==expectedAccount||reply.profile.webAuthnCredentialId!==expectedCredential||reply.profile.household!==household||reply.profile.directory.value.generation!==client.directory.generation){client.lock();throw new Error('パスキーでログインし直してください。');}
     media.reset();resetFirstView();
@@ -122,7 +122,8 @@ async function createEncryptedDiary(session,authentication,startupProfile) {
     api:async(path,init)=>{
       try{return Response.json(await api(path,init));}
       catch(error){
-        if(error.name==='AbortError')throw error;
+        init?.signal?.throwIfAborted();
+        if(error.name==='AbortError'||error.name==='TimeoutError')throw error;
         if(path!=='/logout'&&(error.status===401||client.closed))expire();
         // The authorized shell is already visible. Preserve HTTP failures so
         // the UI can close it immediately if the initial sync loses its session.

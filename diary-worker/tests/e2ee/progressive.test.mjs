@@ -34,6 +34,47 @@ test('concurrent initial synchronization shares one verified snapshot',async()=>
     const first=x.reader.sync(),second=x.reader.sync();assert.equal(first,second);await Promise.all([first,second]);assert.equal(count,1);assert.equal(x.reader.records.size,3);
   }finally{x.close();}
 });
+test('an interrupted startup releases a stalled cache read and retries without accepting its late result', async () => {
+  const x = await setup(3);
+  try {
+    const started = Promise.withResolvers(), heldCache = Promise.withResolvers();
+    let cacheReads = 0, snapshots = 0;
+    x.reader.cache = {
+      readStartup: () => {
+        if (++cacheReads > 1) return {};
+        started.resolve();
+        return heldCache.promise;
+      },
+      put: async () => {},
+    };
+    const transport = x.reader.transport;
+    const snapshot = transport.snapshot.bind(transport);
+    transport.snapshot = (...args) => {
+      snapshots++;
+      return snapshot(...args);
+    };
+    const api = createEncryptedDiaryApi(x.reader, {
+      session: {authenticated: true},
+      nativeApi: async () => ({households: []}),
+    });
+    const controller = new AbortController();
+    const pending = api('/bootstrap?limit=3', {signal: controller.signal});
+    await started.promise;
+    controller.abort(new DOMException('Deadline reached', 'TimeoutError'));
+    await assert.rejects(pending, {name: 'TimeoutError'});
+    assert.equal(snapshots, 0);
+    assert.equal(x.reader.closed, false);
+
+    const retry = await api('/bootstrap?limit=3');
+    assert.equal(retry.entries.entries.length, 3);
+    assert.equal(cacheReads, 2);
+    heldCache.resolve({});
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(snapshots, 1, 'the stopped read cannot resume against the live session');
+  } finally {
+    x.close();
+  }
+});
 test('larger fixed startup pages reduce reads while the old reader, size budget and sequence rules still work',async()=>{
   const x=await setup(112);
   try {

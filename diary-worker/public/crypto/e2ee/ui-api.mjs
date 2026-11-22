@@ -1,14 +1,22 @@
 import { findPhotoMarkers } from '../public/diary-rich-text.js';
+import { waitForDiaryRead } from './client.mjs';
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
 export function createEncryptedDiaryApi(client,{session,nativeApi,media,onHousehold,parallelStartupRead=false,prepareNavigation=async()=>{}}) {
   let initialized=false,syncing=null,selecting=null;
-  const synchronize=async()=>{
+  const synchronize=async(signal)=>{
+    signal?.throwIfAborted();
     const generation=client.generation;
-    if(!syncing||syncing.generation!==generation){
-      const pending={generation,promise:client.sync({parallelStartupRead:parallelStartupRead&&!initialized})};syncing=pending;
+    if(!syncing||syncing.generation!==generation||syncing.signal?.aborted){
+      const pending={generation,signal,promise:client.sync({parallelStartupRead:parallelStartupRead&&!initialized,signal})};syncing=pending;
       void pending.promise.finally(()=>{if(syncing===pending)syncing=null;}).catch(()=>{});
     }
-    await syncing.promise;client.assertOpen(generation);await prepareNavigation();client.assertOpen(generation);initialized=true;
+    await syncing.promise;
+    signal?.throwIfAborted();
+    client.assertOpen(generation);
+    await prepareNavigation(signal);
+    signal?.throwIfAborted();
+    client.assertOpen(generation);
+    initialized=true;
   };
   const photoOrder = (a, b) => -(a.entryDate.localeCompare(b.entryDate) || a._published.localeCompare(b._published)
     || a.entryId - b.entryId || a._position - b._position || String(a.createdAt || '').localeCompare(String(b.createdAt || ''))
@@ -91,9 +99,17 @@ export function createEncryptedDiaryApi(client,{session,nativeApi,media,onHouseh
     }
     if(selecting)await selecting;
     if(url.pathname==='/bootstrap') {
-      const [,households]=await Promise.all([synchronize(),nativeApi('/households')]);
-      await client.ensureList(url.searchParams);const entries=client.list(url.searchParams);client.startBackground();
-      return {session,households,meta:client.meta(),entries};
+      const {signal} = options;
+      return waitForDiaryRead((async () => {
+        signal?.throwIfAborted();
+        const [,households] = await Promise.all([synchronize(signal), nativeApi('/households', {signal})]);
+        signal?.throwIfAborted();
+        await client.ensureList(url.searchParams);
+        signal?.throwIfAborted();
+        const entries = client.list(url.searchParams);
+        client.startBackground();
+        return {session,households,meta:client.meta(),entries};
+      })(), signal);
     }
     // Foreground reads must observe other devices. Concurrent metadata/list
     // reads share one synchronization, but no authorization result is cached.
