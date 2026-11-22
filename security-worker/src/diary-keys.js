@@ -233,7 +233,7 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
   if(actor.identityId!=='primary-admin')fail(403,'AccessDenied');
   if(path==='/api/diary/recovery-records'&&request.method==='GET')return json(await env.DIARY_AUTH.encryptionRecoveryRecords({after:new URL(request.url).searchParams.get('after')||'',limit:20}));
   if(path==='/api/diary/admin'&&request.method==='GET') {
-    const current=await config(env),independent=Boolean(approval&&current?.delegation);
+    const current=await config(env),independent=Boolean(current?.delegation&&!new URL(request.url).searchParams.has('recovery'));
     const cloud=independent?null:await env.CLOUD_AUTH.getPrimaryAdminCryptoConfig();
     const adminEnvelope=independent?null:await env.DB.prepare("SELECT encrypted_payload encryptedPayload,payload_iv payloadIv FROM security_tcloud_key_envelopes WHERE identity_id='primary-admin' AND credential_id=? AND envelope_type='admin_private_prf'").bind(actor.credentialId).first();
     const rows=(await env.DB.prepare(`SELECT v.* FROM security_diary_key_vaults v
@@ -253,7 +253,7 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
         operator={recipientId:row.recipient_id,vault:{publicKey,signPublicKey,privateEnvelope}};
       }
     }
-    if(independent&&!operator)fail(403,'DiaryDelegationUnavailable');
+    if(independent&&approval&&!operator)fail(403,'DiaryDelegationUnavailable');
     const households=await env.DIARY_AUTH.encryptionHouseholds();
     return json({config:current,recoveryPublicKey:independent?current.directory.value.recoveryPublicKey:cloud?.publicKeyJwk||null,adminEnvelope,operator,members,households,
       writerReadiness:await writerReadiness(env,current),scopeAccounts:(await env.DIARY_AUTH.encryptionScopeAccounts()).filter(Boolean),retainedScopes:await env.DIARY_AUTH.encryptionRetainedScopes(),rollout:await env.DIARY_AUTH.encryptionRollout()});

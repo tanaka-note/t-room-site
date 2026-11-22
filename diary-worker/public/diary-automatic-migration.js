@@ -13,7 +13,7 @@ export async function migrateDiaryOnLogin({api,session,authentication,trust,chec
     if(path==='/control'&&body?.next==='migrating')authorization=(await manage('/maintenance/authorize',{})).authorization;
     return value;
   };
-  const status=await manage('/admin');
+  let status=await manage('/admin');
   if(!status.config||!trust||!['legacy','migrating','encrypted'].includes(status.rollout.phase))return;
   await verifyDirectory(status.config.directory,trust.anchor,trust.minimumGeneration);
   if(status.rollout.phase==='encrypted') {
@@ -27,6 +27,7 @@ export async function migrateDiaryOnLogin({api,session,authentication,trust,chec
     finally{plans?.close();}
     return;
   }
+  if(status.config.delegation&&!status.adminEnvelope)status=await manage('/admin?recovery=1');
   try {
     plans=await openMaintenancePlans();
     // Verify both existing keys before placing the write fence. Neither a

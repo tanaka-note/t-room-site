@@ -101,7 +101,7 @@ export async function prepareDiaryData({kind='migration',onProgress=()=>{}}={}) 
   if(!['migration','rotation'].includes(kind))throw new Error('移行する処理を確認してください。');
   const auth=await TRoomPasskeys.authenticate('security');let plans;
   try {
-    const status=await api('/admin');
+    const status=await api('/admin?recovery=1');
     if(!status.config)throw new Error('日記の管理者設定はまだ保存されていません。利用設定の状態を確認してください。');
     const trust=await authenticationTrust(auth,await prepare(auth.prfOutput));
     if(!auth.prfOutput||!status.adminEnvelope)throw new Error('日記のログインで使った、管理者復旧に対応するパスキーを選んでください。');
@@ -119,7 +119,7 @@ export async function prepareDiaryData({kind='migration',onProgress=()=>{}}={}) 
 export async function migrateDiary({kind='migration',onProgress=()=>{}}={}) {
   const auth=await TRoomPasskeys.authenticate('security');let plans;
   try {
-    const own=await prepare(auth.prfOutput),trust=await authenticationTrust(auth,own),status=await api('/admin');
+    const own=await prepare(auth.prfOutput),trust=await authenticationTrust(auth,own),status=await api('/admin?recovery=1');
     if(!status.config||!trust)throw new Error('日記の鍵設定を先に完了してください。');
     const privateKey=await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput,status.adminEnvelope);
     const maintenance=await import('/security/diary-crypto/e2ee/maintenance.mjs');plans=await maintenance.openMaintenancePlans();
@@ -157,7 +157,7 @@ export async function finishDiaryData(file) {
   const report=JSON.parse(await file.text()),auth=await TRoomPasskeys.authenticate('security');let plans;
   try {
     const trust=await authenticationTrust(auth,await prepare(auth.prfOutput));await validatePublicTrust(trust);
-    const status=await api('/admin');
+    const status=await api('/admin?recovery=1');
     const privateKey=await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput,status.adminEnvelope);
     const own=await api('/maintenance/signing-vault',{});
     const {unlockVault}=await import('/security/diary-crypto/e2ee/crypto.mjs');

@@ -92,6 +92,9 @@ test('Diary delegation preserves old and new record keys and works with T-Cloud 
     assert.equal(Boolean(inventory.find(row=>row.id===String(legacy.id)).keyBox[DELEGATION_RECIPIENT]),false);
     assert.ok(inventory.find(row=>row.id===String(fresh.id)).keyBox[DELEGATION_RECIPIENT]);
     f.centralEnv.CLOUD_AUTH={getPrimaryAdminCryptoConfig:async()=>{throw new Error('T-Cloud request not allowed here');}};
+    const ownerStatus=await (await central('/admin')).json();
+    assert.equal(ownerStatus.adminEnvelope,null);
+    assert.ok(ownerStatus.operator);
     const actor=owner(),prior=f.users['wife-admin'],credentialId='new-diary-only-credential';
     const recipientId=await diaryRecipientId(credentialId,prior.serviceLinkId),prf=crypto.getRandomValues(new Uint8Array(32));
     const target={...prior,credentialId,recipientId,prf,vault:await createVault(prf,recipientId)};
