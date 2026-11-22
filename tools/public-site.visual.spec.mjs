@@ -15,7 +15,7 @@ const mime = new Map([
   [".css", "text/css; charset=utf-8"], [".html", "text/html; charset=utf-8"],
   [".ico", "image/x-icon"], [".jpeg", "image/jpeg"], [".jpg", "image/jpeg"],
   [".js", "text/javascript; charset=utf-8"], [".json", "application/json; charset=utf-8"],
-  [".png", "image/png"], [".svg", "image/svg+xml"], [".webmanifest", "application/manifest+json"]
+  [".png", "image/png"], [".svg", "image/svg+xml"], [".webmanifest", "application/manifest+json"], [".webp", "image/webp"]
 ]);
 
 const pages = [
@@ -195,6 +195,13 @@ for (const entry of pages) {
         image.addEventListener("error", resolveImage, { once: true });
       })));
     });
+    if (entry.name === "home") {
+      const hero = await page.locator(".hero-image").evaluate(async image => {
+        await image.decode();
+        return { path: new URL(image.currentSrc).pathname, width: image.naturalWidth, height: image.naturalHeight };
+      });
+      expect(hero).toEqual({ path: "/images/hero-workspace.webp", width: 1717, height: 916 });
+    }
     for (const selector of entry.selectors) await expect(page.locator(selector).first(), `${entry.path}: ${selector}`).toBeVisible();
     const selectors = [".site-header", "main", "h1", ...entry.selectors, ".site-footer"];
     const metrics = await visualMetrics(page, [...new Set(selectors)], entry.relations, entry.includeY);

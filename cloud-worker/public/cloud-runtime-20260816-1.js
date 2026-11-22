@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-dfbdf7c0445b";
+const APP_BUILD_ID = "cloud-ffaaf1ae8e88";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -8,7 +8,8 @@ const INITIAL_ITEM_PAGE_SIZE = 32;
 const BACKGROUND_ITEM_PAGE_SIZE = 64;
 const RESTORE_ITEM_PAGE_SIZE = 500;
 const SEARCH_ITEM_PAGE_SIZE = 250;
-let searchPageTimer = null;
+const FAVORITE_ITEM_PAGE_SIZE = 250;
+let listingPageTimer = null;
 let searchInputController = null;
 const searchMetadataCache = new Map();
 let searchMetadataCacheScope = "";
@@ -1361,7 +1362,7 @@ async function navigateToFolder(folderId, folderName, options = {}) {
     renderItems();
     if (restoreEntry && result.ok) applyNavigationPosition(restoreEntry);
     else if (resetScroll) resetFolderScrollPosition();
-    scheduleSearchPage(state.itemLoadGeneration);
+    scheduleBackgroundListingPage(state.itemLoadGeneration);
     return result;
   } finally {
     if (navigation.generation === navigationGeneration) {
@@ -1975,7 +1976,7 @@ function releaseSessionState() {
   favoriteSelection = { key: "", ready: false, all: false, busy: false };
   state.thumbnailMaintenance?.controller.abort();
   $("#thumbnail-maintenance-failures")?.replaceChildren();
-  clearTimeout(searchPageTimer);
+  clearTimeout(listingPageTimer);
   searchMetadataCache.clear(); searchMetadataCacheScope = "";
   searchPathFolders.clear();
   resetBackgroundMediaWork();
@@ -2229,10 +2230,10 @@ function getSearchInputController() {
       state.progressiveItemsLoading = false;
       resetEncryptedThumbnailLoading();
       resetBackgroundMediaWork();
-      clearTimeout(searchPageTimer);
+      clearTimeout(listingPageTimer);
     },
     pauseForComposition() {
-      clearTimeout(searchPageTimer);
+      clearTimeout(listingPageTimer);
       state.itemLoadController?.abort(); state.itemLoadGeneration++; listingView?.reset();
     },
     loadItems: () => loadItems(),
@@ -2307,7 +2308,7 @@ async function loadItems() {
   syncAccountView();
   state.backupMount = null;
   renderDiaryBackupMount();
-  clearTimeout(searchPageTimer);
+  clearTimeout(listingPageTimer);
   searchPathFolders.clear();
   const loadGeneration = ++state.itemLoadGeneration;
   if (folderNavigation) {
@@ -2351,24 +2352,6 @@ async function loadItems() {
       }
       renderBreadcrumbs([]);
       await refreshAccountContent();
-    } else if (state.view === "favorites") {
-      const folders = [], files = [];
-      let folderOffset = 0, fileOffset = 0;
-      do {
-        const params = new URLSearchParams({ pageSize: "250", folderOffset: String(folderOffset || 0), fileOffset: String(fileOffset || 0) });
-        if (folderOffset === null) params.set("filesOnly", "1");
-        if (fileOffset === null) params.set("foldersOnly", "1");
-        const data = await api(`/favorites?${params}`, { signal: itemLoadSignal });
-        if (loadGeneration !== state.itemLoadGeneration) return { ok: false, stale: true };
-        await hydrateSearchFolderKeyRecords(data.searchFolders || []);
-        folders.push(...await hydrateFolderRecords(data.folders || []));
-        files.push(...await hydrateFileRecords(data.files || []));
-        folderOffset = data.nextFolderOffset ?? null; fileOffset = data.nextFileOffset ?? null;
-      } while (folderOffset !== null || fileOffset !== null);
-      if (loadGeneration !== state.itemLoadGeneration || itemLoadSignal.aborted) return { ok: false, stale: true };
-      state.folders = folders; state.files = files;
-      state.history = []; state.requests = []; state.shares = [];
-      renderBreadcrumbs([]);
     } else if (state.view === "trash") {
       const data = await api("/trash", { signal: itemLoadSignal });
       state.folders = (await hydrateFolderRecords(data.folders || [])).map((folder) => ({ ...folder, trashed: true }));
@@ -2413,6 +2396,7 @@ async function loadItems() {
       state.shares = await hydrateShareRecords(data.shares || []);
       renderBreadcrumbs([]);
     } else {
+      const favorites = state.view === "favorites";
       const serverSort = state.sortUsesTypeDefaults || state.sort === "name" ? "updated-desc" : `${state.sort}-${state.sortDirection}`;
       const params = new URLSearchParams({ sort: serverSort });
       if (state.folderId) params.set("folderId", state.folderId);
@@ -2422,8 +2406,10 @@ async function loadItems() {
       }
       params.set("pageSize", String(INITIAL_ITEM_PAGE_SIZE));
       params.set("offset", "0");
-      const cacheKey = state.query ? "" : displayListingCacheKey(params);
-      const dataPromise = api(`/items?${params}`, { signal: itemLoadSignal });
+      const cacheKey = state.query || favorites ? "" : displayListingCacheKey(params);
+      const dataPromise = favorites
+        ? fetchFavoritesPage({ pageSize: INITIAL_ITEM_PAGE_SIZE }, itemLoadSignal)
+        : api(`/items?${params}`, { signal: itemLoadSignal });
       const cacheAccess = displayListingCacheAccess();
       const cachePromise = cacheKey ? readDisplayListingCache(cacheKey, itemLoadSignal, cacheAccess) : Promise.resolve(null);
       // Never publish a cache before /items settles. Only a proven transport/5xx
@@ -2457,7 +2443,7 @@ async function loadItems() {
         hydrateFolderRecords(data.folders || [], { preserveOrder: true }),
         hydrateFileRecords(data.files || [], { preserveOrder: true })
       ]);
-      if (loadGeneration !== state.itemLoadGeneration) return { ok: false, stale: true, error: null };
+      if (loadGeneration !== state.itemLoadGeneration || itemLoadSignal.aborted) return { ok: false, stale: true, error: null };
       state.folders = finalizeHydratedFolders(initialFolders);
       state.backupMount = data.backupMount || null;
       state.files = finalizeHydratedFiles(initialFiles);
@@ -2477,7 +2463,7 @@ async function loadItems() {
       syncUnlockedTopFolderNames();
       renderedInitialItems = true;
       scheduleDisplayListingCacheWrite(cacheKey);
-      scheduleSearchPage(loadGeneration);
+      scheduleBackgroundListingPage(loadGeneration);
     }
     if (!renderedInitialItems) renderItems();
     syncUnlockedTopFolderNames();
@@ -2487,7 +2473,7 @@ async function loadItems() {
     if (error?.name === "AbortError" || itemLoadSignal.aborted) return { ok: false, stale: true, error: null };
     if (loadGeneration !== state.itemLoadGeneration) return { ok: false, stale: true, error: null };
     state.progressiveItemsLoading = false;
-    if (clearDeniedSearchResults(error)) { handleError(error); return { ok: false, error }; }
+    if (clearDeniedListingResults(error)) { handleError(error); return { ok: false, error }; }
     if (!renderedCachedItems || !canFallbackToDisplayListing(error)) {
       state.folders = [];
       state.files = [];
@@ -2510,6 +2496,15 @@ async function loadItems() {
     handleError(error);
     return { ok: false, error };
   }
+}
+
+function fetchFavoritesPage({ folderOffset = 0, fileOffset = 0, pageSize }, signal) {
+  const params = new URLSearchParams({ pageSize: String(pageSize) });
+  if (folderOffset === null) params.set("filesOnly", "1");
+  else params.set("folderOffset", String(folderOffset));
+  if (fileOffset === null) params.set("foldersOnly", "1");
+  else params.set("fileOffset", String(fileOffset));
+  return api(`/favorites?${params}`, { signal });
 }
 
 function nextRenderOpportunity(priority = false) {
@@ -2544,10 +2539,12 @@ async function loadNextItemPage({ restore = false, entry = null, searchOrigin = 
     if (!folderPageParams && !filePageParams) return { ok: true, exhausted: true };
     // Keep search and the single displaced-anchor look-ahead at their existing
     // bound; only the saved ordinary-folder range uses larger requests.
-    const restorePageSize = state.query || searchOrigin ? SEARCH_ITEM_PAGE_SIZE : RESTORE_ITEM_PAGE_SIZE;
+    const favorites = state.view === "favorites";
+    const restorePageSize = favorites ? FAVORITE_ITEM_PAGE_SIZE
+      : state.query || searchOrigin ? SEARCH_ITEM_PAGE_SIZE : RESTORE_ITEM_PAGE_SIZE;
     const pageSize = (remaining) => restore
       ? Math.min(restorePageSize, remaining > 0 ? remaining : restorePageSize)
-      : state.query ? SEARCH_ITEM_PAGE_SIZE : BACKGROUND_ITEM_PAGE_SIZE;
+      : favorites ? FAVORITE_ITEM_PAGE_SIZE : state.query ? SEARCH_ITEM_PAGE_SIZE : BACKGROUND_ITEM_PAGE_SIZE;
     if (folderPageParams) {
       folderPageParams.set("pageSize", String(pageSize(Number(entry?.loadedFolderCount) - state.folders.length)));
       folderPageParams.set("offset", String(state.itemNextFolderOffset));
@@ -2560,10 +2557,21 @@ async function loadNextItemPage({ restore = false, entry = null, searchOrigin = 
       filePageParams.set("filesOnly", "1");
       filePageParams.set("continuation", "1");
     }
-    const [folderPage, filePage] = await Promise.all([
-      folderPageParams ? api(`/items?${folderPageParams}`, { signal }) : null,
-      filePageParams ? api(`/items?${filePageParams}`, { signal }) : null
-    ]);
+    let folderPage, filePage;
+    if (favorites) {
+      const page = await fetchFavoritesPage({
+        folderOffset: folderPageParams ? state.itemNextFolderOffset : null,
+        fileOffset: filePageParams ? state.itemNextFileOffset : null,
+        pageSize: Math.max(Number(folderPageParams?.get("pageSize") || 0), Number(filePageParams?.get("pageSize") || 0))
+      }, signal);
+      folderPage = folderPageParams ? page : null;
+      filePage = filePageParams ? page : null;
+    } else {
+      [folderPage, filePage] = await Promise.all([
+        folderPageParams ? api(`/items?${folderPageParams}`, { signal }) : null,
+        filePageParams ? api(`/items?${filePageParams}`, { signal }) : null
+      ]);
+    }
     if (generation !== state.itemLoadGeneration || signal.aborted) return;
     const nextOffset = (page, records, key, params) => {
       if (!params) return null;
@@ -2577,7 +2585,7 @@ async function loadNextItemPage({ restore = false, entry = null, searchOrigin = 
     const nextFileOffset = nextOffset(filePage, "files", "nextFileOffset", filePageParams);
     await hydrateSearchFolderKeyRecords([
       ...(folderPage?.searchFolders || []),
-      ...(filePage?.searchFolders || [])
+      ...(filePage !== folderPage ? filePage?.searchFolders || [] : [])
     ]);
     const [pageFoldersRaw, pageFilesRaw] = await Promise.all([
       hydrateFolderRecords(folderPage?.folders || [], { preserveOrder: true }),
@@ -2602,7 +2610,7 @@ async function loadNextItemPage({ restore = false, entry = null, searchOrigin = 
     if (filePageParams) state.itemNextFileOffset = nextFileOffset;
     state.progressiveItemsLoading = state.itemNextFolderOffset != null || state.itemNextFileOffset != null;
     state.itemPageLoading = false;
-    if (state.sortUsesTypeDefaults && !state.query) {
+    if (!favorites && state.sortUsesTypeDefaults && !state.query) {
       $("#content-grid .item-render-sentinel")?.remove();
       appendProgressiveItems(pageFolders, pageFiles);
       scheduleEncryptedThumbnailLoading();
@@ -2613,7 +2621,8 @@ async function loadNextItemPage({ restore = false, entry = null, searchOrigin = 
       renderItems();
     }
     syncUnlockedTopFolderNames();
-    if (!state.query) scheduleDisplayListingCacheWrite(displayListingCacheKey(baseParams));
+    if (favorites && $("#preview-dialog").open && state.selected) syncPreviewNavigation(state.selected);
+    if (!state.query && !favorites) scheduleDisplayListingCacheWrite(displayListingCacheKey(baseParams));
     return { ok: true };
   } catch (error) {
     if (error?.name !== "AbortError" && generation === state.itemLoadGeneration) {
@@ -2623,32 +2632,34 @@ async function loadNextItemPage({ restore = false, entry = null, searchOrigin = 
         handleError(error);
         return { ok: false, error };
       }
-      if (clearDeniedSearchResults(error)) handleError(error);
+      if (clearDeniedListingResults(error)) handleError(error);
       else setNotice("残りのファイルを読み込めませんでした。通信状態を確認して、もう一度開いてください。", true);
     }
   } finally {
     if (generation === state.itemLoadGeneration) {
       state.itemPageLoading = false;
-      scheduleSearchPage(generation);
+      scheduleBackgroundListingPage(generation);
     }
   }
 }
 
-function scheduleSearchPage(generation) {
-  clearTimeout(searchPageTimer);
-  if (folderNavigation || !state.query || !state.progressiveItemsLoading || generation !== state.itemLoadGeneration) return;
-  // Complete the search even if initial matches fill the viewport; keep DOM virtualization.
-  searchPageTimer = setTimeout(() => {
-    if (generation === state.itemLoadGeneration && state.query) void loadNextItemPage();
+function scheduleBackgroundListingPage(generation) {
+  clearTimeout(listingPageTimer);
+  if (folderNavigation || !(state.query || state.view === "favorites")
+    || !state.progressiveItemsLoading || generation !== state.itemLoadGeneration) return;
+  // Continue after the initial paint, even when the first page fills the viewport.
+  listingPageTimer = setTimeout(() => {
+    if (generation === state.itemLoadGeneration) void loadNextItemPage();
   }, 0);
 }
 
-function clearDeniedSearchResults(error) {
-  if (!state.query || ![401, 403, 404, 419, 423].includes(Number(error?.status))) return false;
+function clearDeniedListingResults(error) {
+  if (!(state.query || state.view === "favorites") || ![401, 403, 404, 419, 423].includes(Number(error?.status))) return false;
   state.itemLoadController?.abort();
   searchMetadataCache.clear();
   resetEncryptedThumbnailLoading(); resetBackgroundMediaWork();
   state.files = []; state.folders = []; state.progressiveItemsLoading = false;
+  if (state.view === "favorites") clearFileSelection(true, false);
   renderItems();
   return true;
 }
@@ -2872,8 +2883,8 @@ function renderItems() {
     : state.folderId
       ? "このフォルダには、まだファイルがありません。"
       : "フォルダを作成すると、ここに表示されます。";
-  if (state.query && state.progressiveItemsLoading && !state.folders.length && !state.files.length) {
-    $("#empty-title").textContent = "検索しています…";
+  if ((state.query || state.view === "favorites") && state.progressiveItemsLoading && !state.folders.length && !state.files.length) {
+    $("#empty-title").textContent = state.view === "favorites" ? "お気に入りを読み込んでいます…" : "検索しています…";
     $("#empty-copy").textContent = "取得した情報から順に結果を表示します。";
   }
   $("#display-toggle").innerHTML = TCloudUI.icon(state.listMode ? "grid" : "list");
