@@ -77,7 +77,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     canManageEntries: false,
     canViewTrash: false,
     canPermanentlyDelete: false,
-    canViewInvestment: false,
     entries: [],
     entryMap: new Map(),
     offset: 0,
@@ -183,7 +182,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     draftCount: document.querySelector("#draft-count"),
     trashButton: document.querySelector("#trash-button"),
     logoutButton: document.querySelector("#logout-button"),
-    investmentSection: document.querySelector("#investment-section"),
     installButtons: [...document.querySelectorAll(".install-app-button")],
     installAppDialog: document.querySelector("#install-app-dialog"),
     installAppMessage: document.querySelector("#install-app-message"),
@@ -775,7 +773,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.canManageEntries = Boolean(session.canManageEntries);
     state.canViewTrash = Boolean(session.canViewTrash);
     state.canPermanentlyDelete = Boolean(session.canPermanentlyDelete);
-    state.canViewInvestment = Boolean(session.canViewInvestment);
     clearArchive();
     const returnView = takeDiaryReturnView(state.activeHouseholdId,encryptedNavigationType==='back');
     if (!returnView && "scrollRestoration" in diaryHistory) diaryHistory.scrollRestoration = "auto";
@@ -790,7 +787,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.newEntryButton.hidden = !state.canManageEntries;
     elements.draftButton.hidden = !state.canManageEntries;
     elements.trashButton.hidden = !state.canViewTrash;
-    elements.investmentSection.hidden = !state.canViewInvestment || state.tagDirectory;
     updateFilterControls();
     // Apply trusted authorization and clear prior data before exposing the shell.
     elements.householdSwitcherWrap.hidden = true;
@@ -4479,7 +4475,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     clearTags();
     elements.householdSwitcher.replaceChildren();
     elements.householdSwitcherWrap.hidden = true;
-    elements.investmentSection.hidden = true;
     finishPhotoViewerClose();
     dialogs.reset();
     cancelPendingEntrySearch();
@@ -4493,7 +4488,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.canManageEntries = false;
     state.canViewTrash = false;
     state.canPermanentlyDelete = false;
-    state.canViewInvestment = false;
     state.entries = [];
     state.entryMap.clear();
     state.offset = 0;
