@@ -46,9 +46,9 @@ try{
  for(const mobile of [false,true]){const context=await browser.newContext({viewport:mobile?{width:390,height:844}:{width:1440,height:1000},...(mobile?{isMobile:true,hasTouch:true}:{})});const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(url);await page.locator('#app-view').waitFor({state:'visible'});await page.locator('#period').click();await page.locator('#date-wheel-dialog').waitFor({state:'visible'});assert.equal(await page.locator('#date-wheel-title').textContent(),'表示月を選択');await page.keyboard.press('Escape');await page.locator('#date-wheel-dialog').waitFor({state:'hidden'});assert.equal(await page.locator('[data-view=transactions]').textContent(),'家計簿');assert.equal(await page.locator('#ledger-title').textContent(),'収支');assert.equal(await page.locator('#add-entry').textContent(),'＋ インプット');await page.locator('#add-entry').click();assert.equal(await page.locator('#entry-title').textContent(),'インプット');await chooseDate(page,'entry-date','2026-09-15');assert.equal(await page.locator('#entry-form [name=accountId],#entry-form [name=included],#entry-form option[value=transfer],#account-filter').count(),0);assert.equal(await page.locator('#entry-parent option').filter({hasText:'未分類'}).count(),0);await page.locator('#entry-form [name=amount]').fill('1234');assert.equal(await page.locator('#entry-form [name=amount]').inputValue(),'1,234');
  const shop=mobile?'Sample mobile shop':'Sample desktop shop';
  await page.getByLabel('利用先・相手先',{exact:true}).fill(shop);
- await page.getByLabel('摘要',{exact:true}).fill('Sample purchase details');
+ await page.getByLabel('支払方法・摘要',{exact:true}).fill('Sample purchase details');
  await page.locator('#entry-form [type=submit]').click();await page.locator('#entry-dialog').waitFor({state:'hidden'});await chooseDate(page,'period','2026-09');
- const headings=['日付','利用先・相手先','分類','金額','摘要','操作'];
+ const headings=['日付','利用先・相手先','分類','金額','支払方法・摘要','操作'];
  assert.deepEqual(await page.locator('.entries-table thead th').allTextContents(),headings);
  const entry=page.locator('#entries tr').filter({hasText:shop});
  assert.equal(await entry.locator('.notes').textContent(),'Sample purchase details');
@@ -56,7 +56,7 @@ try{
  await entry.getByRole('button',{name:'編集',exact:true}).click();
  assert.equal(await page.locator('#entry-title').textContent(),'インプットを編集');
  assert.equal(await page.getByLabel('利用先・相手先',{exact:true}).inputValue(),shop);
- assert.equal(await page.getByLabel('摘要',{exact:true}).inputValue(),'Sample purchase details');
+ assert.equal(await page.getByLabel('支払方法・摘要',{exact:true}).inputValue(),'Sample purchase details');
  await page.locator('#entry-dialog [data-close]').first().click();await page.locator('#entry-dialog').waitFor({state:'hidden'});
  if(mobile){await page.setViewportSize({width:320,height:844});const sizes=await page.locator('#view-transactions .summary>*').evaluateAll(nodes=>nodes.map(n=>({height:n.getBoundingClientRect().height,font:parseFloat(getComputedStyle(n.querySelector('strong')).fontSize)})));assert.ok(sizes.every(s=>s.height<90&&s.font>=14));assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:resolve(screens,'ledger-mobile.png'),fullPage:true});await page.setViewportSize({width:390,height:844});}
  await page.locator('#add-entry').click();await page.locator('#entry-form [name=description]').fill('Unsaved sample');await page.locator('#entry-dialog [data-close]').first().click();await page.locator('#confirm-dialog').waitFor({state:'visible'});await page.locator('#confirm-cancel').click();assert.equal(await page.locator('#entry-form [name=description]').inputValue(),'Unsaved sample');await page.locator('#entry-dialog [data-close]').first().click();await page.locator('#confirm-ok').click();await page.locator('#entry-dialog').waitFor({state:'hidden'});
