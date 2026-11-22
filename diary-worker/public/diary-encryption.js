@@ -14,8 +14,8 @@ export async function importDiaryTrust(file) {
   const value=await validatePublicTrust(JSON.parse(await file.text()));
   localStorage.setItem(PIN,JSON.stringify(value));return value;
 }
-export async function startEncryptedDiary(session,authentication) {try{return await createEncryptedDiary(session,authentication);}finally{authentication?.prfOutput?.fill(0);if(authentication){authentication.diaryPrivateKeys=null;authentication.diaryPreparedKeys=null;}}}
-async function createEncryptedDiary(session,authentication) {
+export async function startEncryptedDiary(session,authentication,startupProfile) {try{return await createEncryptedDiary(session,authentication,startupProfile);}finally{authentication?.prfOutput?.fill(0);if(authentication){authentication.diaryPrivateKeys=null;authentication.diaryPreparedKeys=null;}}}
+async function createEncryptedDiary(session,authentication,startupProfile) {
   let pin=authentication?.diaryTrust||JSON.parse(localStorage.getItem(TRUST_PIN)||'null');
   const nativeFetch=window.fetch.bind(window);
   const nativeApi=async(path,init={})=>{
@@ -26,7 +26,7 @@ async function createEncryptedDiary(session,authentication) {
     const result=await response.json();if(!response.ok)throw Object.assign(new Error(result.error||'暗号化された日記を読み込めません。'),{status:response.status});return result;
   };
   const request=(path,init)=>nativeApi('/encryption'+path,init);
-  const initial=await request('/profile');
+  const initial=startupProfile??await request('/profile');
   if(initial.protocol!==DIARY_READER_PROTOCOL)throw new Error('暗号化対応の最新版で開き直してください。');
   let cached={privateKeys:authentication?.diaryPrivateKeys||takePreparedVault(authentication,initial.profile)};
   if(!cached.privateKeys)cached=undefined;
@@ -49,7 +49,7 @@ async function createEncryptedDiary(session,authentication) {
     backgroundReady:()=>firstView,
     valid:async()=>{const generation=client.generation;try{const result=await nativeApi('/session');const valid=generation===client.generation&&!client.switching&&result.authenticated&&result.encryption?.enabled&&result.encryption.protocol===DIARY_READER_PROTOCOL&&result.encryption.accountId===expectedAccount&&result.encryption.webAuthnCredentialId===expectedCredential&&result.activeHouseholdId===client.household&&result.encryption.generation===initial.rollout.generation&&(!liveSession.keySession||JSON.stringify(liveSession.keySession)===JSON.stringify(result.keySession));if(valid){deadline=result.expiresAt||deadline;liveSession=result;await persistDevice();}return valid;}catch(error){if([401,403].includes(error.status))return false;throw error;}},
     timestamp:async()=>(await request('/time')).timestamp,
-    snapshot:(household,since,{onPage}={})=>readSnapshotPages(options=>request(`/snapshot?${new URLSearchParams(Object.entries(options).filter(([,value])=>value!==null))}`),household,since,{onPage,fetchHead:h=>request(`/head?household=${encodeURIComponent(h)}`)}),
+    snapshot:(household,since,{onPage,signal}={})=>readSnapshotPages(options=>request(`/snapshot?${new URLSearchParams(Object.entries(options).filter(([,value])=>value!==null))}`,{signal}),household,since,{onPage,fetchHead:h=>request(`/head?household=${encodeURIComponent(h)}`,{signal})}),
     mutation:(proposal,operation)=>request('/mutation',{method:'POST',body:{proposal,operation}}),
     remove:proposal=>request('/remove',{method:'POST',body:proposal})
   };
@@ -74,7 +74,7 @@ async function createEncryptedDiary(session,authentication) {
     },
     onPhotoExpiry:expiresAt=>{deadline=Math.max(deadline||0,expiresAt);}
   });
-  api=createEncryptedDiaryApi(client,{session,nativeApi,media,prepareNavigation:()=>navigation.prepareTags(),onHousehold:async household=>{
+  api=createEncryptedDiaryApi(client,{session,nativeApi,media,parallelStartupRead:Boolean(startupProfile),prepareNavigation:()=>navigation.prepareTags(),onHousehold:async household=>{
     const reply=await request('/profile');
     if(reply.profile.actor.accountId!==expectedAccount||reply.profile.webAuthnCredentialId!==expectedCredential||reply.profile.household!==household||reply.profile.directory.value.generation!==client.directory.generation){client.lock();throw new Error('パスキーでログインし直してください。');}
     media.reset();resetFirstView();
