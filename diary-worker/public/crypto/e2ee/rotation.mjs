@@ -2,7 +2,7 @@ import { b64,encode,newKey,open,seal,signed,fingerprint,makeGrant,openRecipientK
 import { bindingOf,proofOf,verifyRecord } from './record.mjs';
 import { canRead,preferencesScope } from './policy.mjs';
 import { scopeDefinitions,assertKnownRecipientKeys } from './setup.mjs';
-import { createRecoveryEnvelope,openRecoveryEnvelope } from './recovery.mjs';
+import { createRecoveryEnvelope,openRecoveryEnvelope,newDiaryDelegationKey,sealDiaryDelegation } from './recovery.mjs';
 
 export const rotationDigest = async value => b64(await crypto.subtle.digest('SHA-256',encode(value)));
 const equal = (a,b) => b64(encode(a)) === b64(encode(b));
@@ -46,6 +46,8 @@ export async function prepareRotation({status,recoveryPrivateKey,trustedAnchor,r
     }
     const value={protocol:'T-lain diary directory',version:1,generation,households:status.households,epochs,members,
       recoveryPublicKey:status.recoveryPublicKey,recoveryFingerprint:previous.recoveryFingerprint,recoveryAuthority:trustedAnchor};
+    const delegation=previous.delegationPublicKey?await newDiaryDelegationKey():null;
+    if(delegation)value.delegationPublicKey=delegation.publicKey;
     const directory=await signed(value,kit.authority),grants={},recordGrants={};
     for (const member of members) {
       grants[member.credentialId]=[];recordGrants[member.credentialId]=[];
@@ -86,6 +88,8 @@ export async function prepareRotation({status,recoveryPrivateKey,trustedAnchor,r
     const recoveryEnvelope=await createRecoveryEnvelope({scopeKeys,authority:kit.authority,directory,anchor:trustedAnchor,
       recoveryPublicKey:status.recoveryPublicKey,expectedRecoveryFingerprint:previous.recoveryFingerprint});
     const configuration={expectedGeneration:previous.generation,anchor:trustedAnchor,directory,recoveryEnvelope,grants,recordGrants};
+    if(delegation)configuration.delegation=await sealDiaryDelegation({directory:value,authority:kit.authority,scopeKeys,
+      legacy:new Map(),delegation,members:status.members.filter(member=>member.active!==false&&member.isGlobalOwner&&member.identityId==='primary-admin')});
     const manifest=await signed({protocol:'T-lain diary rotation',version:1,sourceGeneration:previous.generation,
       targetGeneration:generation,directoryDigest:await rotationDigest(directory),configurationDigest:await rotationDigest(configuration),
       records:{count:rotated.length,digest:await rotationInventoryDigest(await Promise.all(rotated.map(async row=>({id:row.id,digest:await rotationDigest(row),previousDigest:row.attestation.recovery.previousDigest}))))},

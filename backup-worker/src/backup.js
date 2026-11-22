@@ -1,4 +1,4 @@
-import { SERVICES,archiveSpec,cloudVersionsSpec } from './registry.js';
+import { SERVICES,archiveSpec,cloudVersionsSpec,securityTransferSpec,SECURITY_TRANSFER_TABLE } from './registry.js';
 import { assertSchema } from './schema-guard.js';
 import { reportRun } from './monitor.js';
 
@@ -9,6 +9,7 @@ export async function capture(db, service, now = Date.now()) {
   let spec = SERVICES[service];
   if (!spec || !db) throw new Error('SourceUnavailable');
   if(service==='cloud'&&await db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='cloud_file_versions'").first())spec=cloudVersionsSpec();
+  if(service==='security'&&await db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?").bind(SECURITY_TRANSFER_TABLE).first())spec=securityTransferSpec(spec);
   const startedAt = new Date().toISOString();
   const result = await db.batch([
     snapshotStatement(db, spec.tables),

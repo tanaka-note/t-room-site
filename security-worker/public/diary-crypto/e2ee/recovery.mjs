@@ -9,6 +9,9 @@ import {
   verifySigned,
   verifyDirectory,
   recoveryWrappedBytes,
+  newKey,
+  openRecipientKey,
+  wrapKeyForRecipients,
 } from "./crypto.mjs";
 
 const binding = (generation) => ({
@@ -198,4 +201,79 @@ export async function openRecoveryEnvelope({
   // Recovery-only extractable keys enable grants for a newly approved passkey.
   // Dispose of this object immediately after rewrapping on the trusted device.
   return { directory, authority, scopeKeys };
+}
+
+const delegationBinding = generation => ({
+  household: "recovery", scope: "diary-delegation", id: "keyset", revision: generation, epoch: 1, kind: "recovery"
+});
+const rsa = { name: "RSA-OAEP", hash: "SHA-256" };
+const signerAlgorithm = { name: "ECDSA", namedCurve: "P-256" };
+export async function delegationInventoryDigest(entries) {
+  const sorted = [...entries].sort(([left],[right]) => left.localeCompare(right,"en"));
+  return b64(await crypto.subtle.digest("SHA-256",encode(sorted)));
+}
+
+export async function newDiaryDelegationKey() {
+  const keys = await crypto.subtle.generateKey({ ...rsa, modulusLength: 3072,
+    publicExponent: new Uint8Array([1,0,1]) }, true, ["encrypt","decrypt"]);
+  return { publicKey: await crypto.subtle.exportKey("jwk",keys.publicKey), privateKey: keys.privateKey };
+}
+
+async function exportedKey(format,key) {
+  const bytes = new Uint8Array(await crypto.subtle.exportKey(format,key));
+  try { return b64(bytes); } finally { bytes.fill(0); }
+}
+
+export async function sealDiaryDelegation({ directory, authority, scopeKeys, legacy, delegation, members }) {
+  const binding = delegationBinding(directory.generation);
+  const key = await newKey();
+  const secrets = {
+    version: 1,
+    signer: await exportedKey("pkcs8",authority),
+    privateKey: await exportedKey("pkcs8",delegation.privateKey),
+    scopes: Object.fromEntries(await Promise.all([...scopeKeys].map(async ([scope, value]) => [scope,await exportedKey("raw",value)]))),
+    legacy: Object.fromEntries(await Promise.all([...legacy].map(async ([id,{signature,key}]) => [id,{signature,key:await exportedKey("raw",key)}])))
+  };
+  try {
+    const envelope = await seal(key,secrets,binding);
+    const wrapped = await wrapKeyForRecipients(key,binding,members);
+    const legacyDigest=await delegationInventoryDigest([...legacy].map(([id,{signature}])=>[id,signature]));
+    return signed({ generation:directory.generation,envelope,wrapped,legacyDigest },authority);
+  } finally {
+    secrets.signer=null; secrets.privateKey=null; secrets.scopes=null; secrets.legacy=null;
+  }
+}
+
+async function importedKey(format,text,algorithm,usages,limit) {
+  const bytes = unb64(text,limit);
+  try { return await crypto.subtle.importKey(format,bytes,algorithm,true,usages); }
+  finally { bytes.fill(0); }
+}
+
+export async function openDiaryDelegation({ packet, directory, anchor, recipientId, recipientKey }) {
+  const value = await verifySigned(packet,anchor);
+  if (value.generation !== directory.generation || !directory.delegationPublicKey || !value.wrapped[recipientId]) throw new Error("DiaryDelegationUnavailable");
+  const binding = delegationBinding(directory.generation);
+  const material = await openRecipientKey(value.wrapped,binding,recipientId,recipientKey);
+  const data = await open(material,value.envelope,binding);
+  if (data.version !== 1 || !data.legacy || Object.keys(data.legacy).length > 5000 ||
+      Object.keys(data.scopes).sort().join() !== Object.keys(directory.epochs).sort().join()) throw new Error("InvalidDiaryDelegation");
+  if(value.legacyDigest!==await delegationInventoryDigest(Object.entries(data.legacy).map(([id,{signature}])=>[id,signature]))) {
+    throw new Error("InvalidDiaryDelegation");
+  }
+  const [authority,privateKey] = await Promise.all([
+    importedKey("pkcs8",data.signer,signerAlgorithm,["sign"],512),
+    importedKey("pkcs8",data.privateKey,rsa,["decrypt"],4096)
+  ]);
+  await verifySigned(await signed({generation:directory.generation},authority),anchor);
+  const scopeKeys = new Map(await Promise.all(Object.entries(data.scopes).map(async ([scope,key]) =>
+    [scope,await importedKey("raw",key,{name:"AES-GCM"},["encrypt","decrypt"],43)])));
+  return {
+    authority, scopeKeys, delegation:{publicKey:directory.delegationPublicKey,privateKey},
+    openLegacyRecord: async record => {
+      const saved = data.legacy[record.id];
+      if (!saved || saved.signature !== record.attestation.signature) throw new Error("DiaryDelegationRecordChanged");
+      return importedKey("raw",saved.key,{name:"AES-GCM"},["encrypt","decrypt"],43);
+    }
+  };
 }

@@ -1,9 +1,9 @@
-import { diaryAutomaticVault,diaryAutomaticManagement,diaryLoginTrust,diaryKeyBundle,handleDiaryKeys,diaryKeysEnabled,diaryAuthenticationOrigins } from "./diary-keys.js";
+import { diaryApprovalTargets, diaryRecipientId, diaryAutomaticVault,diaryAutomaticManagement,diaryLoginTrust,diaryKeyBundle,handleDiaryKeys,diaryKeysEnabled,diaryAuthenticationOrigins } from "./diary-keys.js";
 import { runState } from '../../backup-worker/src/monitor.js';
 import { archiveAuditEvents, archiveIfPending } from './audit-archive.js';
 import {handleHouseholdKeys} from './household-keys.js';
 import {householdAutomaticContext} from './household-automatic.js';
-import { billingKeyRecipients, billingVaultContext, enrollBillingVault } from "./billing-vaults.js";
+import { billingApprovalVault, billingKeyRecipients, billingVaultContext, enrollBillingVault } from "./billing-vaults.js";
 import { isValidSessionSecret, requireSessionSecret } from "../../assets/session-secret.mjs";
 import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { accountDisplayName, identityDisplayName, auditDisplayNames, OWNER_DISPLAY_NAME } from "../../assets/account-display.mjs";
@@ -276,6 +276,14 @@ async function handleApi(request, env, url, path, context = null) {
     requireMutation(request, url);
     return invitationOptions(request, env);
   }
+  if (path === "/api/invite/preparation" && request.method === "POST") {
+    requireMutation(request, url);
+    return invitePreparation(request, env);
+  }
+  if (path === "/api/invite/resume" && request.method === "POST") {
+    requireMutation(request, url);
+    return resumeInvitePreparation(request, env, url);
+  }
   if (path === "/api/invite/verify" && request.method === "POST") {
     requireMutation(request, url);
     return invitationVerify(request, env, url);
@@ -366,10 +374,17 @@ async function handleApi(request, env, url, path, context = null) {
     requireMutation(request, url);
     return removeIdentityLink(removeLinkMatch[1], request, env, admin);
   }
-  const approveMatch = path.match(/^\/api\/identities\/([A-Za-z0-9_-]{1,64})\/approve$/);
+  const approveMatch = path.match(/^\/api\/identities\/([A-Za-z0-9_-]{1,64})\/approve(\/prepare)?$/);
   if (approveMatch && request.method === "POST") {
     requireMutation(request, url);
-    return approveIdentity(approveMatch[1], request, env, admin);
+    return approveMatch[2]
+      ? prepareIdentityApproval(approveMatch[1], request, env, admin)
+      : approveIdentity(approveMatch[1], request, env, admin);
+  }
+  const continuationMatch = path.match(/^\/api\/identities\/([A-Za-z0-9_-]{1,64})\/invite-continuation$/);
+  if (continuationMatch && request.method === "POST") {
+    requireMutation(request, url);
+    return issueInviteContinuation(continuationMatch[1], request, env, admin);
   }
   const disableIdentityMatch = path.match(/^\/api\/identities\/([A-Za-z0-9_-]{1,64})\/disable$/);
   if (disableIdentityMatch && request.method === "POST") {
@@ -443,6 +458,16 @@ async function bootstrapVerify(request, env, url) {
 async function invitationOptions(request, env) {
   const body = await readJson(request, 8192);
   const token = normalizeSecretText(body.token, 512);
+  const used = await inviteResumeCredential(env, token);
+  if (used) {
+    const options = await generateAuthenticationOptions({
+      rpID: rpId(env), timeout: 60000, userVerification: "required",
+      allowCredentials: [{ id: used.credential_id, transports: parseJson(used.transports_json, []) }],
+      extensions: prfAuthenticationExtensions([used])
+    });
+    const challengeId = await storeChallenge(env, "prf_assertion", options.challenge, used.identity_id, used.registered_via_invitation_id, "invite_resume");
+    return json({ challengeId, options, resume: true });
+  }
   const invitation = await requireUsableInvitation(env, token);
   const identity = await env.DB.prepare("SELECT id, display_name FROM security_identities WHERE id = ?").bind(invitation.identity_id).first();
   const existing = await env.DB.prepare("SELECT credential_id AS id, transports_json AS transports FROM security_credentials WHERE identity_id = ? AND status != 'revoked'").bind(identity.id).all();
@@ -450,6 +475,63 @@ async function invitationOptions(request, env) {
   const challengeId = await storeChallenge(env, "invite_registration", options.challenge, identity.id, invitation.id, null);
   const cloudLinks = await env.DB.prepare("SELECT id, service_account_id, cloud_root_folder_id FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND status IN ('pending', 'active')").bind(identity.id).all();
   return json({ challengeId, identity: { id: identity.id, displayName: identityDisplayName(identity.id, identity.display_name) }, options, cloudLinks: (cloudLinks.results || []).map((link) => ({ id: link.id, accountId: link.service_account_id, rootFolderId: link.cloud_root_folder_id })) });
+}
+
+async function inviteResumeCredential(env, token) {
+  if (!token) return null;
+  return env.DB.prepare(`SELECT c.*, invitation.link_set_hash FROM security_invitations invitation
+    JOIN security_credentials c ON c.registered_via_invitation_id = invitation.id AND c.identity_id = invitation.identity_id
+    JOIN security_identities i ON i.id = c.identity_id
+    WHERE invitation.status = 'used'
+      AND ((invitation.token_hash = ?1 AND invitation.expires_at > ?2) OR EXISTS (
+        SELECT 1 FROM security_challenges continuation WHERE continuation.invitation_id = invitation.id
+          AND continuation.identity_id = i.id AND continuation.service = 'invite_continuation'
+          AND continuation.challenge_hash = ?1 AND continuation.expires_at > ?2 AND continuation.consumed_at IS NULL))
+      AND i.status IN ('active', 'pending_approval') AND c.status = 'pending'`).bind(await sha256(token), nowSeconds()).first();
+}
+
+async function issueInviteContinuation(identityId, request, env, admin) {
+  const body = await readJson(request, 4096);
+  const credential = await approvalCredential(env, identityId, validCredentialId(body.credentialId), admin);
+  if (credential.status !== "pending" || !credential.registered_via_invitation_id) {
+    throw new HttpError(409, "続ける招待登録を確認できません。");
+  }
+  const token = randomToken(32);
+  const expiresAt = nowSeconds() + 3600;
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE security_challenges SET consumed_at=? WHERE invitation_id=? AND service='invite_continuation' AND consumed_at IS NULL`)
+      .bind(nowSeconds(), credential.registered_via_invitation_id),
+    env.DB.prepare(`INSERT INTO security_challenges (id,purpose,challenge_hash,identity_id,invitation_id,service,expires_at)
+      VALUES (?,'prf_assertion',?,?,?,'invite_continuation',?)`)
+      .bind(crypto.randomUUID(), await sha256(token), identityId, credential.registered_via_invitation_id, expiresAt)
+  ]);
+  return json({ invitationUrl: `/security/#invite=${token}`, expiresAt });
+}
+
+async function resumeInvitePreparation(request, env, url) {
+  const body = await readJson(request, 100000);
+  const credential = await inviteResumeCredential(env, normalizeSecretText(body.token, 512));
+  if (!credential || credential.credential_id !== validCredentialId(body.response?.id)
+      || credential.link_set_hash !== await serviceLinkSetHash(env, credential.identity_id)) {
+    throw new HttpError(409, "再開するパスキーの登録を確認できません。");
+  }
+  const challenge = await consumeChallenge(env, body.challengeId, "prf_assertion", credential.identity_id);
+  if (challenge.service !== "invite_resume" || challenge.invitation_id !== credential.registered_via_invitation_id) {
+    throw new HttpError(401, "招待と登録処理が一致しません。");
+  }
+  const verified = await verifyAuthentication(body.response, challenge.challenge, credential, env);
+  if (!verified.verified || !verified.authenticationInfo.userVerified) {
+    throw new HttpError(401, "端末のロック解除を確認できませんでした。");
+  }
+  const setup = await prepareSetupSession(env, credential.identity_id, credential.credential_id);
+  await env.DB.batch([
+    env.DB.prepare("UPDATE security_credentials SET counter = ?, last_used_at = CURRENT_TIMESTAMP WHERE credential_id = ? AND status = 'pending'")
+      .bind(verified.authenticationInfo.newCounter, credential.credential_id),
+    insertSetupSessionStatement(env, setup)
+  ]);
+  const headers = new Headers();
+  headers.append("Set-Cookie", setupCookie(setup.token, url.protocol === "https:"));
+  return json({ credentialId: credential.credential_id }, 200, headers);
 }
 
 async function invitationVerify(request, env, url) {
@@ -493,9 +575,93 @@ async function invitationVerify(request, env, url) {
     if (state?.status === "revoked" || state?.identity_status === "disabled") throw new HttpError(410, "この招待は取り消されています。");
     throw error;
   }
-  const headers = await securitySessionHeaders(env, url, invitation.identity_id, credentialId, false);
+  const headers = new Headers();
   headers.append("Set-Cookie", setupCookie(setup.token, url.protocol === "https:"));
   return json({ ok: true, pendingApproval: true, identityId: invitation.identity_id, credentialId, prfSalt, prfEnabled: Boolean(body.prfEnabled) }, 201, headers);
+}
+
+async function invitePreparation(request, env) {
+  const setup = await requireSetupSession(request, env);
+  const target = await env.DB.prepare(`SELECT c.status, i.link_set_hash
+    FROM security_credentials c JOIN security_invitations i ON i.id = c.registered_via_invitation_id
+    WHERE c.identity_id = ? AND c.credential_id = ? AND i.status = 'used'`)
+    .bind(setup.identity_id, setup.credential_id).first();
+  if (target?.status !== "pending" || target.link_set_hash !== await serviceLinkSetHash(env, setup.identity_id)) {
+    throw new HttpError(409, "この招待の登録内容を確認できません。管理者にお問い合わせください。");
+  }
+  const status = await tcloudSetupStatus(env, setup.identity_id, setup.credential_id, {});
+  const cloudTasks = [];
+  if (!status.adminKeyReady && !status.adminReceiverReady) {
+    cloudTasks.push(status.cloudLinks.find(link => link.accountId === "admin"));
+  }
+  if (!status.clientKeyReady) {
+    cloudTasks.push(status.cloudLinks.find(link => link.accountId === "folder-member"));
+  }
+  const diaryTasks = await Promise.all((await diaryApprovalTargets(env, setup.identity_id, setup.credential_id))
+    .filter(link => !link.recipientId).map(async link => ({
+      id: link.id, accountId: link.accountId, recipientId: await diaryRecipientId(setup.credential_id, link.id)
+    })));
+  const household = (await householdApprovalTargets(env, setup.identity_id, setup.credential_id))
+    .find(link => !link.recipientPublicKey);
+  const billing = (await billingApprovalTargets(env, setup.identity_id, setup.credential_id))
+    .find(link => !link.vault?.recipient || (link.primaryOwner && !link.vault.writer));
+  const tasks = [...cloudTasks.map(link => ({ ...link, service: "cloud" })),
+    ...diaryTasks.map(link => ({ ...link, service: "diary" })),
+    ...(household ? [{ id: household.serviceLinkId, service: "household" }] : []),
+    ...(billing ? [{ id: billing.serviceLinkId, service: "billing", primaryOwner: billing.primaryOwner }] : [])];
+  const body = await readJson(request, 40000);
+  if (!body.vault) return json({ tasks, credentialId: setup.credential_id });
+  if (Number(setup.last_user_verification_at || 0) < nowSeconds() - SETUP_UV_TTL_SECONDS) {
+    throw new HttpError(401, "端末のロック解除をもう一度確認してください。");
+  }
+  const link = tasks.find(item => item.id === body.linkId);
+  if (!link) throw new HttpError(409, "受取鍵の準備状況が変わりました。もう一度確認してください。");
+  const packetFingerprint = await sha256(JSON.stringify(body.vault));
+  const proofBinding = nonce => JSON.stringify([setup.id, setup.credential_id, link.id, packetFingerprint, nonce]);
+  if (!body.proof) {
+    const jwk = link.service === "billing" ? body.vault.recipient?.publicKey : body.vault.publicKey || body.vault.publicKeyJwk;
+    const publicKey = await crypto.subtle.importKey("jwk", validatePublicJwk(jwk), { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]);
+    const nonce = randomToken(32);
+    const encrypted = await crypto.subtle.encrypt({ name: "RSA-OAEP" }, publicKey, new TextEncoder().encode(nonce));
+    const challengeId = await storeChallenge(env, "prf_assertion", proofBinding(nonce), setup.identity_id, null, "invite_vault");
+    return json({ challengeId, encrypted: bytesToBase64Url(encrypted) });
+  }
+  const challenge = await consumeChallenge(env, body.proof.challengeId, "prf_assertion", setup.identity_id);
+  if (challenge.service !== "invite_vault" || !await challenge.challenge(proofBinding(normalizeSecretText(body.proof.nonce, 64)))) {
+    throw new HttpError(401, "パスキーの受取鍵を確認できません。");
+  }
+  const actor = { identityId: setup.identity_id, credentialId: setup.credential_id };
+  if (link.service === "diary") {
+    return diaryApprovalOperation("/vault", request.url, env, { ...actor, authenticatedAt: setup.last_user_verification_at },
+      { links: diaryTasks, preparation: true }, { serviceLinkId: link.id, vault: body.vault });
+  }
+  if (link.service === "household") {
+    return json(await householdApprovalRpc(env, "vault", { ...actor, vault: body.vault }));
+  }
+  if (link.service === "billing") {
+    const saved = await billingApprovalVault(env, billing, body.vault);
+    if (saved.status !== "ok") throw new HttpError(409, "請求書の受取鍵を確認できません。");
+    return json({ ok: true });
+  }
+  const vault = await cloudPreparationVault(body.vault);
+  if (link.accountId === "folder-member") {
+    await saveCloudMemberVault(env, actor, vault);
+  } else {
+    await saveCloudAdminReceiver(env, actor, link.id, vault, "pending");
+  }
+  return json({ ok: true });
+}
+
+async function diaryApprovalOperation(path, url, env, actor, approval, body) {
+  try {
+    const request = new Request(url, { method: body ? "POST" : "GET", body: body ? JSON.stringify(body) : undefined });
+    return await handleDiaryKeys(`/api/diary${path}`, request, env, actor, {
+      readJson, json, approval, audit: async () => {}
+    });
+  } catch (error) {
+    if (!error.status) throw error;
+    throw new HttpError(error.status, "日記の暗号鍵を準備できません。権限・鍵世代と登録状況を確認してください。");
+  }
 }
 
 async function authenticationOptions(request, env) {
@@ -709,6 +875,15 @@ async function tcloudSetupStatus(env, identityId, credentialId, flags) {
   const adminEnvelopes = await env.DB.prepare("SELECT service_link_id FROM security_tcloud_key_envelopes WHERE credential_id = ? AND identity_id = ? AND envelope_type = 'admin_private_prf'").bind(credentialId, identityId).all();
   const adminKeyReady = adminLinks.every((link) => (adminEnvelopes.results || []).some((envelope) => envelope.service_link_id === link.id));
   const clientKeyReady = !memberLinks.length || Boolean(vault);
+  const adminReceiverReady = !adminLinks.length || Boolean(await env.DB.prepare(`SELECT 1 FROM security_tcloud_admin_key_transfers
+    WHERE credential_id = ? AND identity_id = ? AND service_link_id = ?`)
+    .bind(credentialId, identityId, adminLinks[0].id).first());
+  const diaryRecipientReady = !(credential.status === "pending" && credential.registered_via_invitation_id)
+    || (await diaryApprovalTargets(env, identityId, credentialId)).every(link => link.recipientId);
+  const householdRecipientReady = !(credential.status === "pending" && credential.registered_via_invitation_id)
+    || (await householdApprovalTargets(env, identityId, credentialId)).every(link => link.recipientPublicKey);
+  const billingRecipientReady = !(credential.status === "pending" && credential.registered_via_invitation_id)
+    || (await billingApprovalTargets(env, identityId, credentialId)).every(link => link.vault?.recipient && (!link.primaryOwner || link.vault.writer));
   const ready = adminKeyReady && clientKeyReady;
   return {
     ...flags,
@@ -720,6 +895,10 @@ async function tcloudSetupStatus(env, identityId, credentialId, flags) {
     prfEnabled: Boolean(credential.prf_enabled),
     tcloudReady: ready,
     adminKeyReady,
+    adminReceiverReady,
+    diaryRecipientReady,
+    householdRecipientReady,
+    billingRecipientReady,
     clientKeyReady,
     needsTCloudSetup: Boolean(links.length && !ready),
     clientKeyFingerprint: vault?.public_key_fingerprint || null,
@@ -793,6 +972,7 @@ async function prfVerify(request, env, url) {
   const identitySession = await requireSetupOrIdentitySession(request, env);
   const body = await readJson(request, 100000);
   const challenge = await consumeChallenge(env, body.challengeId, "prf_assertion", identitySession.identityId);
+  if (challenge.service) throw new HttpError(401, "招待画面からパスキーの準備を続けてください。");
   const credentialId = validCredentialId(body.response?.id);
   if (credentialId !== identitySession.credentialId) throw new HttpError(403, "パスキーが一致しません。");
   const credential = await credentialForIdentity(env, credentialId, identitySession.identityId);
@@ -805,6 +985,9 @@ async function prfVerify(request, env, url) {
     .bind(verification.authenticationInfo.newCounter, body.prfAvailable === true ? 1 : 0, credentialId, identitySession.identityId)];
   if (identitySession.setupId && body.prfAvailable === true) statements.push(env.DB.prepare("UPDATE security_setup_sessions SET last_user_verification_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(nowSeconds(), identitySession.setupId));
   await env.DB.batch(statements);
+  if (credential.status === "pending" && credential.registered_via_invitation_id) {
+    return json({ verified: true, prfAvailable: Boolean(body.prfAvailable) });
+  }
   const identity = await env.DB.prepare("SELECT is_security_admin FROM security_identities WHERE id = ?").bind(identitySession.identityId).first();
   const headers = await securitySessionHeaders(env, url, identitySession.identityId, credentialId, Boolean(identity?.is_security_admin));
   return json({ verified: true, prfAvailable: Boolean(body.prfAvailable) }, 200, headers);
@@ -968,12 +1151,7 @@ async function cloudKeyPreparation(request, env) {
   if (body.action === "admin-vault") {
     if (adminEnvelope) return json({ ok: true });
     const vault = await cloudPreparationVault(body.vault);
-    const fingerprint = await sha256(canonicalJwk(vault.publicKeyJwk));
-    await env.DB.prepare(`INSERT INTO security_tcloud_admin_key_transfers
-      (credential_id, identity_id, service_link_id, public_key_jwk, public_key_fingerprint, receiver_ciphertext, receiver_iv)
-      SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE ${CLOUD_KEY_ACTOR}
-        AND EXISTS (SELECT 1 FROM security_service_links l WHERE l.id = ?3 AND l.identity_id = ?2 AND ${CLOUD_PREPARATION_LINK})
-      ON CONFLICT (credential_id) DO NOTHING`).bind(...own, adminLink.id, JSON.stringify(vault.publicKeyJwk), fingerprint, vault.encryptedPayload, vault.payloadIv).run();
+    await saveCloudAdminReceiver(env, actor, adminLink.id, vault, "active");
     return json({ ok: true });
   }
   const config = adminLink && (canSend || !adminEnvelope) ? await env.CLOUD_AUTH.getPrimaryAdminCryptoConfig() : null;
@@ -1071,6 +1249,20 @@ async function cloudKeyPreparation(request, env) {
   return json({ links: await Promise.all(readyLinks.map(link => publicLink(env, link))),
     hasMember: Boolean(memberLinks.length), memberVault, adminLinkId: adminLink?.id || null,
     adminEnvelope, adminFingerprint, adminPublicKey, receiver, recipients });
+}
+
+async function saveCloudAdminReceiver(env, actor, linkId, vault, credentialStatus) {
+  const fingerprint = await sha256(canonicalJwk(vault.publicKeyJwk));
+  await env.DB.prepare(`INSERT INTO security_tcloud_admin_key_transfers
+    (credential_id, identity_id, service_link_id, public_key_jwk, public_key_fingerprint, receiver_ciphertext, receiver_iv)
+    SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 WHERE EXISTS (
+      SELECT 1 FROM security_credentials c JOIN security_identities i ON i.id = c.identity_id
+      JOIN security_service_links l ON l.id = ?3 AND l.identity_id = i.id
+      WHERE c.credential_id = ?1 AND i.id = ?2 AND c.status = ?8 AND i.status = 'active'
+        AND l.service = 'cloud' AND l.service_account_id = 'admin' AND l.status = 'active')
+    ON CONFLICT (credential_id) DO NOTHING`)
+    .bind(actor.credentialId, actor.identityId, linkId, JSON.stringify(vault.publicKeyJwk), fingerprint,
+      vault.encryptedPayload, vault.payloadIv, credentialStatus).run();
 }
 
 async function cloudPreparationVault(value) {
@@ -1290,10 +1482,20 @@ async function identityDetail(id, env) {
       .bind(id, credential.credential_id).all();
     const readyLinkIds = new Set((envelopeRows.results || []).map((row) => row.service_link_id));
     const missingCloudLinks = currentCloudLinks.filter((link) => !readyLinkIds.has(link.id));
-    if (credential.status !== "pending" && !missingCloudLinks.length) continue;
+    const missingAdminKey = id === PRIMARY_ADMIN_ID && !(adminKeyRows.results || []).some(row => row.credential_id === credential.credential_id);
+    const missingDiaryKeys = (await diaryApprovalTargets(env, id, credential.credential_id)).some(link => !link.grantGeneration);
+    const missingHouseholdKeys = credential.status === "active"
+      && (await householdApprovalTargets(env, id, credential.credential_id)).some(link => !link.ready);
+    const missingBillingKeys = credential.status === "active"
+      && (await billingApprovalTargets(env, id, credential.credential_id)).some(link => !link.ready);
+    if (credential.status !== "pending" && !missingCloudLinks.length && !missingAdminKey && !missingDiaryKeys && !missingHouseholdKeys && !missingBillingKeys) continue;
     approvalCandidates.push({
       credentialId: credential.credential_id,
       status: credential.status,
+      missingCloudKeys: Boolean(missingCloudLinks.length || missingAdminKey),
+      missingDiaryKeys,
+      missingHouseholdKeys,
+      missingBillingKeys,
       invitedRegistration: Boolean(credential.registered_via_invitation_id),
       registeredAt: normalizeUtcTimestamp(credential.registered_at),
       deviceType: credential.device_type || null,
@@ -1387,61 +1589,280 @@ async function removeIdentityLink(linkId, request, env, admin) {
   return json({ ok: true });
 }
 
-async function approveIdentity(identityId, request, env, admin) {
-  const body = await readJson(request, 120000);
+async function approvalCredential(env, identityId, credentialId, admin) {
   const identity = await env.DB.prepare("SELECT * FROM security_identities WHERE id = ?").bind(identityId).first();
   if (!identity || !["pending_approval", "active"].includes(identity.status)) throw new HttpError(409, "承認待ちのIdentityではありません。");
-  const credentialId = normalizeSecretText(body.credentialId, 2048);
   const credential = await env.DB.prepare("SELECT credential_id, status, registered_via_invitation_id FROM security_credentials WHERE identity_id = ? AND credential_id = ? AND status IN ('pending', 'active')")
     .bind(identityId, credentialId).first();
   if (!credential) throw new HttpError(409, "承認待ちのパスキーが見つかりません。");
-  if (identityId === PRIMARY_ADMIN_ID && credential.status === "pending") {
-    if (!credential.registered_via_invitation_id) throw new HttpError(409, "管理者パスワードで開始した復旧登録は、復旧画面で鍵の準備を完了してください。");
-    if (admin.identityId !== PRIMARY_ADMIN_ID || admin.credentialId === credentialId) throw new HttpError(403, "承認済みの第一管理者パスキーが必要です。");
-    requireFreshSecurityAdmin(admin);
+  if (admin.identityId !== PRIMARY_ADMIN_ID || (credential.status === "pending" && admin.credentialId === credentialId)) {
+    throw new HttpError(403, "承認済みの第一管理者パスキーが必要です。");
   }
-  const cloudLinks = await env.DB.prepare("SELECT * FROM security_service_links WHERE identity_id = ? AND service = 'cloud' AND service_account_id = 'folder-member' AND status IN ('pending', 'active')").bind(identityId).all();
-  const pendingLinks = await env.DB.prepare("SELECT 1 AS ok FROM security_service_links WHERE identity_id = ? AND status = 'pending' AND service NOT IN ('health', 'ai', 'downloader', 'downloader2') LIMIT 1").bind(identityId).first();
-  const existingFolderEnvelopes = await env.DB.prepare(`SELECT service_link_id FROM security_tcloud_key_envelopes
-    WHERE identity_id = ? AND credential_id = ? AND envelope_type = 'folder_key_rsa'`)
-    .bind(identityId, credentialId).all();
-  const existingFolderLinkIds = new Set((existingFolderEnvelopes.results || []).map((row) => row.service_link_id));
-  const missingCloudLinks = (cloudLinks.results || []).filter((link) => !existingFolderLinkIds.has(link.id));
-  if (credential.status === "active" && !pendingLinks && !missingCloudLinks.length) throw new HttpError(409, "承認待ちの連携が見つかりません。");
-  const setup = identityId === PRIMARY_ADMIN_ID ? await tcloudSetupStatus(env, identityId, credentialId, {}) : null;
-  let cloudPasskeyReady = !missingCloudLinks.length && (!setup || setup.adminKeyReady);
-  const validatedCloudEnvelopes = [];
-  if ((cloudLinks.results || []).length) {
-    const clientEnvelope = await env.DB.prepare("SELECT public_key_jwk FROM security_tcloud_client_vaults WHERE identity_id = ? AND credential_id = ?").bind(identityId, credential?.credential_id || "").first();
-    if (clientEnvelope && missingCloudLinks.length && Array.isArray(body.cloudEnvelopes) && body.cloudEnvelopes.length) {
-      const delegated = body.cloudEnvelopes;
-      for (const link of missingCloudLinks) {
-        const envelope = delegated.find((item) => item.serviceLinkId === link.id);
-        if (!envelope?.wrappedKey) throw new HttpError(400, "T-Cloudフォルダ鍵の安全な委譲が完了していません。");
-        const wrappedKey = normalizeSecretText(envelope.wrappedKey, 12000);
-        if (!wrappedKey) throw new HttpError(400, "T-Cloudフォルダ鍵の安全な委譲を確認できません。");
-        validatedCloudEnvelopes.push({ linkId: link.id, wrappedKey });
-      }
-      cloudPasskeyReady = !setup || setup.adminKeyReady;
+  if (identityId === PRIMARY_ADMIN_ID && credential.status === "pending" && !credential.registered_via_invitation_id) {
+    throw new HttpError(409, "管理者パスワードで開始した復旧登録は、復旧画面で鍵の準備を完了してください。");
+  }
+  requireFreshSecurityAdmin(admin);
+  const links = (await env.DB.prepare(`SELECT id, service, service_account_id, cloud_root_folder_id, status
+    FROM security_service_links WHERE identity_id = ? ORDER BY id`).bind(identityId).all()).results;
+  const linkHash = await serviceLinkHashFromLinks(links);
+  if (credential.status === "pending" && credential.registered_via_invitation_id) {
+    const invitation = await env.DB.prepare("SELECT link_set_hash FROM security_invitations WHERE id = ? AND status = 'used'")
+      .bind(credential.registered_via_invitation_id).first();
+    if (!invitation || invitation.link_set_hash !== linkHash) {
+      throw new HttpError(409, "招待後に連携内容が変更されました。現在の連携と登録を確認してください。");
     }
   }
-  const updates = [
-    ...validatedCloudEnvelopes.map((envelope) => env.DB.prepare(`INSERT INTO security_tcloud_key_envelopes
-      (id, identity_id, credential_id, service_link_id, envelope_type, wrapped_key)
-      VALUES (?, ?, ?, ?, 'folder_key_rsa', ?)
-      ON CONFLICT(credential_id, service_link_id, envelope_type) DO UPDATE SET
-        wrapped_key = excluded.wrapped_key, updated_at = CURRENT_TIMESTAMP`)
-      .bind(crypto.randomUUID(), identityId, credential.credential_id, envelope.linkId, envelope.wrappedKey)),
-    env.DB.prepare("UPDATE security_credentials SET status = 'active', approved_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND credential_id = ? AND status = 'pending'").bind(identityId, credentialId),
-    env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service NOT IN ('cloud', 'health', 'ai', 'downloader', 'downloader2')").bind(identityId),
-    env.DB.prepare("UPDATE security_identities SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ?").bind(identityId)
-  ];
-  if (!missingCloudLinks.length || validatedCloudEnvelopes.length === missingCloudLinks.length) {
-    updates.push(env.DB.prepare("UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE identity_id = ? AND status = 'pending' AND service = 'cloud' AND service_account_id = 'folder-member'").bind(identityId));
+  return { ...credential, links, linkHash };
+}
+
+async function approvalCloudKeys(env, identityId, credentialId, admin) {
+  const links = (await env.DB.prepare(`SELECT l.id, l.service_account_id AS accountId, l.cloud_root_folder_id AS rootFolderId
+    FROM security_service_links l WHERE l.identity_id = ? AND ${CLOUD_PREPARATION_LINK}
+    AND NOT EXISTS (SELECT 1 FROM security_tcloud_key_envelopes e
+      WHERE e.identity_id = l.identity_id AND e.credential_id = ? AND e.service_link_id = l.id
+        AND e.envelope_type = CASE l.service_account_id WHEN 'admin' THEN 'admin_private_prf' ELSE 'folder_key_rsa' END)
+    ORDER BY l.id`).bind(identityId, credentialId).all()).results;
+  if (!links.length) return null;
+  const config = await env.CLOUD_AUTH.getPrimaryAdminCryptoConfig();
+  if (!config?.initialized || !config.publicKeyJwk) throw new HttpError(409, "T-Cloudの管理鍵を確認できません。");
+  const adminFingerprint = await sha256(canonicalJwk(config.publicKeyJwk));
+  const delivered = await env.DB.prepare(`SELECT t.service_link_id FROM security_tcloud_admin_key_transfers t
+    JOIN security_credentials source ON source.credential_id=t.source_credential_id AND source.identity_id=t.identity_id
+    WHERE t.identity_id=? AND t.credential_id=? AND t.admin_key_fingerprint=?
+      AND t.transfer_ciphertext IS NOT NULL AND source.status='active'`)
+    .bind(identityId, credentialId, adminFingerprint).first();
+  const missing = links.filter(link => link.accountId !== "admin" || link.id !== delivered?.service_link_id);
+  if (!missing.length) return { adminFingerprint, targets: [] };
+  const envelope = await env.DB.prepare(`SELECT encrypted_payload AS encryptedPayload, payload_iv AS payloadIv
+    FROM security_tcloud_key_envelopes own WHERE own.credential_id = ?1 AND own.identity_id = ?2
+    AND own.envelope_type = 'admin_private_prf' AND ${CLOUD_KEY_SENDER}`)
+    .bind(admin.credentialId, admin.identityId).first();
+  if (!envelope) throw new HttpError(409, "T-Cloudの管理鍵を持つ既存の第一管理者パスキーで本人確認してください。");
+  const targets = await Promise.all(missing.map(async link => {
+    const recipient = link.accountId === "admin"
+      ? await env.DB.prepare(`SELECT public_key_jwk, public_key_fingerprint FROM security_tcloud_admin_key_transfers
+        WHERE identity_id = ? AND credential_id = ? AND service_link_id = ?`).bind(identityId, credentialId, link.id).first()
+      : await env.DB.prepare(`SELECT public_key_jwk, public_key_fingerprint FROM security_tcloud_client_vaults
+        WHERE identity_id = ? AND credential_id = ?`).bind(identityId, credentialId).first();
+    if (!recipient) throw new HttpError(409, "T-Cloudの受取鍵が未準備です。本人の登録画面またはT-Cloudでの本人確認を完了してください。");
+    const folder = link.accountId === "folder-member" ? await env.CLOUD_AUTH.getFolderCryptoRecord(link.rootFolderId) : null;
+    if (link.accountId === "folder-member" && !folder) throw new HttpError(409, "許可されたT-Cloudフォルダを確認できません。");
+    return { ...link, folder, publicKey: JSON.parse(recipient.public_key_jwk), recipientFingerprint: recipient.public_key_fingerprint };
+  }));
+  return { adminFingerprint, envelope, targets };
+}
+
+async function householdApprovalRpc(env, action, input) {
+  const result = await env.HOUSEHOLD_AUTH.cryptoKeys(action, input);
+  if (!result || result.error) throw new HttpError(result?.status || 503, "家計簿の対象アカウントと鍵の状態を確認できません。");
+  return result;
+}
+
+async function householdApprovalTargets(env, identityId, credentialId) {
+  const { results: links } = await env.DB.prepare(`SELECT id AS serviceLinkId, service_account_id AS serviceAccountId
+    FROM security_service_links WHERE identity_id=? AND service='household' AND status IN ('active','pending')`)
+    .bind(identityId).all();
+  return Promise.all(links.map(async link => {
+    const target = { ...link, identityId, credentialId };
+    return { ...target, ...await householdApprovalRpc(env, "approval", target) };
+  }));
+}
+
+async function approvalHouseholdKeys(env, identityId, credentialId, admin) {
+  const targets = (await householdApprovalTargets(env, identityId, credentialId)).filter(link => !link.ready);
+  if (!targets.length) return [];
+  const links = await activeLinks(env, admin.identityId, "household", admin.credentialId);
+  const sources = await Promise.all(links.map(async link => {
+    const scope = await env.HOUSEHOLD_AUTH.describeKeyScope({ serviceAccountId: link.service_account_id });
+    if (scope?.role !== "owner" || !targets.some(target => target.householdId === scope.householdId)) return null;
+    return householdApprovalRpc(env, "approval-source", { ...admin, serviceAccountId: link.service_account_id, serviceLinkId: link.id });
+  }));
+  return targets.map(target => {
+    if (!target.recipientPublicKey) {
+      throw new HttpError(409, "家計簿の受取鍵が未準備です。本人の登録画面または家計簿での本人確認を完了してください。");
+    }
+    const source = sources.find(item => item?.householdId === target.householdId && item.bundle?.keyId === target.keyId);
+    if (!source) throw new HttpError(409, "対象世帯の鍵を持つ家計簿所有者のパスキーで承認してください。");
+    return { ...target, source: source.bundle };
+  });
+}
+
+async function billingApprovalTargets(env, identityId, credentialId) {
+  const { results: links } = await env.DB.prepare(`SELECT id AS serviceLinkId, service_account_id AS serviceAccountId
+    FROM security_service_links WHERE identity_id=? AND service='billing' AND status IN ('active','pending')`)
+    .bind(identityId).all();
+  const targets = await Promise.all(links.map(async link => {
+    const target = { ...link, identityId, credentialId };
+    const state = await env.BILLING_AUTH.approvalKeys(target);
+    if (!state || state.error) throw new HttpError(409, "請求書の対象台帳を確認できません。");
+    if (!state.active) return null;
+    const vault = await billingApprovalVault(env, { ...target, primaryOwner: state.primaryOwner });
+    const ready = Boolean(vault?.recipient && (!state.primaryOwner || vault.writer)
+      && state.ledgers.every(ledger => ledger.grants.length));
+    return { ...target, ...state, ready, vault };
+  }));
+  return targets.filter(Boolean);
+}
+
+async function approvalBillingKeys(env, identityId, credentialId, admin) {
+  const targets = (await billingApprovalTargets(env, identityId, credentialId)).filter(link => !link.ready);
+  if (!targets.length) return null;
+  if (targets.some(target => !target.vault?.recipient || (target.primaryOwner && !target.vault.writer))) {
+    throw new HttpError(409, "請求書の受取鍵が未準備です。本人の登録画面または請求書での本人確認を完了してください。");
   }
-  updates.push(await localAuditStatement(env, { eventType: "identity_approved", outcome: "success", identityId, authMethod: "passkey", details: { approvedBy: admin.identityId, tcloudPasskeyReady: cloudPasskeyReady } }, request));
-  await env.DB.batch(updates);
-  return json({ ok: true, tcloudPasskeyReady: cloudPasskeyReady });
+  const owner = (await activeLinks(env, admin.identityId, "billing", admin.credentialId))
+    .find(link => link.service_account_id === "owner");
+  if (!owner) throw new HttpError(403, "請求書の所有者による承認が必要です。");
+  const sourceActor = { ...admin, serviceLinkId: owner.id, serviceAccountId: "owner" };
+  const source = await env.BILLING_AUTH.approvalKeys(sourceActor);
+  const vault = await billingApprovalVault(env, { ...sourceActor, primaryOwner: true });
+  if (!source?.primaryOwner || !vault?.recipient) throw new HttpError(409, "台帳鍵を持つ請求書所有者のパスキーで本人確認してください。");
+  const scopes = new Map(source.ledgers.map(ledger => [ledger.ledgerId, ledger.grants.find(grant => grant.keySource === "billing")]));
+  const recipients = targets.map(target => {
+    const ledgers = target.ledgers.filter(ledger => !ledger.grants.length).map(ledger => {
+      const grant = scopes.get(ledger.ledgerId);
+      if (!grant || source.generation !== target.generation) throw new HttpError(409, "請求書の現在の台帳鍵が既存のパスキーで開けることを確認してください。");
+      return { ledgerId: ledger.ledgerId, generation: ledger.generation, grant };
+    });
+    return { identityId, credentialId, serviceLinkId: target.serviceLinkId, serviceAccountId: target.serviceAccountId,
+      generation: target.generation, publicKey: target.vault.recipient.publicKey, ledgers };
+  });
+  return { vault: { recipient: vault.recipient }, recipients };
+}
+
+async function prepareIdentityApproval(identityId, request, env, admin) {
+  const body = await readJson(request, 4096);
+  const credentialId = validCredentialId(body.credentialId);
+  const { linkHash } = await approvalCredential(env, identityId, credentialId, admin);
+  const targets = (await diaryApprovalTargets(env, identityId, credentialId)).filter(link => !link.grantGeneration);
+  if (targets.some(link => !link.recipientId)) throw new HttpError(409, "日記の受取鍵が未準備です。本人の登録画面または日記での本人確認を完了してください。");
+  const diary = targets.length
+    ? await (await diaryApprovalOperation("/admin", request.url, env, admin, { identityId, credentialId })).json()
+    : null;
+  return json({ linkHash, diary, cloud: await approvalCloudKeys(env, identityId, credentialId, admin),
+    household: await approvalHouseholdKeys(env, identityId, credentialId, admin),
+    billing: await approvalBillingKeys(env, identityId, credentialId, admin) });
+}
+
+async function approveIdentity(identityId, request, env, admin) {
+  const body = await readJson(request, 4_200_000);
+  const credentialId = validCredentialId(body.credentialId);
+  const credential = await approvalCredential(env, identityId, credentialId, admin);
+  const cloud = await approvalCloudKeys(env, identityId, credentialId, admin);
+  const cloudStatements = [];
+  for (const target of cloud?.targets || []) {
+    const packet = Array.isArray(body.cloudEnvelopes) && body.cloudEnvelopes.find(item => item.linkId === target.id);
+    if (!packet || packet.recipientFingerprint !== target.recipientFingerprint || packet.adminFingerprint !== cloud.adminFingerprint) {
+      throw new HttpError(409, "T-Cloudの受取鍵または管理鍵が変わりました。もう一度承認してください。");
+    }
+    if (target.accountId === "admin") {
+      if (admin.credentialId === credentialId) throw new HttpError(403, "別の承認済み管理者パスキーが必要です。");
+      cloudStatements.push(env.DB.prepare(`UPDATE security_tcloud_admin_key_transfers
+        SET source_credential_id = ?1, admin_key_fingerprint = ?6, transfer_ciphertext = ?7, transfer_iv = ?8, transfer_wrapped_key = ?9
+        WHERE credential_id = ?3 AND identity_id = ?2 AND service_link_id = ?4 AND public_key_fingerprint = ?5
+          AND ${CLOUD_KEY_SENDER}`).bind(admin.credentialId, identityId, credentialId, target.id, target.recipientFingerprint,
+        cloud.adminFingerprint, cloudPreparationBytes(packet.ciphertext, 15000), cloudPreparationBytes(packet.iv, 16, 16),
+        cloudPreparationBytes(packet.wrappedKey, 1024)));
+    } else {
+      cloudStatements.push(env.DB.prepare(`INSERT INTO security_tcloud_key_envelopes
+        (id, identity_id, credential_id, service_link_id, envelope_type, wrapped_key)
+        SELECT ?3, l.identity_id, c.credential_id, l.id, 'folder_key_rsa', ?4
+        FROM security_service_links l JOIN security_credentials c ON c.identity_id = l.identity_id
+        JOIN security_tcloud_client_vaults v ON v.credential_id = c.credential_id AND v.identity_id = c.identity_id
+        WHERE l.id = ?5 AND c.credential_id = ?6 AND c.status IN ('pending','active') AND ${CLOUD_PREPARATION_LINK}
+          AND l.cloud_root_folder_id = ?7 AND v.public_key_fingerprint = ?8 AND ${CLOUD_KEY_SENDER}
+        ON CONFLICT(credential_id, service_link_id, envelope_type) DO NOTHING`).bind(
+        admin.credentialId, admin.identityId, crypto.randomUUID(), cloudPreparationBytes(packet.wrappedKey, 1024),
+        target.id, credentialId, target.rootFolderId, target.recipientFingerprint));
+    }
+  }
+  const pendingLinks = credential.links.some(link => link.status === "pending" && Object.hasOwn(SERVICE_REGISTRY, link.service));
+  const diaryTargets = (await diaryApprovalTargets(env, identityId, credentialId)).filter(link => !link.grantGeneration);
+  const householdTargets = await approvalHouseholdKeys(env, identityId, credentialId, admin);
+  const billing = await approvalBillingKeys(env, identityId, credentialId, admin);
+  if (credential.status === "active" && !pendingLinks && !cloud?.targets.length && !diaryTargets.length && !householdTargets.length && !billing) {
+    return json({ ok: true, alreadyApproved: true });
+  }
+  if (body.linkHash !== credential.linkHash) {
+    throw new HttpError(409, "連携内容が変更されました。現在の内容を確認してもう一度承認してください。");
+  }
+  const audit = await localAuditEvent(env, { eventType: "identity_approved", outcome: "success", identityId,
+    authMethod: "passkey", details: { approvedBy: admin.identityId, tcloudPasskeyReady: true } }, request);
+  if (diaryTargets.length && (!body.diaryConfiguration || diaryTargets.some(link => !link.recipientId))) {
+    throw new HttpError(409, "日記の鍵の引き渡しが完了していません。");
+  }
+  for (const target of householdTargets) {
+    const packet = Array.isArray(body.householdEnvelopes)
+      && body.householdEnvelopes.find(item => item.linkId === target.serviceLinkId);
+    if (!packet || packet.keyId !== target.keyId) throw new HttpError(409, "家計簿の鍵の状態が変わりました。もう一度承認してください。");
+    await householdApprovalRpc(env, "approval-grant", {
+      identityId, credentialId, serviceLinkId: target.serviceLinkId, serviceAccountId: target.serviceAccountId,
+      keyId: target.keyId, wrappedKey: packet.wrappedKey
+    });
+  }
+  for (const target of billing?.recipients || []) {
+    const packet = Array.isArray(body.billingEnvelopes) && body.billingEnvelopes.find(item => item.linkId === target.serviceLinkId);
+    const saved = packet && await env.BILLING_AUTH.approvalKeys(target, packet.ledgers);
+    if (!saved?.active || !saved.ready) throw new HttpError(409, "請求書の台帳鍵の状態が変わりました。もう一度承認してください。");
+  }
+  const lease = diaryTargets.length ? await env.DIARY_AUTH.reservePasskeyApproval(audit.eventId).catch(() => {
+    throw new HttpError(409, "日記のデータ更新が進行中です。時間を置いて承認を再開してください。");
+  }) : null;
+  try {
+    const diary = lease ? await diaryApprovalOperation("/config", request.url, env, admin,
+      { identityId, credentialId, links: diaryTargets, eventId: audit.eventId }, body.diaryConfiguration) : null;
+    return await commitIdentityApproval(env, { identityId, credentialId, credential, cloud, cloudStatements, admin, audit, diary, lease });
+  } finally {
+    if (lease) await env.DIARY_AUTH.releasePasskeyApproval(audit.eventId).catch(() => {});
+  }
+}
+
+async function commitIdentityApproval(env, { identityId, credentialId, credential, cloud, cloudStatements, admin, audit, diary, lease }) {
+  requireFreshSecurityAdmin(admin);
+  if (lease && Date.now() >= lease.expiresAt - 5000) {
+    throw new HttpError(409, "日記の鍵を照合する時間が切れました。もう一度承認してください。");
+  }
+  const ready = `NOT EXISTS (SELECT 1 FROM security_service_links l WHERE l.identity_id = ?2 AND ${CLOUD_PREPARATION_LINK}
+    AND NOT EXISTS (SELECT 1 FROM security_tcloud_key_envelopes e WHERE e.identity_id = ?2 AND e.credential_id = ?1
+      AND e.service_link_id = l.id AND e.envelope_type = CASE l.service_account_id WHEN 'admin' THEN 'admin_private_prf' ELSE 'folder_key_rsa' END)
+    AND NOT EXISTS (SELECT 1 FROM security_tcloud_admin_key_transfers t JOIN security_credentials source
+      ON source.credential_id = t.source_credential_id AND source.identity_id = ?2 AND source.status = 'active'
+      WHERE l.service_account_id = 'admin' AND t.identity_id = ?2 AND t.credential_id = ?1 AND t.service_link_id = l.id
+        AND t.admin_key_fingerprint = ?3 AND t.transfer_ciphertext IS NOT NULL))`;
+  const updates = [
+    ...cloudStatements,
+    env.DB.prepare(`UPDATE security_credentials SET status = 'active', approved_at = COALESCE(approved_at, CURRENT_TIMESTAMP)
+      WHERE credential_id = ?1 AND identity_id = ?2 AND status = ?6 AND ${ready}
+        AND EXISTS (SELECT 1 FROM security_identities WHERE id = ?2 AND status IN ('pending_approval','active'))
+        AND EXISTS (SELECT 1 FROM security_credentials approver JOIN security_identities owner ON owner.id = approver.identity_id
+          WHERE approver.credential_id = ?4 AND owner.id = 'primary-admin' AND approver.status = 'active'
+            AND owner.status = 'active' AND owner.is_security_admin = 1)
+        AND (SELECT count(*) FROM security_service_links WHERE identity_id = ?2) = json_array_length(?5)
+        AND NOT EXISTS (SELECT 1 FROM json_each(?5) expected
+          WHERE NOT EXISTS (SELECT 1 FROM security_service_links l WHERE l.identity_id = ?2
+            AND l.id = json_extract(expected.value, '$.id') AND l.service = json_extract(expected.value, '$.service')
+            AND l.service_account_id = json_extract(expected.value, '$.service_account_id')
+            AND l.cloud_root_folder_id IS json_extract(expected.value, '$.cloud_root_folder_id')
+            AND l.status = json_extract(expected.value, '$.status')))
+        ${diary ? "AND COALESCE((SELECT generation FROM security_diary_key_config WHERE id=1),0)=?7 AND unixepoch()*1000<?8" : ""}`)
+      .bind(credentialId, identityId, cloud?.adminFingerprint || null, admin.credentialId, JSON.stringify(credential.links), credential.status,
+        ...(diary ? [diary.expectedGeneration, lease.expiresAt] : []))
+  ];
+  // changes() is evaluated inside the same D1 batch. A lost guard must not
+  // activate links or emit a successful approval audit.
+  updates.push(auditInsertStatement(env, audit, { sql: "changes() = 1" }));
+  if (diary) updates.push(...diary.statements);
+  updates.push(env.DB.prepare(`UPDATE security_identities SET status = 'active', updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND EXISTS (SELECT 1 FROM security_audit_events WHERE event_id = ?)`).bind(identityId, audit.eventId));
+  updates.push(env.DB.prepare(`UPDATE security_service_links SET status = 'active', updated_at = CURRENT_TIMESTAMP
+    WHERE identity_id = ? AND EXISTS (SELECT 1 FROM security_audit_events WHERE event_id = ?) AND status = 'pending'
+      AND service NOT IN ('health','ai','downloader','downloader2')
+      AND (service != 'cloud' OR service_account_id = 'folder-member')`).bind(identityId, audit.eventId));
+  const saved = await env.DB.batch(updates);
+  if (!saved[cloudStatements.length].meta?.changes) {
+    throw new HttpError(409, "承認中にパスキーまたは鍵の状態が変わりました。もう一度確認してください。");
+  }
+  return json({ ok: true, tcloudPasskeyReady: true });
 }
 
 async function disableIdentity(identityId, request, env, admin) {

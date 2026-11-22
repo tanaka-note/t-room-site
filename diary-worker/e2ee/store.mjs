@@ -11,7 +11,7 @@ import {
   trashScope,
   retentionIds,
 } from "./policy.mjs";
-import { writeLease,leaseSQL } from "./rollout.mjs";
+import { writeLease,leaseSQL,leaseBindings } from "./rollout.mjs";
 import { verifyRecord } from "./record.mjs";
 const fail = (message, status = 409) => {
   throw Object.assign(new Error(message), { status });
@@ -102,7 +102,7 @@ export function createStore(db, registry) {
   async function mutation(actor, proposal, operation = "save") {
     validate(proposal);
     const lease=registry.enforceRollout?await writeLease(db,operation):null;
-    const rolloutGuard=leaseSQL(lease),rolloutBindings=lease?[lease.generation]:[];
+    const rolloutGuard=leaseSQL(lease),rolloutBindings=leaseBindings(lease);
     assertActor(actor, proposal.household);
     owner(proposal.household);
     const fingerprint = b64(
@@ -417,7 +417,7 @@ export function createStore(db, registry) {
     const { id, household, revision, requestId } = proposal;
     assertActor(actor, household);
     const lease=registry.enforceRollout?await writeLease(db):null;
-    const rolloutGuard=leaseSQL(lease),rolloutBindings=lease?[lease.generation]:[];
+    const rolloutGuard=leaseSQL(lease),rolloutBindings=leaseBindings(lease);
     if (
       Object.keys(proposal).sort().join(",") !==
         "household,id,requestId,revision" ||

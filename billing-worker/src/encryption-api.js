@@ -124,6 +124,36 @@ async function pendingBillingGrants(env, state, actor, HttpError) {
   });
 }
 
+export async function billingApprovalKeys(env, input, packets) {
+  if (!await env.DB.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='billing_encryption_migration'").first()) {
+    return { active: false };
+  }
+  const state = await billingMigrationState(env.DB);
+  if (!state?.activated_at) return { active: false };
+  const account = await env.DB.prepare('SELECT id,role FROM billing_accounts WHERE id=? AND is_active=1').bind(input.serviceAccountId).first();
+  if (!account) return { error: true };
+  const primaryOwner = account.id === 'owner' && account.role === 'owner' && input.identityId === 'primary-admin';
+  const ledgers = await listScopes(env.DB, state.generation, { ...input, accountId: account.id }, primaryOwner);
+  if (packets === undefined) return { active: true, generation: state.generation, primaryOwner, ledgers };
+  const missing = ledgers.filter(ledger => !ledger.grants.length);
+  if (!Array.isArray(packets) || packets.length !== missing.length) return { error: true };
+  const statements = [];
+  for (const { ledgerId } of missing) {
+    const packet = packets.find(item => item.ledgerId === ledgerId);
+    if (!packet || packet.generation !== state.generation || !wrappedKey.test(packet.wrappedKey)) return { error: true };
+    statements.push(env.DB.prepare(`INSERT INTO billing_encryption_grants
+      (generation,ledger_id,identity_id,credential_id,service_link_id,key_source,wrapped_key)
+      SELECT ?1,?2,?3,?4,?5,'billing',?6 WHERE EXISTS (
+        SELECT 1 FROM billing_encryption_migration WHERE generation=?1 AND activated_at IS NOT NULL)
+      AND EXISTS (SELECT 1 FROM billing_accounts WHERE id=?7 AND is_active=1 AND role=?8)
+      ON CONFLICT DO NOTHING`).bind(state.generation,ledgerId,input.identityId,input.credentialId,input.serviceLinkId,
+      packet.wrappedKey,account.id,account.role));
+  }
+  if (statements.length) await env.DB.batch(statements);
+  const saved = await listScopes(env.DB, state.generation, { ...input, accountId: account.id }, primaryOwner);
+  return { active: true, ready: saved.every(ledger => ledger.grants.length) && (await billingMigrationState(env.DB))?.generation === state.generation };
+}
+
 async function saveGrants(env, state, actor, ledgerId, grants, HttpError) {
   if (!Array.isArray(grants) || grants.length > 500) throw new HttpError(400, "鍵の配布先を確認してください。");
   const ledger = await env.DB.prepare("SELECT account_id FROM billing_encryption_candidate_ledgers WHERE generation=? AND ledger_id=?")

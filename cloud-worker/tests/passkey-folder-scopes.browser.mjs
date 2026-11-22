@@ -70,10 +70,11 @@ try {
       };
     });
     await page.getByRole("button", { name: "パスキーでログイン", exact: true }).click();
-    const checkKeys = page.getByRole("button", { name: "鍵の受け取りを確認", exact: true });
+    const checkKeys = page.getByRole("button", { name: "利用準備を再確認", exact: true });
     await checkKeys.waitFor();
     await page.locator("#login-passkey-status").waitFor();
-    assert.match(await page.locator("#login-passkey-status").textContent(), /ログイン済み.*管理者/);
+    assert.match(await page.locator("#login-passkey-status").textContent(), /本人確認が完了.*利用準備を管理者が確認/);
+    assert.equal(await page.locator("#login-view .tlain-login-guidance").isVisible(), false);
     await checkKeys.click();
     await page.waitForFunction(() => !document.querySelector("#passkey-login").disabled);
     assert.deepEqual(await page.evaluate(() => [__passkeyCalls, __keyStatusChecks, __fixturePrf.every(value => value === 0)]), [1, 2, true]);

@@ -26,7 +26,18 @@ const exact = (value, keys) =>
   typeof value === "object" &&
   !Array.isArray(value) &&
   Object.keys(value).sort().join(",") === [...keys].sort().join(",");
-export async function validateKeyMetadata({ vaults, grants, recordGrants = {}, recoveryEnvelope }, directory, anchor = null) {
+export async function validateKeyMetadata({ vaults, grants, recordGrants = {}, recoveryEnvelope, delegation }, directory, anchor = null) {
+  if (Boolean(directory.delegationPublicKey) !== Boolean(delegation)) throw new Error("InvalidKeyMetadata");
+  if (delegation) {
+    const value = anchor ? await verifySigned(delegation, anchor) : delegation.value;
+    const recipients = Object.keys(value?.wrapped || {});
+    if (!exact(delegation, ["value", "signature"]) || !exact(value, ["generation", "envelope", "wrapped", "legacyDigest"])
+      || unb64(value.legacyDigest, 43).length !== 32
+      || value.generation !== directory.generation || !recipients.length || recipients.some(id =>
+        unb64(value.wrapped[id], 512).length !== 384 || !directory.members.some(member =>
+          member.credentialId === id && member.identityId === "primary-admin" && member.active !== false))) throw new Error("InvalidKeyMetadata");
+    validateEnvelope(value.envelope);
+  }
   for (const vault of Object.values(vaults || {})) {
     if (
       !exact(vault, ["publicKey", "signPublicKey", "privateEnvelope",...(Object.hasOwn(vault,'trust')?['trust']:[])]) ||
@@ -99,9 +110,9 @@ export async function validateKeyMetadata({ vaults, grants, recordGrants = {}, r
 // Ciphertext and public/PRF-sealed key metadata only. Actor/session state is excluded.
 export async function backup(
   db,
-  { directory, vaults, grants, recordGrants = {}, recoveryEnvelope = null },
+  { directory, vaults, grants, recordGrants = {}, recoveryEnvelope = null, delegation },
 ) {
-  await validateKeyMetadata({ vaults, grants, recordGrants, recoveryEnvelope }, directory.value);
+  await validateKeyMetadata({ vaults, grants, recordGrants, recoveryEnvelope, delegation }, directory.value);
   const snapshots = await db.batch(
     TABLES.map((name) =>
       db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).bind(),
@@ -118,6 +129,7 @@ export async function backup(
     grants,
     recordGrants,
     recoveryEnvelope,
+    ...(delegation ? { delegation } : {}),
     tables,
   };
   if (encode(value).length > 100_000_000)

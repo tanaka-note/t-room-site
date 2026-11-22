@@ -3,7 +3,7 @@ import {test,before,after} from 'node:test';
 import {systemFixture} from '../../diary-worker/tests/e2ee/system-fixture.mjs';
 import {createVault} from '../../diary-worker/e2ee/crypto.mjs';
 import {prepareKeyConfiguration} from '../../diary-worker/e2ee/setup.mjs';
-import {diaryKeyBundle,diaryRecipientId,handleDiaryKeys} from '../src/diary-keys.js';
+import {diaryApprovalTargets,diaryKeyBundle,diaryRecipientId,handleDiaryKeys} from '../src/diary-keys.js';
 
 let f;
 before(async()=>{
@@ -25,12 +25,50 @@ before(async()=>{
 });
 after(async()=>{await f?.close();});
 
-function central(path,body,actor=f.users['main-admin']) {
+function central(path,body,actor=f.users['main-admin'],approval) {
   return handleDiaryKeys('/api/diary'+path,new Request('https://fixture.test/security/api/diary'+path,{
     method:body===undefined?'GET':'POST',...(body===undefined?{}:{body:JSON.stringify(body)})
-  }),f.centralEnv,{...actor,authenticatedAt:Date.now()/1000},f.helpers);
+  }),f.centralEnv,{...actor,authenticatedAt:Date.now()/1000},{...f.helpers,approval});
 }
 const bundle=(account='main-user')=>diaryKeyBundle(f.centralEnv,f.users[account]);
+
+test('Diary-only pending recipient receives signed grants only when approval commits',async()=>{
+  const {identityId,serviceLinkId,serviceAccountId}=f.users['wife-admin'];
+  const credentialId='diary-only-pending',recipientId=await diaryRecipientId(credentialId,serviceLinkId);
+  const target={identityId,credentialId,serviceLinkId,serviceAccountId};
+  const prf=crypto.getRandomValues(new Uint8Array(32));
+  const {sqlite}=f.central;
+  sqlite.prepare("INSERT INTO security_credentials(credential_id,identity_id,public_key,prf_salt,status,prf_enabled) VALUES(?,?,'fixture','salt','pending',1)").run(credentialId,identityId);
+  try {
+    assert.equal(sqlite.prepare("SELECT count(*) AS n FROM security_service_links WHERE identity_id=? AND service='cloud'").get(identityId).n,0);
+    const links=await diaryApprovalTargets(f.centralEnv,identityId,credentialId);
+    const vault=await createVault(prf,recipientId);
+    await central('/vault',{serviceLinkId,vault},target,{links,preparation:true});
+    const source=f.users['main-admin'],approval={identityId,credentialId,links,eventId:'fixture-diary-approval'};
+    const status=await (await central('/admin',undefined,source,approval)).json();
+    const configuration=await prepareKeyConfiguration({status,recoveryPrivateKey:f.recovery.privateKey,trustedAnchor:f.configuration.anchor});
+    const prepared=await central('/config',configuration,source,approval);
+    await f.central.batch(prepared.statements);
+    assert.equal(await diaryKeyBundle(f.centralEnv,target),null);
+    assert.equal((await bundle()).generation,f.configuration.directory.value.generation);
+    await f.central.batch([
+      f.central.prepare("UPDATE security_credentials SET status='active' WHERE credential_id=?").bind(credentialId),
+      f.central.prepare(`INSERT INTO security_audit_events(event_id,occurred_at,service,event_type,outcome,identity_id,auth_method,details_json)
+        VALUES(?,CURRENT_TIMESTAMP,'security','identity_approved','success',?,'passkey','{}')`).bind(approval.eventId,identityId),
+      ...prepared.statements
+    ]);
+    const result=await diaryKeyBundle(f.centralEnv,target);
+    assert.equal(result.recipientId,recipientId);
+    assert.ok(result.grants.length);
+    assert.equal(result.rekeyRequired,false);
+    f.central.sqlite.prepare('DELETE FROM security_diary_key_grants WHERE generation=?').run(configuration.directory.value.generation);
+    sqlite.prepare('UPDATE security_diary_key_config SET generation=?,directory_json=?,recovery_json=? WHERE id=1')
+      .run(f.configuration.directory.value.generation,JSON.stringify(f.configuration.directory),JSON.stringify(f.configuration.recoveryEnvelope));
+  } finally {
+    sqlite.prepare('DELETE FROM security_credentials WHERE credential_id=?').run(credentialId);
+    prf.fill(0);
+  }
+});
 async function ready(promise) {
   let timer;
   try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Permission checks did not progress')),3000);})]);}

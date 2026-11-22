@@ -93,7 +93,7 @@ try {
     assert.equal(await page.locator('#login-view input').count(), 0);
     assert.equal(await page.locator('#passkey-login').innerText(), 'パスキーでログイン');
     assert.equal(await page.locator('#passkey-login svg.passkey-icon').count(), 1);
-    assert.equal(await page.locator('#login-view a').getAttribute('href'), '/security/');
+    assert.equal(await page.locator('#login-view a').count(), 0);
     const layout = await page.evaluate(() => {
       const r = document.querySelector('#login-view .login-card').getBoundingClientRect();
       return {x:r.x+r.width/2,y:r.y+r.height/2,w:innerWidth,h:innerHeight,overflow:document.documentElement.scrollWidth > innerWidth};

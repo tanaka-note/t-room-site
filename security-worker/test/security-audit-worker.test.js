@@ -92,9 +92,13 @@ test("all service login and resume success paths await synchronous Security deli
   for (const relative of ["../../cloud-worker/src/index.js", "../../diary-worker/src/index.js", "../../billing-worker/src/index.js"]) {
     const source = await readFile(new URL(relative, import.meta.url), "utf8");
     assert.doesNotMatch(source, /eventType\s*:\s*["']password_login_success["']/);
+    const awaitedGroups = [...source.matchAll(/await\s+Promise\.all\(\[([\s\S]*?)\r?\n\s*\]\);/g)];
     for (const event of ["password_login_failure", "passkey_login_success", "session_resume"]) {
-      const synchronousAudit = new RegExp(`await\\s+recordSecurityAudit\\s*\\(\\s*env\\s*,\\s*request\\s*,\\s*\\{[^{}]*\\beventType\\s*:\\s*["']${event}["']`);
-      assert.match(source, synchronousAudit, `${relative}: ${event} must await Security delivery`);
+      const call = `recordSecurityAudit\\s*\\(\\s*env\\s*,\\s*request\\s*,\\s*\\{[^{}]*\\beventType\\s*:\\s*["']${event}["']`;
+      const direct = new RegExp(`await\\s+${call}`);
+      const grouped = new RegExp(`^\\s*${call}`,"m");
+      assert.ok(direct.test(source) || awaitedGroups.some(([, group]) => grouped.test(group)),
+        `${relative}: ${event} must await Security delivery`);
     }
   }
 });

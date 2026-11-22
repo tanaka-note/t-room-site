@@ -30,6 +30,29 @@ export async function prepareDiary() {
   const auth=await TRoomPasskeys.authenticate('diary',undefined,{handoff:false});
   try{await prepare(auth.prfOutput);return {prepared:true};}finally{auth.prfOutput?.fill(0);}
 }
+export async function prepareDiaryApproval(status, auth, identityId) {
+  if(!auth.prfOutput||!status.recoveryPublicKey||(!status.operator&&!status.adminEnvelope)) {
+    throw new Error('日記の既存鍵を解除できる管理者パスキーで本人確認してください。');
+  }
+  const own=await api('/own');
+  const trust=await authenticationTrust(auth,own);
+  const existingIds=new Set(status.config?.directory.value.members.map(member=>member.credentialId)||[]);
+  const members=status.members.filter(member=>member.identityId===identityId||existingIds.has(member.credentialId)
+    || (!status.config&&member.webAuthnCredentialId===auth.credentialId));
+  const operator=status.operator?{recipientId:status.operator.recipientId,
+    recipientKey:(await unlockVault(auth.prfOutput,status.operator.recipientId,status.operator.vault)).rsa}:null;
+  const privateKey=operator?null:await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput,status.adminEnvelope);
+  const recoveryRecords=[];
+  let after='';
+  if(status.config)do {
+    const page=await api('/recovery-records'+(after?'?after='+encodeURIComponent(after):''));
+    recoveryRecords.push(...page.records);
+    if(recoveryRecords.length>5000||page.nextCursor&&page.nextCursor<=after)throw new Error('日記の既存記録の鍵を確認できません。');
+    after=page.nextCursor;
+  }while(after);
+  return prepareKeyConfiguration({status:{...status,members},recoveryPrivateKey:privateKey,trustedAnchor:trust?.anchor,recoveryRecords,
+    enableDelegation:true,operator});
+}
 export async function importDiaryTrust(file) {
   if(!file||file.size>12000)throw new Error('信頼設定ファイルを確認してください。');
   const value=await validatePublicTrust(JSON.parse(await file.text()));
@@ -41,6 +64,11 @@ export async function configureDiary({identityId}={}) {
     auth=await TRoomPasskeys.authenticate('security');
     stage='VAULT';const own=await prepare(auth.prfOutput);
     stage='STATUS';const status=await api('/admin');
+    if(status.config?.delegation) {
+      const configuration=await prepareDiaryApproval(status,auth,identityId);
+      await api('/config',configuration);
+      return saveAuthenticationTrust(auth,own,await publicTrustPackage(configuration));
+    }
     const existingIds=new Set(status.config?.directory.value.members.map(m=>m.credentialId)||[]);status.members=status.members.filter(m=>m.identityId==='primary-admin'||m.identityId===identityId||existingIds.has(m.credentialId));
     if(!status.adminEnvelope||!status.recoveryPublicKey)throw new Error('既存の管理者パスキーのT-Cloud利用準備・復旧登録を先に完了してください。');
     stage='RECOVERY';const privateKey=await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput,status.adminEnvelope);
@@ -73,7 +101,7 @@ export async function prepareDiaryData({kind='migration',onProgress=()=>{}}={}) 
   if(!['migration','rotation'].includes(kind))throw new Error('移行する処理を確認してください。');
   const auth=await TRoomPasskeys.authenticate('security');let plans;
   try {
-    const status=await api('/admin');
+    const status=await api('/admin?recovery=1');
     if(!status.config)throw new Error('日記の管理者設定はまだ保存されていません。利用設定の状態を確認してください。');
     const trust=await authenticationTrust(auth,await prepare(auth.prfOutput));
     if(!auth.prfOutput||!status.adminEnvelope)throw new Error('日記のログインで使った、管理者復旧に対応するパスキーを選んでください。');
@@ -91,7 +119,7 @@ export async function prepareDiaryData({kind='migration',onProgress=()=>{}}={}) 
 export async function migrateDiary({kind='migration',onProgress=()=>{}}={}) {
   const auth=await TRoomPasskeys.authenticate('security');let plans;
   try {
-    const own=await prepare(auth.prfOutput),trust=await authenticationTrust(auth,own),status=await api('/admin');
+    const own=await prepare(auth.prfOutput),trust=await authenticationTrust(auth,own),status=await api('/admin?recovery=1');
     if(!status.config||!trust)throw new Error('日記の鍵設定を先に完了してください。');
     const privateKey=await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput,status.adminEnvelope);
     const maintenance=await import('/security/diary-crypto/e2ee/maintenance.mjs');plans=await maintenance.openMaintenancePlans();
@@ -129,7 +157,7 @@ export async function finishDiaryData(file) {
   const report=JSON.parse(await file.text()),auth=await TRoomPasskeys.authenticate('security');let plans;
   try {
     const trust=await authenticationTrust(auth,await prepare(auth.prfOutput));await validatePublicTrust(trust);
-    const status=await api('/admin');
+    const status=await api('/admin?recovery=1');
     const privateKey=await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput,status.adminEnvelope);
     const own=await api('/maintenance/signing-vault',{});
     const {unlockVault}=await import('/security/diary-crypto/e2ee/crypto.mjs');

@@ -66,31 +66,58 @@ function fixture({ legacy = false, bootstrap = false } = {}) {
     verifyAuthentication: async () => ({ verified: true, authenticationInfo: { userVerified: true, newCounter: 2 } }),
     securitySessionHeaders: async () => new Headers(), localAuditStatement: async () => ({ run: async () => ({}) }),
     passkeysEnabled: () => true, observePasskeyRuntime: async () => ({ enabled: true, epoch: 1 }), normalizeService: s => s,
-    diaryKeysEnabled: () => false, writeLocalAudit: async () => {},
+    SERVICE_REGISTRY: { cloud: {}, diary: {}, billing: {} }, diaryKeysEnabled: () => false, diaryApprovalTargets: async () => [],
+    serviceLinkHashFromLinks: async () => "links", writeLocalAudit: async () => {},
+    localAuditEvent: async (_env, event) => ({ ...event, eventId: crypto.randomUUID(), occurredAt: new Date().toISOString() }),
+    auditInsertStatement: (_env, event) => env.DB.prepare(`INSERT INTO security_audit_events
+      (event_id,occurred_at,service,event_type,outcome,identity_id,auth_method,details_json)
+      SELECT ?,?,'security',?,?,?,'passkey','{}' WHERE changes()=1`).bind(event.eventId, event.occurredAt, event.eventType, event.outcome, event.identityId),
     randomToken: () => crypto.randomUUID(), sha256: async s => createHash("sha256").update(s).digest("base64url"), publicLink: async (_env, link) => link,
     json: body => body, setupCookie: () => "fixture", prepareSetupSession: async () => ({ token: "fixture" }),
     insertSetupSessionStatement: () => ({ run: async () => ({}) }) };
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf("const CLOUD_PREPARATION_LINK"), source.indexOf("async function dashboard")), context);
-  for (const name of ["validatePublicJwk", "canonicalJwk", "saveCloudMemberVault", "requireFreshSecurityAdmin", "credentialForIdentity", "tcloudSetupStatus", "setupStatus", "resumeSetup", "prfVerify", "saveOwnTCloudEnvelope", "approveIdentity", "activeLinks", "tcloudEnvelopeBundle", "createHandoff"]) vm.runInContext(extract(name), context);
+  for (const name of ["validatePublicJwk", "canonicalJwk", "saveCloudMemberVault", "requireFreshSecurityAdmin", "credentialForIdentity",
+    "tcloudSetupStatus", "setupStatus", "resumeSetup", "prfVerify", "saveOwnTCloudEnvelope", "approvalCredential", "approvalCloudKeys",
+    "householdApprovalTargets", "approvalHouseholdKeys", "billingApprovalTargets", "approvalBillingKeys",
+    "prepareIdentityApproval", "approveIdentity", "commitIdentityApproval", "activeLinks", "tcloudEnvelopeBundle", "createHandoff"]) vm.runInContext(extract(name), context);
+  env.CLOUD_AUTH = { getPrimaryAdminCryptoConfig: async () => ({ initialized: true, publicKeyJwk: vault.publicKeyJwk }) };
+  env.BILLING_AUTH = { approvalKeys: async () => ({ active: false }) };
   const beforeA = db.prepare("SELECT * FROM security_credentials WHERE credential_id='credential-A'").get();
   const beforeEnvelopeA = db.prepare("SELECT * FROM security_tcloud_key_envelopes WHERE credential_id='credential-A'").get();
   return { db, env, context, actor, beforeA, beforeEnvelopeA,
     verify: available => context.prfVerify({ response: { id: actor.credentialId }, prfAvailable: available }, env, new URL("https://example.test/security/")),
     save: () => context.saveOwnTCloudEnvelope({ serviceLinkId: "cloud-admin", envelopeType: "admin_private_prf", ...envelopeB }, env),
-    approve: () => context.approveIdentity("primary-admin", { credentialId: "credential-B" }, env, freshAdmin) };
+    approve: (extra = {}) => context.approveIdentity("primary-admin", { credentialId: "credential-B", linkHash: "links", ...extra }, env, freshAdmin) };
 }
 
-test("new primary-admin B can be approved before Cloud key preparation and receives only its own envelope", async () => {
+test("primary-admin B remains pending until the existing admin has delivered the Cloud key during approval", async () => {
   const f = fixture(); try {
     f.context.freshAdmin.authenticatedAt -= 600;
     await assert.rejects(f.approve(), e => e.status === 428);
     f.context.freshAdmin.authenticatedAt += 600;
     await assert.rejects(f.context.createHandoff({ service: "cloud" }, f.env), e => e.status === 403);
-    assert.equal((await f.approve()).tcloudPasskeyReady, false);
+    await assert.rejects(f.approve(), { status: 409 });
+    const targetKeys = await TRoomCrypto.cloudPasskeyPreparation(prfB);
+    const receiver = await targetKeys.createReceiver();
+    await f.context.saveCloudAdminReceiver(f.env, f.actor, "cloud-admin", receiver, "pending");
+    assert.equal((await f.context.tcloudSetupStatus(f.env, f.actor.identityId, f.actor.credentialId, {})).adminReceiverReady, true);
+    await assert.rejects(f.approve(), { status: 409 });
+    assert.equal(f.db.prepare("SELECT status FROM security_credentials WHERE credential_id='credential-B'").get().status, "pending");
+    const { cloud } = await f.context.prepareIdentityApproval("primary-admin", { credentialId: "credential-B" }, f.env, f.context.freshAdmin);
+    const binding = { sourceCredentialId: "credential-A", targetCredentialId: "credential-B", linkId: "cloud-admin",
+      recipientFingerprint: cloud.targets[0].recipientFingerprint, adminFingerprint: cloud.adminFingerprint };
+    const sender = await TRoomCrypto.cloudPasskeyPreparation(prfA);
+    const packet = await sender.sendAdminKey(cloud.envelope, cloud.targets[0].publicKey, binding);
+    assert.equal((await f.approve({ cloudEnvelopes: [{ ...packet, ...binding }] })).tcloudPasskeyReady, true);
+    assert.equal((await f.approve()).alreadyApproved, true);
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM security_audit_events WHERE event_type='identity_approved'").get().count, 1);
     assert.equal((await f.context.createHandoff({ service: "diary" }, f.env)).link.service_account_id, "main-admin");
     await assert.rejects(f.context.createHandoff({ service: "cloud" }, f.env), e => e.status === 403);
-    await f.verify(true); await f.save();
+    const keys = await f.context.cloudKeyPreparation({ action: "status", credentialId: "credential-B" }, f.env);
+    const sealed = await targetKeys.receiveAdminKey(keys.receiver, keys.adminPublicKey, binding);
+    await f.context.cloudKeyPreparation({ action: "admin-accept", credentialId: "credential-B", ...sealed, ...binding,
+      transferCiphertext: keys.receiver.ciphertext }, f.env);
     assert.equal(f.db.prepare("SELECT status FROM security_credentials WHERE credential_id='credential-B'").get().status, "active");
     assert.deepEqual(f.db.prepare("SELECT * FROM security_credentials WHERE credential_id='credential-A'").get(), f.beforeA);
     assert.deepEqual(f.db.prepare("SELECT * FROM security_tcloud_key_envelopes WHERE credential_id='credential-A'").get(), f.beforeEnvelopeA);
@@ -103,7 +130,7 @@ test("new primary-admin B can be approved before Cloud key preparation and recei
       }
       const handoff = await f.context.createHandoff({ service: "cloud", linkId: "cloud-admin" }, f.env);
       assert.equal(handoff.link.service_account_id, "admin");
-      const expected = credentialId === "credential-A" ? envelopeA : envelopeB;
+      const expected = credentialId === "credential-A" ? envelopeA : sealed;
       assert.equal(handoff.tcloudKey.admin_private_prf.encryptedPayload, expected.encryptedPayload);
       const ownPrf = credentialId === "credential-A" ? prfA : prfB;
       const key = await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(ownPrf, handoff.tcloudKey.admin_private_prf);
@@ -129,7 +156,7 @@ test("Cloud preparation options include a newly approved key while legacy Cloud 
   const options = prepareCloudKeys => f.context.authenticationOptions({ service: "cloud", prepareCloudKeys }, f.env);
   try {
     assert.deepEqual(Array.from((await options(true)).options.allowCredentials, item => item.id), ["credential-A"]);
-    await f.approve();
+    f.db.exec("UPDATE security_credentials SET status='active' WHERE credential_id='credential-B'");
     assert.deepEqual(Array.from((await options(false)).options.allowCredentials, item => item.id), ["credential-A"]);
     const preparation = await options(true);
     assert.deepEqual(Array.from(preparation.options.allowCredentials, item => item.id), ["credential-A", "credential-B"]);
@@ -158,7 +185,7 @@ test("approved credentials receive only their own administrator or folder keys o
   const request = (action, args) => f.context.cloudKeyPreparation({ ...args, credentialId: f.actor.credentialId, action }, f.env);
   try {
     await assert.rejects(request("status"), { status: 403 });
-    await f.approve();
+    f.db.exec("UPDATE security_credentials SET status='active' WHERE credential_id='credential-B'");
     const waiting = await request("status");
     assert.equal(waiting.links.length, 0);
     assert.equal(waiting.adminEnvelope, null);

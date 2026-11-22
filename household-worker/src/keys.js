@@ -58,6 +58,17 @@ export async function manageKeys(db, action, input) {
     }
     return {householdId,config:await keyConfig(db,householdId),members};
   }
+  if(action==='approval') {
+    const recipient=await db.prepare('SELECT * FROM household_crypto_vaults WHERE credential_id=? AND identity_id=?')
+      .bind(input.credentialId,input.identityId).first();
+    const existing=await keyBundle(db,{...input,householdId});
+    return {householdId,ready:Boolean(existing),recipientPublicKey:recipient?vaultValue(recipient).publicKey:null,
+      keyId:(await keyConfig(db,householdId))?.keyId??null};
+  }
+  if(action==='approval-source') {
+    if(account.role!=='owner')fail(403,'家計簿の所有者による委譲が必要です。');
+    return {householdId,bundle:await keyBundle(db,{...input,householdId})};
+  }
   if(action==='initialize') {
     uuid(input.keyId);
     if(!b64(input.recoveryWrappedKey,512) || input.recoveryPublicKey?.kty!=='RSA' || input.recoveryPublicKey.d)fail(400,'復旧用の暗号鍵を確認してください。');
@@ -67,14 +78,20 @@ export async function manageKeys(db, action, input) {
     if(config.keyId!==input.keyId || config.recoveryWrappedKey!==input.recoveryWrappedKey || JSON.stringify(config.recoveryPublicKey)!==publicKey)fail(409,'家計の鍵は既に準備されています。');
     return {ok:true};
   }
-  if(action==='grant') {
+  if(action==='grant'||action==='approval-grant') {
     const config=await keyConfig(db,householdId);
     if(!config || config.keyId!==input.keyId || !b64(input.wrappedKey,512))fail(409,'委譲対象の鍵を確認してください。');
     const vault=await db.prepare('SELECT identity_id FROM household_crypto_vaults WHERE credential_id=?').bind(input.credentialId).first();
     if(vault?.identity_id!==input.identityId)fail(403,'利用者鍵の準備を先に完了してください。');
-    await db.prepare('INSERT OR IGNORE INTO household_crypto_grants VALUES(?,?,?,?,?)').bind(householdId,input.credentialId,input.identityId,input.serviceLinkId,input.wrappedKey).run();
+    await db.prepare(`INSERT OR IGNORE INTO household_crypto_grants
+      SELECT ?,?,?,?,? WHERE EXISTS (
+        SELECT 1 FROM household_accounts a JOIN household_crypto_config c ON c.household_id=a.household_id
+        WHERE a.id=? AND a.is_active=1 AND a.household_id=? AND c.key_id=?)
+      AND EXISTS (SELECT 1 FROM household_crypto_vaults WHERE credential_id=? AND identity_id=?)`)
+      .bind(householdId,input.credentialId,input.identityId,input.serviceLinkId,input.wrappedKey,
+        account.id,householdId,input.keyId,input.credentialId,input.identityId).run();
     const row=await db.prepare('SELECT identity_id,wrapped_key FROM household_crypto_grants WHERE household_id=? AND credential_id=? AND service_link_id=?').bind(householdId,input.credentialId,input.serviceLinkId).first();
-    if(row.identity_id!==input.identityId || row.wrapped_key!==input.wrappedKey)fail(409,'承認済みの鍵は置き換えられません。');
+    if(row?.identity_id!==input.identityId || (action==='grant'&&row.wrapped_key!==input.wrappedKey))fail(409,'承認済みの鍵は置き換えられません。');
     return {ok:true};
   }
   fail(404,'指定された操作が見つかりません。');

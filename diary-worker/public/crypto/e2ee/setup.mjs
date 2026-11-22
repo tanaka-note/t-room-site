@@ -1,7 +1,7 @@
-import { b64,encode,newKey,signingKey,signed,fingerprint,makeGrant,openRecipientKey,verifyDirectory,validatePublicKey } from './crypto.mjs';
+import { b64,encode,newKey,signingKey,signed,fingerprint,makeGrant,openRecipientKey,verifyDirectory,validatePublicKey,DELEGATION_RECIPIENT } from './crypto.mjs';
 import { bindingOf,verifyRecord } from './record.mjs';
 import { canRead,publishedScope,draftScope,preferencesScope,trashScope,scopeDefinition,investmentScope } from './policy.mjs';
-import { createRecoveryEnvelope,openRecoveryEnvelope } from './recovery.mjs';
+import { createRecoveryEnvelope,openRecoveryEnvelope,newDiaryDelegationKey,openDiaryDelegation,sealDiaryDelegation } from './recovery.mjs';
 
 export function scopeDefinitions(households,members,retainedScopes=[]) {
   const rows=new Map();
@@ -47,20 +47,34 @@ async function proveRecoveryKey(publicKey,privateKey) {
 // Returns only public certificates and ciphertext. All authority/scope/record
 // keys stay within this trusted-device operation. An existing anchor is pinned
 // separately; never bootstrap trust from an existing API configuration.
-export async function prepareKeyConfiguration({status,recoveryPrivateKey,trustedAnchor,recoveryRecords=[]}) {
-  await proveRecoveryKey(status.recoveryPublicKey,recoveryPrivateKey);
-  let authority,anchor,scopeKeys,previous;
+export async function prepareKeyConfiguration({status,recoveryPrivateKey,trustedAnchor,recoveryRecords=[],enableDelegation=false,operator}) {
+  let authority,anchor,scopeKeys,previous,delegation,legacyOpen;
+  const legacy=new Map();
   if(status.config) {
     if(!trustedAnchor)throw new Error('TrustedAnchorRequired');
     previous=await verifyDirectory(status.config.directory,trustedAnchor,status.config.generation);
     assertKnownRecipientKeys(previous,status.members);
     if(previous.members.some(old=>!status.members.some(m=>m.credentialId===old.credentialId&&m.canManageEntries===old.canManageEntries&&b64(encode(m.households))===b64(encode(old.households)))))throw new Error("RekeyRequired");
-    const restored=await openRecoveryEnvelope({packet:status.config.recoveryEnvelope,recoveryPrivateKey,anchor:trustedAnchor,minimumGeneration:previous.generation});
+    if(await fingerprint(status.recoveryPublicKey)!==previous.recoveryFingerprint)throw new Error('RecoveryKeyMismatch');
+    let restored;
+    if(previous.delegationPublicKey && operator) {
+      restored=await openDiaryDelegation({packet:status.config.delegation,directory:previous,anchor:trustedAnchor,...operator});
+      delegation=restored.delegation;
+      legacyOpen=restored.openLegacyRecord;
+    } else {
+      await proveRecoveryKey(status.recoveryPublicKey,recoveryPrivateKey);
+      restored=await openRecoveryEnvelope({packet:status.config.recoveryEnvelope,recoveryPrivateKey,anchor:trustedAnchor,minimumGeneration:previous.generation});
+      // Recovery of a lost delegator regenerates its key through the normal
+      // recovery rotation, which rewrites records under scope keys.
+      if(previous.delegationPublicKey)throw new Error('DiaryDelegationUnavailable');
+    }
     authority=restored.authority;scopeKeys=restored.scopeKeys;anchor=trustedAnchor;
   }else {
+    await proveRecoveryKey(status.recoveryPublicKey,recoveryPrivateKey);
     const pair=await signingKey();authority=pair.privateKey;anchor=await crypto.subtle.exportKey('jwk',pair.publicKey);scopeKeys=new Map();
   }
   try {
+    if(enableDelegation&&!delegation)delegation=await newDiaryDelegationKey();
     const candidates=new Map((previous?.members||[]).map(m=>[m.credentialId,m]));
     for(const member of status.members)candidates.set(member.credentialId,member);
     const definitions=scopeDefinitions(status.households,[...candidates.values(),...(status.scopeAccounts||[])],status.retainedScopes||[]);
@@ -78,16 +92,28 @@ export async function prepareKeyConfiguration({status,recoveryPrivateKey,trusted
     }
     const generation=(previous?.generation||0)+1;
     const directoryValue={protocol:'T-lain diary directory',version:1,generation,households:status.households,epochs,members,recoveryPublicKey:status.recoveryPublicKey,recoveryFingerprint:await fingerprint(status.recoveryPublicKey),recoveryAuthority:anchor};
+    if(delegation)directoryValue.delegationPublicKey=delegation.publicKey;
     const directory=await signed(directoryValue,authority),grants={},recordGrants={};
     for(const member of members){grants[member.credentialId]=[];recordGrants[member.credentialId]=[];for(const scope of member.scopes){const row=definitions.find(d=>d.scope===scope);grants[member.credentialId].push(await makeGrant(scopeKeys.get(scope),{household:row.household,scope,epoch:epochs[scope]},member,generation,authority));}}
     for(const row of recoveryRecords) {
       if(!previous)throw new Error('UnexpectedRecoveryRecord');
       await verifyRecord(row,previous);
-      const key=await openRecipientKey(row.keyBox,{...bindingOf(row),kind:'record-key'},'__recovery__',recoveryPrivateKey,{extractable:true});
+      const binding={...bindingOf(row),kind:'record-key'};
+      const delegated=Boolean(row.keyBox[DELEGATION_RECIPIENT]&&legacyOpen);
+      const key=delegated
+        ?await openRecipientKey(row.keyBox,binding,DELEGATION_RECIPIENT,delegation.privateKey,{extractable:true})
+        :legacyOpen?await legacyOpen(row):await openRecipientKey(row.keyBox,binding,'__recovery__',recoveryPrivateKey,{extractable:true});
+      if(delegation&&!delegated)legacy.set(row.id,{signature:row.attestation.signature,key});
       for(const member of members.filter(m=>m.scopes.includes(row.scope)&&!row.keyBox[m.credentialId]))recordGrants[member.credentialId].push(await makeGrant(key,{household:row.household,scope:row.scope,epoch:row.epoch,id:row.id,revision:row.revision,kind:'record'},member,generation,authority));
     }
     const recoveryEnvelope=await createRecoveryEnvelope({scopeKeys,authority,directory,anchor,recoveryPublicKey:status.recoveryPublicKey,expectedRecoveryFingerprint:directoryValue.recoveryFingerprint});
-    return {expectedGeneration:previous?.generation||0,anchor,directory,recoveryEnvelope,grants,recordGrants};
+    const configuration={expectedGeneration:previous?.generation||0,anchor,directory,recoveryEnvelope,grants,recordGrants};
+    if(delegation) {
+      const operators=status.members.filter(member=>member.identityId==='primary-admin'&&member.isGlobalOwner);
+      if(!operators.length)throw new Error('DiaryDelegationOwnerRequired');
+      configuration.delegation=await sealDiaryDelegation({directory:directoryValue,authority,scopeKeys,legacy,delegation,members:operators});
+    }
+    return configuration;
   }finally{scopeKeys.clear();authority=null;}
 }
 

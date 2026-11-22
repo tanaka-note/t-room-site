@@ -4,7 +4,7 @@ import { lineBrowserResponse } from "../../assets/line-browser-worker.mjs";
 import { validatePasswordSession } from "../../assets/password-auth-policy.mjs";
 import { accountDisplayName } from "../../assets/account-display.mjs";
 import { entryInput, monthBounds, normalizeAccountId, serializeEntry, serializeSettlement, settlementInput, summarizeSettlements } from "./finance.js";
-import { billingEncryptionApi } from "./encryption-api.js";
+import { billingApprovalKeys, billingEncryptionApi } from "./encryption-api.js";
 import { billingMigrationState } from "./migration-source.js";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { enqueueSecurityAudit, recordSecurityAudit, withPasswordLoginAudit, handlePasswordLoginClientAudit } from "../../assets/security-audit-worker.js";
@@ -18,6 +18,9 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 export class SecurityIntegration extends WorkerEntrypoint {
+  async approvalKeys(input, packets) {
+    return billingApprovalKeys(this.env, input, packets);
+  }
   async getSessionRuntimeState(input) {
     const account = await this.env.DB.prepare("SELECT session_version, is_active FROM billing_accounts WHERE id = ?")
       .bind(String(input?.serviceAccountId || "")).first();

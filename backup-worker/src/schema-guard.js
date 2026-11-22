@@ -1,6 +1,7 @@
 // Generated from checked-in migrations using Node SQLite; review alongside schema changes.
 import { digest } from './integrity.js';
 import { BILLING_ENCRYPTED_MIGRATION, SECURITY_BILLING_MIGRATION } from './billing-encrypted.js';
+import { SECURITY_TRANSFER_SUFFIX, SECURITY_TRANSFER_TABLE } from './registry.js';
 const EXPECTED = {
   "portfolio": "0f996aabee4cfcdec8a1ee2f5d5429b170727d19eba88351ec82577bdedc939a",
   "household": "2f7780c5512b5b1fbd610fc9860e4417832050d941773542871189032bfca10f",
@@ -30,8 +31,8 @@ export function reviewedSchemaMatches(service, baseline, actual) {
     (REVIEWED[service]?.[0] === baseline && REVIEWED[service][1] === actual));
 }
 export async function assertSchema(service, rows) {
-  // An unfinished delivery is recreated by the approved credential on login.
-  // Accept only the exact optional table, with no additional triggers/indexes.
+  // The optional delivery table contains only encrypted, credential-bound
+  // material. Accept its exact reviewed shape, independent of archive version.
   if (service === 'security') {
     const transfers = rows.filter(row => row.tbl_name === 'security_tcloud_admin_key_transfers');
     if (transfers.length) {
@@ -88,6 +89,10 @@ export async function assertEncryptedSchema(service,rows) {
   await assertSchema(service,rows.filter(row=>!encrypted(row)));
 }
 export async function assertArchiveSchema(service,migration,rows) {
+  if(service==='security'&&migration?.endsWith(SECURITY_TRANSFER_SUFFIX)) {
+    if(!rows.some(row=>row.name===SECURITY_TRANSFER_TABLE))throw new Error('SchemaReviewRequired');
+    migration=migration.slice(0,-SECURITY_TRANSFER_SUFFIX.length);
+  }
   if (service==='billing' && migration===BILLING_ENCRYPTED_MIGRATION) {
     if (!rows.some(row=>row.name==='billing_encryption_live_ledgers')) throw new Error('SchemaReviewRequired');
     return assertSchema(service,rows);

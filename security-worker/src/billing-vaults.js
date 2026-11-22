@@ -72,6 +72,17 @@ export async function billingVaultContext(env, input, validateSession) {
 
 export async function enrollBillingVault(env, input, vault, validateSession) {
   const actor = await billingActor(env, input, validateSession);
+  const result = await storeBillingVault(env, actor, vault);
+  if (result.status !== "ok") return result;
+  return (await validateSession(env, input)).valid ? result : { status: "denied" };
+}
+
+export async function billingApprovalVault(env, input, vault) {
+  if (vault === undefined) return formatVault(await ownVaultRow(env, input), input.primaryOwner);
+  return storeBillingVault(env, { ...input, supportsPrf: true }, vault, true);
+}
+
+async function storeBillingVault(env, actor, vault, pending = false) {
   if (!actor || !actor.supportsPrf) return { status: "denied" };
   let recipient, writer;
   try {
@@ -88,8 +99,9 @@ export async function enrollBillingVault(env, input, vault, validateSession) {
     SELECT ?,?,?,?,?,?,?,? WHERE EXISTS (
       SELECT 1 FROM security_credentials c JOIN security_identities i ON i.id=c.identity_id
       JOIN security_service_links l ON l.identity_id=i.id
-      WHERE c.credential_id=? AND i.id=? AND c.status='active' AND c.prf_enabled=1 AND i.status='active'
-        AND l.id=? AND l.service='billing' AND l.service_account_id=? AND l.status='active'
+      WHERE c.credential_id=? AND i.id=? AND c.prf_enabled=1
+        AND l.id=? AND l.service='billing' AND l.service_account_id=?
+        AND ${pending ? "c.status='pending' AND i.status IN ('active','pending_approval') AND l.status IN ('active','pending')" : "c.status='active' AND i.status='active' AND l.status='active'"}
         AND (?=0 OR i.is_security_admin=1)
     ) ON CONFLICT(credential_id) DO UPDATE SET
       writer_public_key=excluded.writer_public_key,writer_iv=excluded.writer_iv,writer_ciphertext=excluded.writer_ciphertext
@@ -99,7 +111,6 @@ export async function enrollBillingVault(env, input, vault, validateSession) {
     writer ? JSON.stringify(writer.publicKey) : null, writer?.iv ?? null, writer?.ciphertext ?? null,
     actor.credentialId, actor.identityId, actor.serviceLinkId, actor.serviceAccountId, writer ? 1 : 0
   ).run();
-  if (!(await validateSession(env, input)).valid) return { status: "denied" };
   const stored = formatVault(await ownVaultRow(env, actor), actor.primaryOwner);
   return stored ? { status: "ok", vault: stored } : { status: "denied" };
 }
