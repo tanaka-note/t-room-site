@@ -30,6 +30,26 @@ export async function prepareDiary() {
   const auth=await TRoomPasskeys.authenticate('diary',undefined,{handoff:false});
   try{await prepare(auth.prfOutput);return {prepared:true};}finally{auth.prfOutput?.fill(0);}
 }
+export async function prepareDiaryApproval(status, auth, identityId) {
+  if(!auth.prfOutput||!status.adminEnvelope||!status.recoveryPublicKey) {
+    throw new Error('日記の既存鍵を解除できる管理者パスキーで本人確認してください。');
+  }
+  const own=await api('/own');
+  const trust=await authenticationTrust(auth,own);
+  const existingIds=new Set(status.config?.directory.value.members.map(member=>member.credentialId)||[]);
+  const members=status.members.filter(member=>member.identityId===identityId||existingIds.has(member.credentialId)
+    || (!status.config&&member.webAuthnCredentialId===auth.credentialId));
+  const privateKey=await TRoomCrypto.unlockAdminPrivateKeyWithPasskey(auth.prfOutput,status.adminEnvelope);
+  const recoveryRecords=[];
+  let after='';
+  if(status.config)do {
+    const page=await api('/recovery-records'+(after?'?after='+encodeURIComponent(after):''));
+    recoveryRecords.push(...page.records);
+    if(recoveryRecords.length>5000||page.nextCursor&&page.nextCursor<=after)throw new Error('日記の既存記録の鍵を確認できません。');
+    after=page.nextCursor;
+  }while(after);
+  return prepareKeyConfiguration({status:{...status,members},recoveryPrivateKey:privateKey,trustedAnchor:trust?.anchor,recoveryRecords});
+}
 export async function importDiaryTrust(file) {
   if(!file||file.size>12000)throw new Error('信頼設定ファイルを確認してください。');
   const value=await validatePublicTrust(JSON.parse(await file.text()));

@@ -29,6 +29,10 @@
   async function registerInvite(token) {
     ensureSupport();
     const start = await api("/invite/options", { token });
+    if (start.resume) {
+      const assertion = await runWebAuthn("get", decodeRequestOptions(start.options), { operation: "verification" });
+      return api("/invite/resume", { token, challengeId: start.challengeId, response: serializeCredential(assertion) });
+    }
     const credential = await runWebAuthn("create", decodeCreationOptions(start.options), { operation: "registration", registration: "invite" });
     return api("/invite/verify", { token, challengeId: start.challengeId, response: serializeCredential(credential), prfEnabled: supportsPrf(credential) });
   }

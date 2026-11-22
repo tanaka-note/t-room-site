@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-dfbdf7c0445b";
+const APP_BUILD_ID = "cloud-7831f2558922";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -957,7 +957,7 @@ async function loginWithPasskey() {
       if (!links.length || error.status === 401 || error.status === 403) throw error;
     }
     if (!links.length) {
-      showCloudKeyPreparationStatus("ログイン済みです。鍵を解除できる管理者が次にT-Cloudへログインすると鍵が届きます。");
+      showCloudKeyPreparationStatus("本人確認が完了しました。このサービスの利用準備を管理者が確認します。");
       return;
     }
     const link = await choosePasskeyLink(links);
@@ -977,7 +977,7 @@ async function loginWithPasskey() {
   } finally {
     button.disabled = false;
     button.removeAttribute("aria-busy");
-    label.textContent = cloudKeyPreparationSession ? "鍵の受け取りを確認" : "パスキーでログイン";
+    label.textContent = cloudKeyPreparationSession ? "利用準備を再確認" : "パスキーでログイン";
   }
 }
 
@@ -985,6 +985,8 @@ function showCloudKeyPreparationStatus(message) {
   const status = $("#login-passkey-status");
   status.hidden = !message;
   status.textContent = message;
+  const guidance = $(".tlain-login-guidance");
+  if (guidance) guidance.hidden = Boolean(message);
 }
 
 async function prepareCloudKeys(preparation) {

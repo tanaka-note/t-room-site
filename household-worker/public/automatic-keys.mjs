@@ -1,5 +1,5 @@
 import {createClientVault,unlockClient,wrapMaster,unwrapMaster,keyScope} from './household-crypto.mjs';
-const pending=()=>Object.assign(new Error('所有者が家計簿を開くと、暗号鍵の準備が自動で進みます。その後もう一度ログインしてください。'),{code:'key_pending'});
+const pending=()=>Object.assign(new Error('本人確認が完了しました。この家計簿の利用準備を管理者が確認します。'),{code:'key_pending'});
 export async function unlockAutomaticPrivate(prf,vault){
   if(!vault.keySource)return unlockClient(prf,vault);
   const envelope={encryptedPayload:vault.ciphertext,payloadIv:vault.iv};

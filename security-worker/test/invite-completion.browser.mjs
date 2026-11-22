@@ -38,10 +38,23 @@ const server = createServer(async (request, response) => {
       registrations++;
       setup = { active: true, completed: false, resumable: false, identityId: "fixture", credentialId,
         isPrimaryAdmin: scenario === "primary", credentialStatus: "pending", pendingApproval: true, prfEnabled: !["unsupported", "prf-cancelled"].includes(scenario),
-        tcloudReady: scenario === "no-cloud", needsTCloudSetup: scenario !== "no-cloud", clientKeyReady: false,
+        tcloudReady: scenario === "no-cloud", needsTCloudSetup: scenario !== "no-cloud", clientKeyReady: scenario === "no-cloud",
         cloudLinks: scenario === "no-cloud" ? [] : cloudLinks };
       return json({ ok: true, identityId: "fixture", credentialId, pendingApproval: true, prfEnabled: setup.prfEnabled });
     }
+    if (path.endsWith("/invite/preparation")) {
+      const input = body ? JSON.parse(body) : {};
+      if (input.vault) {
+        assert.equal(input.linkId, cloudLinks[0].id);
+        assert.ok(input.vault.publicKeyJwk.n && input.vault.encryptedPayload && input.vault.payloadIv);
+        setup.clientKeyReady = true;
+        return json({ ok: true });
+      }
+      return json({ credentialId, tasks: setup.clientKeyReady ? [] : cloudLinks.map(link => ({ ...link, service: "cloud" })) });
+    }
+    if (path.endsWith("/prf/options")) return json({ challengeId: "uv", options: { challenge: "AAECAwQFBgcICQoLDA0ODw",
+      userVerification: "required", allowCredentials: [{ id: credentialId, type: "public-key" }] } });
+    if (path.endsWith("/prf/verify")) return json({ verified: true, prfAvailable: true });
     return json({ error: "unexpected fixture API" }, 404);
   }
   response.setHeader("Content-Security-Policy", SECURITY_CONTENT_SECURITY_POLICY);
@@ -93,7 +106,7 @@ try {
     await page.locator("#invite-register").click(); await complete();
     assert.equal(registrations, 1);
     const steps = await page.evaluate(() => window.fixtureSteps);
-    assert.deepEqual(steps.map(s => s[0]), ["create"]);
+    assert.deepEqual(steps.map(s => s[0]), ["create", "get"]);
     assert.match(steps[0][1], /パスキーを登録しています/);
     assert.equal(setup.pendingApproval, true);
     assert.equal(setup.active, true);
@@ -115,10 +128,18 @@ try {
     await page.reload(); await page.locator("#admin-login-view").waitFor();
     assert.equal(await page.locator("#invite-complete").isVisible(), false);
 
-    reset("unsupported"); await visit(); await page.locator("#invite-register").click(); await complete();
+    reset("unsupported"); await visit(); await page.locator("#invite-register").click(); await page.locator("#message").waitFor();
     assert.equal(setup.prfEnabled, false);
-    assert.equal(bodies.some(body => body.envelopeType), false);
-    await page.reload(); await complete();
+    assert.equal(bodies.some(body => body.vault), false);
+    assert.equal(await page.locator("#invite-complete").isVisible(), false);
+    await page.reload(); await page.locator('#invite-register').waitFor();
+    assert.match(await page.locator('#invite-register').textContent(), /準備を続ける/);
+
+    reset("prf-cancelled"); await visit(); await page.locator("#invite-register").click(); await page.locator("#message").waitFor();
+    assert.equal(await page.locator("#invite-complete").isVisible(), false);
+    await page.evaluate(() => { window.fixtureCancelGet = false; });
+    await page.locator("#invite-register").click(); await complete();
+    assert.equal(registrations, 1);
 
     reset("primary"); await visit(); await page.locator("#invite-register").click(); await complete();
     assert.equal(await page.locator("#tcloud-setup-notice").isVisible(), false);
@@ -126,7 +147,7 @@ try {
     await page.locator("#admin-login-view").waitFor();
     assert.equal(await page.locator("#invite-complete").isVisible(), false);
     assert.equal(registrations, 1);
-    assert.deepEqual((await page.evaluate(() => window.fixtureSteps)).map(step => step[0]), ["create"]);
+    assert.deepEqual((await page.evaluate(() => window.fixtureSteps)).map(step => step[0]), ["create", "get"]);
 
     reset("no-cloud"); await visit(); await page.locator("#invite-register").click(); await complete();
     assert.equal(setup.active, true, "no-cloud setup need not have a completed flag");

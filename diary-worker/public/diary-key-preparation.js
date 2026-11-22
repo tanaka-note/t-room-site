@@ -44,6 +44,11 @@ async function approvePreparedRecipients(api,session,authentication,recipientId,
   // controller to recheck the frozen source/ciphertext and restore checkpoint.
   const old=status.config?.directory.value.members||[];
   if(status.config&&scopeDefinitions(status.households,[...status.members,...(status.scopeAccounts||[])],status.retainedScopes||[]).every(row=>status.config.directory.value.epochs[row.scope])&&status.members.length===old.length&&status.members.every(member=>old.some(previous=>previous.credentialId===member.credentialId&&previous.canManageEntries===member.canManageEntries&&JSON.stringify(previous.households)===JSON.stringify(member.households))))return trust;
+  if(!status.adminEnvelope) {
+    const ownRecipient=old.some(member=>member.credentialId===recipientId&&member.active!==false);
+    if(ownRecipient&&trust&&session.encryption.phase==='encrypted')return trust;
+    throw Object.assign(new Error('本人確認が完了しました。日記の利用準備を管理者が確認します。'),{code:'DiaryKeyPreparationPending'});
+  }
   const privateKey=await unlockCentralRecovery(authentication.prfOutput,status.adminEnvelope);check();
   const recoveryRecords=[];let after='';
   if(status.config)do {

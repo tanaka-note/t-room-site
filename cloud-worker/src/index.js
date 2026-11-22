@@ -10,7 +10,7 @@ import { handleWindowsUpdates, abortStaleWindowsUploads } from "./windows-update
 import { fileContentVersion } from "./file-version.js";
 
 const BASE_PATH = "/cloud";
-const APP_BUILD_ID = "cloud-dfbdf7c0445b";
+const APP_BUILD_ID = "cloud-7831f2558922";
 const SESSION_COOKIE = "troom_cloud_session";
 const SHARE_SESSION_COOKIE = "troom_cloud_share_session";
 const SESSION_ALGORITHM = "HMAC";

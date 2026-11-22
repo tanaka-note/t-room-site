@@ -25,6 +25,18 @@ export function diaryAuthenticationOrigins(env,service) {
 export async function diaryRecipientId(credentialId,serviceLinkId) {
   return b64(await crypto.subtle.digest('SHA-256',encode({protocol:'T-lain diary recipient',credentialId,serviceLinkId})));
 }
+export async function diaryApprovalTargets(env,identityId,credentialId) {
+  if(!diaryKeysEnabled(env))return [];
+  return (await env.DB.prepare(`SELECT l.id,l.service_account_id AS accountId,v.recipient_id AS recipientId,
+      g.generation AS grantGeneration
+    FROM security_service_links l
+    LEFT JOIN security_diary_key_vaults v ON v.service_link_id=l.id AND v.identity_id=l.identity_id
+      AND v.credential_id=? AND v.account_id=l.service_account_id
+    LEFT JOIN security_diary_key_grants g ON g.recipient_id=v.recipient_id AND g.service_link_id=l.id
+      AND g.generation=(SELECT generation FROM security_diary_key_config WHERE id=1)
+    WHERE l.identity_id=? AND l.service='diary' AND l.status IN ('pending','active') ORDER BY l.id`)
+    .bind(credentialId,identityId).all()).results;
+}
 async function liveLinks(env,identityId,credentialId) {
   return (await env.DB.prepare(`SELECT l.id,l.service_account_id accountId FROM security_service_links l JOIN security_credentials c ON c.identity_id=l.identity_id JOIN security_identities i ON i.id=l.identity_id WHERE l.identity_id=? AND c.credential_id=? AND l.service='diary' AND l.status='active' AND c.status='active' AND i.status='active'`).bind(identityId,credentialId).all()).results;
 }
@@ -177,9 +189,9 @@ export async function diaryAutomaticVault(env,input,validate,audit=async()=>{}) 
 }
 
 // Caller supplies live Security sessions and its existing mutation/reauth gates.
-export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audit}) {
+export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audit,approval}) {
   if(!diaryKeysEnabled(env))fail(404,'DiaryEncryptionDisabled');
-  const links=await liveLinks(env,actor.identityId,actor.credentialId);
+  const links=approval?.preparation ? approval.links : await liveLinks(env,actor.identityId,actor.credentialId);
   if(!links.length)fail(403,'DiaryLinkRequired');
   if(path==='/api/diary/own'&&request.method==='GET') {
     const entries=[];
@@ -202,9 +214,16 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
     await crypto.subtle.importKey('jwk',vault.publicKey,{name:'RSA-OAEP',hash:'SHA-256'},false,['encrypt']);
     await crypto.subtle.importKey('jwk',vault.signPublicKey,{name:'ECDSA',namedCurve:'P-256'},false,['verify']);
     const recipientId=await diaryRecipientId(actor.credentialId,link.id);
-    await env.DB.prepare('INSERT INTO security_diary_key_vaults VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING').bind(recipientId,actor.credentialId,actor.identityId,link.id,link.accountId,JSON.stringify(vault)).run();
+    await env.DB.prepare(`INSERT INTO security_diary_key_vaults
+      SELECT ?1,?2,?3,?4,?5,?6 WHERE EXISTS (
+        SELECT 1 FROM security_credentials c JOIN security_identities i ON i.id=c.identity_id
+        JOIN security_service_links l ON l.identity_id=i.id
+        WHERE c.credential_id=?2 AND i.id=?3 AND l.id=?4 AND l.service_account_id=?5
+          AND c.status IN ('active','pending') AND i.status!='disabled'
+          AND l.service='diary' AND l.status IN ('active','pending'))
+      ON CONFLICT DO NOTHING`).bind(recipientId,actor.credentialId,actor.identityId,link.id,link.accountId,JSON.stringify(vault)).run();
     const saved=await env.DB.prepare('SELECT * FROM security_diary_key_vaults WHERE recipient_id=?').bind(recipientId).first();
-    if(saved.identity_id!==actor.identityId||saved.service_link_id!==link.id||!equal(JSON.parse(saved.vault_json),vault))fail(409,'DiaryVaultImmutable');
+    if(!saved||saved.identity_id!==actor.identityId||saved.service_link_id!==link.id||!equal(JSON.parse(saved.vault_json),vault))fail(409,'DiaryVaultImmutable');
     await audit('diary_vault_prepared',actor.identityId);return json({ok:true,recipientId});
   }
   if(actor.identityId!=='primary-admin')fail(403,'AccessDenied');
@@ -212,7 +231,13 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
   if(path==='/api/diary/admin'&&request.method==='GET') {
     const current=await config(env),cloud=await env.CLOUD_AUTH.getPrimaryAdminCryptoConfig();
     const adminEnvelope=await env.DB.prepare("SELECT encrypted_payload encryptedPayload,payload_iv payloadIv FROM security_tcloud_key_envelopes WHERE identity_id='primary-admin' AND credential_id=? AND envelope_type='admin_private_prf'").bind(actor.credentialId).first();
-    const rows=(await env.DB.prepare(`SELECT v.* FROM security_diary_key_vaults v JOIN security_credentials c ON c.credential_id=v.credential_id JOIN security_identities i ON i.id=v.identity_id JOIN security_service_links l ON l.id=v.service_link_id WHERE c.status='active' AND i.status='active' AND l.status='active'`).all()).results;
+    const rows=(await env.DB.prepare(`SELECT v.* FROM security_diary_key_vaults v
+      JOIN security_credentials c ON c.credential_id=v.credential_id JOIN security_identities i ON i.id=v.identity_id
+      JOIN security_service_links l ON l.id=v.service_link_id
+      WHERE (c.status='active' AND i.status='active' AND l.status='active')
+        OR (c.credential_id=? AND i.id=? AND c.status IN ('pending','active')
+          AND i.status IN ('pending_approval','active') AND l.status IN ('pending','active'))`)
+      .bind(approval?.credentialId ?? null,approval?.identityId ?? null).all()).results;
     const members=[];for(const row of rows){const claims=await activeAccountClaims(env,row.account_id);if(!claims)continue;members.push({identityId:row.identity_id,serviceLinkId:row.service_link_id,credentialId:row.recipient_id,webAuthnCredentialId:row.credential_id,...claims,...JSON.parse(row.vault_json),privateEnvelope:undefined});}
     const households=await env.DIARY_AUTH.encryptionHouseholds();
     return json({config:current,recoveryPublicKey:cloud?.publicKeyJwk||null,adminEnvelope,members,households,
@@ -339,7 +364,9 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
     for(const member of directory.members) {
       if(member.active===false)fail(409,"RekeyRequired");
       const row=await env.DB.prepare('SELECT * FROM security_diary_key_vaults WHERE recipient_id=?').bind(member.credentialId).first();
-      if(!row||member.accountId!==row.account_id||member.serviceLinkId!==row.service_link_id||member.identityId!==row.identity_id||member.webAuthnCredentialId!==row.credential_id||!(await liveLinks(env,row.identity_id,row.credential_id)).some(link=>link.id===row.service_link_id&&link.accountId===row.account_id))fail(403,'DiaryRecipientMismatch');
+      const inApproval=approval&&row&&approval.credentialId===row.credential_id&&approval.identityId===row.identity_id
+        && approval.links.some(link=>link.id===row.service_link_id&&link.accountId===row.account_id);
+      if(!row||member.accountId!==row.account_id||member.serviceLinkId!==row.service_link_id||member.identityId!==row.identity_id||member.webAuthnCredentialId!==row.credential_id||(!inApproval&&!(await liveLinks(env,row.identity_id,row.credential_id)).some(link=>link.id===row.service_link_id&&link.accountId===row.account_id)))fail(403,'DiaryRecipientMismatch');
       const vault=JSON.parse(row.vault_json),claims=await accountClaims(env,row.account_id);
       if(!equal(member.publicKey,vault.publicKey)||!equal(member.signPublicKey,vault.signPublicKey)||member.canManageEntries!==claims.canManageEntries||!equal(member.households,claims.households))fail(403,'DiaryRecipientMismatch');
       for(const scope of member.scopes)if(!canRead(claims,scopeRecord(scope,directory.households)))fail(403,'DiaryScopeDenied');
@@ -354,11 +381,27 @@ export async function handleDiaryKeys(path,request,env,actor,{readJson,json,audi
       const recordIds=new Set();for(const packet of recordGrants){const grant=await validateGrant(packet,true);const id=`${grant.id}:${grant.revision}`;if(grant.kind!=='record'||!Number.isSafeInteger(grant.revision)||grant.revision<1||!(/^[1-9][0-9]{0,15}$/.test(grant.id))||recordIds.has(id))fail(400,'InvalidRecordGrant');recordIds.add(id);}
       if(!retry){const expected=[...recoveryRecords.values()].filter(record=>member.scopes.includes(record.scope)&&!record.keyBox[member.credentialId]);if(expected.length!==recordGrants.length||expected.some(record=>!recordGrants.some(packet=>packet.value.id===record.id&&packet.value.revision===record.revision&&packet.value.household===record.household&&packet.value.scope===record.scope&&packet.value.epoch===record.epoch)))fail(409,'IncompleteRecordGrants');}
       if(retry){const saved=await env.DB.prepare('SELECT grants_json,record_grants_json FROM security_diary_key_grants WHERE recipient_id=? AND service_link_id=? AND generation=?').bind(member.credentialId,row.service_link_id,directory.generation).first();if(!saved||!equal(JSON.parse(saved.grants_json),grants)||!equal(JSON.parse(saved.record_grants_json),recordGrants))fail(409,'DiaryKeyGenerationConflict');}
-      statements.push(env.DB.prepare('INSERT INTO security_diary_key_grants VALUES(?,?,?,?,?)').bind(member.credentialId,row.service_link_id,directory.generation,JSON.stringify(grants),JSON.stringify(recordGrants)));
+      const params=[member.credentialId,row.service_link_id,directory.generation,JSON.stringify(grants),JSON.stringify(recordGrants)];
+      statements.push(approval?.eventId
+        ?env.DB.prepare(`INSERT INTO security_diary_key_grants SELECT ?,?,?,?,?
+          WHERE EXISTS (SELECT 1 FROM security_audit_events WHERE event_id=?)`).bind(...params,approval.eventId)
+        :env.DB.prepare('INSERT INTO security_diary_key_grants VALUES(?,?,?,?,?)').bind(...params));
     }
     if(rotationBegin) {
       if(retry)fail(409,'DiaryKeyGenerationConflict');
       return json(await env.DIARY_AUTH.beginEncryptionRotation({configuration:body,manifest:input.manifest,anchor,currentDirectory:await verifyDirectory(current.directory,anchor,current.generation)}));
+    }
+    if(approval?.eventId) {
+      if(retry||approval.links.some(link=>!directory.members.some(member=>member.webAuthnCredentialId===approval.credentialId
+        &&member.identityId===approval.identityId&&member.serviceLinkId===link.id&&member.accountId===link.accountId)))fail(409,'IncompleteGrants');
+      const publish=current
+        ?env.DB.prepare(`UPDATE security_diary_key_config SET generation=?,anchor_json=?,directory_json=?,recovery_json=?
+          WHERE id=1 AND generation=? AND EXISTS (SELECT 1 FROM security_audit_events WHERE event_id=?)`)
+          .bind(directory.generation,JSON.stringify(anchor),JSON.stringify(body.directory),JSON.stringify(body.recoveryEnvelope),body.expectedGeneration,approval.eventId)
+        :env.DB.prepare(`INSERT INTO security_diary_key_config SELECT 1,?,?,?,?
+          WHERE EXISTS (SELECT 1 FROM security_audit_events WHERE event_id=?)`)
+          .bind(directory.generation,JSON.stringify(anchor),JSON.stringify(body.directory),JSON.stringify(body.recoveryEnvelope),approval.eventId);
+      return { statements:[publish,...statements],expectedGeneration:body.expectedGeneration };
     }
     if(retry)return json({ok:true,generation:directory.generation});
     const update=current?env.DB.prepare('UPDATE security_diary_key_config SET generation=?,anchor_json=?,directory_json=?,recovery_json=? WHERE id=1 AND generation=?').bind(directory.generation,JSON.stringify(anchor),JSON.stringify(body.directory),JSON.stringify(body.recoveryEnvelope),body.expectedGeneration):env.DB.prepare('INSERT INTO security_diary_key_config VALUES(1,?,?,?,?)').bind(directory.generation,JSON.stringify(anchor),JSON.stringify(body.directory),JSON.stringify(body.recoveryEnvelope));
