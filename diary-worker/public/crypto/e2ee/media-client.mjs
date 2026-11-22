@@ -1,4 +1,5 @@
-import { open,seal } from './crypto.mjs';
+import { b64,encode,open,seal } from './crypto.mjs';
+import { MAX_THUMBNAIL_BYTES } from './cache.mjs';
 import { preferencesScope } from './policy.mjs';
 import {encryptPhotoParts,decryptPhotoPart} from './photo-crypto.mjs';
 import {PHOTO_CONTEXT_HEADER, PHOTO_FORMAT_HEADER, PHOTO_EXPIRY_HEADER, validPhotoEtag} from './session.mjs';
@@ -7,7 +8,9 @@ const abortPhoto = () => new DOMException('Aborted', 'AbortError');
 const failPhoto = (status,message) => Object.assign(new Error(message),{status});
 const MAX_PHOTO_CACHE_BYTES = 64 * 1024 * 1024;
 
-export function createEncryptedMediaClient(client,request,nativeFetch,{photoContext,onPhotoExpiry=()=>{},encryptedOnly=false}) {
+const digest=async bytes=>b64(await crypto.subtle.digest('SHA-256',bytes));
+
+export function createEncryptedMediaClient(client,request,nativeFetch,{photoContext,onPhotoExpiry=()=>{},encryptedOnly=false,getThumbnailCache}) {
   const pending=new Map(),cache=new Map(),loads=new Map(),controllers=new Set();
   let bytes=0,closed=false;
   const binding=(session,id,epoch)=>({household:client.household,scope:preferencesScope(client.household,client.actor.accountId),id,revision:1,epoch,kind:'photo-staging',sourceId:session});
@@ -65,16 +68,50 @@ export function createEncryptedMediaClient(client,request,nativeFetch,{photoCont
     JSON.stringify([generation,household,photo.id,kind,photo.crypto||null]);
   const isPhotoCached=(photo,kind)=>!closed&&!client.closed&&!client.switching&&cache.has(cacheIdentity(photo,kind));
 
-  async function requestPhoto(photo,kind,generation,household,identity,signal,priority) {
+  async function thumbnailStorage(photo,household) {
+    const scope=preferencesScope(household,client.actor.accountId);
+    const key=client.keys.get(scope);
+    if(!key)return null;
+    const revision=client.directory.generation,epoch=client.directory.epochs[scope];
+    const [store,id]=await Promise.all([getThumbnailCache(),digest(encode([
+      'diary-thumbnail-cache/1',client.actor.accountId,client.actor.credentialId,household,revision,epoch,photo.id
+    ]))]);
+    return store?{store,id,key,binding:{household,scope,id:photo.id,revision,epoch,kind:'thumbnail-cache',sourceId:id}}:null;
+  }
+
+  async function persistThumbnail(storage,raw,etag,photo,household,generation,signal) {
+    storage??=await thumbnailStorage(photo,household);
+    assertPhotoRead(generation,signal);
+    if(!storage)return;
+    // Authenticate the server's validator and its exact ciphertext together.
+    // The persistent store and its lookup key never contain the photo key.
+    const proof=await seal(storage.key,{etag,digest:await digest(raw)},storage.binding);
+    assertPhotoRead(generation,signal);
+    await storage.store.put(storage.id,{etag,ciphertext:raw,proof});
+  }
+
+  async function requestPhoto(photo,kind,generation,household,identity,signal,priority,useDisk=true) {
     const context=await photoContext();
     assertPhotoRead(generation,signal);
     if(!context)throw failPhoto(401,'PhotoSessionChanged');
     assertReferenced(photo.id);
     const snapshot=client.records,sequence=client.sequence;
-    const cached=cache.get(identity);
+    const cached=useDisk?cache.get(identity):null;
     const format=encryptedOnly||photo.crypto?'encrypted':'legacy';
+    const persist=kind==='thumbnail'&&photo.crypto&&getThumbnailCache;
+    let storage=null,disk=null;
+    if(persist&&useDisk&&!cached) {
+      try{
+        storage=await thumbnailStorage(photo,household);
+        const packet=await storage?.store.get(storage.id);
+        if(validPhotoEtag(packet?.etag)&&packet.ciphertext instanceof ArrayBuffer
+          &&packet.ciphertext.byteLength<=MAX_THUMBNAIL_BYTES)disk=packet;
+      }catch{/* A failed local lookup uses the online path. */}
+      assertPhotoRead(generation,signal);
+    }
     const headers=new Headers({[PHOTO_CONTEXT_HEADER]:context,[PHOTO_FORMAT_HEADER]:format});
-    if(cached)headers.set('If-None-Match',cached.etag);
+    const validator=cached?.etag??disk?.etag;
+    if(validator)headers.set('If-None-Match',validator);
     const response=await nativeFetch(`/diary/api/photos/${photo.id}/${kind}`,{credentials:'same-origin',cache:'no-store',headers,signal,priority});
     try {
       assertPhotoRead(generation,signal);
@@ -85,12 +122,25 @@ export function createEncryptedMediaClient(client,request,nativeFetch,{photoCont
       if(Date.now()>=expiresAt*1000)throw abortPhoto();
       onPhotoExpiry(expiresAt);
       const etag=response.headers.get('ETag');
-      let blob;
+      let blob,raw;
       if(response.status===304) {
-        if(!cached||etag!==cached.etag)throw failPhoto(409,'PhotoResponseMismatch');
-        blob=cached.blob;
+        if(!validator||etag!==validator)throw failPhoto(409,'PhotoResponseMismatch');
+        if(cached)blob=cached.blob;
+        else {
+          try{
+            const proof=await open(storage.key,disk.proof,storage.binding);
+            if(proof.etag!==etag||proof.digest!==await digest(disk.ciphertext))throw new Error('InvalidThumbnailCache');
+            assertPhotoRead(generation,signal);
+            if(Date.now()>=expiresAt*1000)throw abortPhoto();
+            blob=await decryptPhotoPart(disk.ciphertext,photo.crypto,household,photo.id,kind);
+          }catch(error){
+            if(error.name==='AbortError')throw error;
+            assertPhotoRead(generation,signal);
+            return requestPhoto(photo,kind,generation,household,identity,signal,priority,false);
+          }
+        }
       } else if(format==='encrypted') {
-        const raw=await response.arrayBuffer();
+        raw=await response.arrayBuffer();
         assertPhotoRead(generation,signal);
         blob=await decryptPhotoPart(raw,photo.crypto,household,photo.id,kind);
       } else {
@@ -102,6 +152,9 @@ export function createEncryptedMediaClient(client,request,nativeFetch,{photoCont
       if(client.records!==snapshot||client.sequence!==sequence)assertReferenced(photo.id);
       if(kind==='original'&&blob.size!==photo.originalSize)throw new Error('PhotoSizeMismatch');
       if(kind!=='original')rememberPhoto(identity,etag,blob);
+      if(persist&&raw&&raw.byteLength<=MAX_THUMBNAIL_BYTES&&validPhotoEtag(etag))
+        void persistThumbnail(storage,raw,etag,photo,household,generation,signal).catch(()=>{});
+      if(disk&&response.status===304)void storage.store.touch(storage.id,etag).catch(()=>{});
       return blob;
     } catch(error) {
       if(response.body&&!response.bodyUsed)void response.body.cancel().catch(()=>{});

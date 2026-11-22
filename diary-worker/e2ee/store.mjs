@@ -528,15 +528,16 @@ export function createStore(db, registry) {
   }
   const visibleSQL=`(r.state='published' OR (r.state='investment' AND ?=1) OR (r.state='draft' AND ?=1) OR (r.state='preferences' AND r.author=?) OR (r.state='trash' AND ?=1 AND EXISTS(SELECT 1 FROM json_each(r.retained_for) owned WHERE owned.value IN (SELECT value FROM json_each(?)))))`;
   const visibleBindings=(actor,household)=>[actor.canViewInvestment?1:0,actor.canManageEntries?1:0,actor.accountId,actor.canViewTrash?1:0,JSON.stringify(retentionIds(actor,household))];
-  async function snapshotHead(actor,household) {
+  async function snapshotHead(actor,household,{pageLimit=50}={}) {
     assertActor(actor,household);
+    if(pageLimit!==50&&pageLimit!==100)fail('InvalidPage',400);
     const [sequence,records]=await db.batch([
       db.prepare('SELECT COALESCE(MAX(seq),0) seq FROM diary_e2ee_changes WHERE household=?').bind(household),
       db.prepare(`SELECT r.id,${recordBytesSQL} bytes FROM diary_e2ee_records r WHERE r.household=? AND ${visibleSQL} ORDER BY r.id LIMIT 5001`).bind(household,...visibleBindings(actor,household))
     ]);
     if(records.results.length>5000||records.results.reduce((n,r)=>n+r.bytes,0)>50_000_000)fail('SnapshotLimit',413);
     const pages=[];let after=null,previous=null,count=0,bytes=0;
-    for(const row of records.results){if(count&&(count===50||bytes+row.bytes>1_000_000)){pages.push({after,limit:count});after=previous;count=0;bytes=0;}count++;bytes+=row.bytes;previous=row.id;}
+    for(const row of records.results){if(count&&(count===pageLimit||bytes+row.bytes>1_000_000)){pages.push({after,limit:count});after=previous;count=0;bytes=0;}count++;bytes+=row.bytes;previous=row.id;}
     if(count)pages.push({after,limit:count});
     return {version:1,household,sequence:sequence.results[0].seq,total:records.results.length,pages};
   }
@@ -546,21 +547,24 @@ export function createStore(db, registry) {
     { since = -1, after = null, at = null, limit = 50 } = {},
   ) {
     assertActor(actor, household);
+    // The negotiated larger page is only for an initial fixed-sequence read.
+    const fullSnapshot=since===-1&&at!==null;
     if (
       !Number.isSafeInteger(since) ||
       since < -1 ||
       !Number.isSafeInteger(limit) ||
       limit < 1 ||
-      limit > 50 ||
+      limit > (fullSnapshot?100:50) ||
       (after !== null && !/^[\w:-]{1,160}$/.test(after)) ||
       (at !== null && (!Number.isSafeInteger(at) || at < 0))
     )
       fail("InvalidPage", 400);
+    const estimate=limit>50?`,${recordBytesSQL} AS estimated_bytes`:'';
     const query =
       since < 0
         ? db
             .prepare(
-              `SELECT r.*,r.id change_id FROM diary_e2ee_records r WHERE r.household=? AND r.id>? AND ${visibleSQL} ORDER BY r.id LIMIT ?`,
+              `SELECT r.*,r.id change_id${estimate} FROM diary_e2ee_records r WHERE r.household=? AND r.id>? AND ${visibleSQL} ORDER BY r.id LIMIT ?`,
             )
             .bind(household,after||"",...visibleBindings(actor,household),limit+1)
         : db
@@ -581,6 +585,7 @@ export function createStore(db, registry) {
     const rows = result.results.slice(0, limit),
       records = [],
       removed = [];
+    if(limit>50&&rows.reduce((total,row)=>total+row.estimated_bytes,0)>1_000_000)fail('SnapshotPageLimit',413);
     for (const raw of rows) {
       const row = raw.id === null ? null : parseRecord(raw);
       if (row && canRead(actor, row)) records.push(row);

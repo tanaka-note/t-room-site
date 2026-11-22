@@ -6,6 +6,7 @@ import {createEncryptedDiaryApi} from '../../e2ee/ui-api.mjs';
 import {signed,unb64} from '../../e2ee/crypto.mjs';
 import {proofOf} from '../../e2ee/record.mjs';
 import {createPrivateNavigation} from '../../e2ee/privacy.mjs';
+import {LARGE_SNAPSHOT_PAGE_SIZE,readSnapshotPages} from '../../e2ee/snapshot.mjs';
 
 let prepared;before(async()=>{prepared=await provision();});
 async function setup(count=48) {
@@ -31,6 +32,35 @@ test('concurrent initial synchronization shares one verified snapshot',async()=>
   const x=await setup(3);try {
     let count=0;const native=x.reader.transport.snapshot;x.reader.transport.snapshot=async(...args)=>{count++;return native(...args);};
     const first=x.reader.sync(),second=x.reader.sync();assert.equal(first,second);await Promise.all([first,second]);assert.equal(count,1);assert.equal(x.reader.records.size,3);
+  }finally{x.close();}
+});
+test('larger fixed startup pages reduce reads while the old reader, size budget and sequence rules still work',async()=>{
+  const x=await setup(112);
+  try {
+    const {store,actors,db}=x.f,actor=actors.ownerA;
+    const fetchWith=async pageLimit=>{
+      const sizes=[];
+      const reply=await readSnapshotPages(options=>{
+        sizes.push(options.limit);
+        return store.snapshotPage(actor,'A',options);
+      },'A',-1,{pageLimit,fetchHead:()=>store.snapshotHead(actor,'A',pageLimit===50?undefined:{pageLimit})});
+      return {sizes,reply};
+    };
+    const old=await fetchWith(50),wide=await fetchWith(LARGE_SNAPSHOT_PAGE_SIZE);
+    assert.deepEqual(old.sizes,[50,50,12]);
+    assert.deepEqual(wide.sizes,[100,12]);
+    assert.deepEqual(wide.reply,old.reply);
+    const at=wide.reply.sequence;
+    await assert.rejects(store.snapshotPage(actor,'A',{limit:100}),{status:400});
+    await assert.rejects(store.snapshotPage(actor,'A',{since:0,at,limit:100}),{status:400});
+    await assert.rejects(store.snapshotPage(actor,'A',{at:at-1,limit:100}),/SnapshotChanged/);
+    await assert.rejects(store.snapshotHead(actor,'A',{pageLimit:101}),{status:400});
+    // Only the byte-count guard is under test here. Inflate SQLite's encrypted
+    // envelopes directly so this case cannot be accepted as a signed document.
+    await db.prepare('UPDATE diary_e2ee_records SET envelope=?').bind(JSON.stringify({ciphertext:'A'.repeat(20000)})).run();
+    const limited=await store.snapshotHead(actor,'A',{pageLimit:100});
+    assert.ok(limited.pages.every(page=>page.limit<50));
+    await assert.rejects(store.snapshotPage(actor,'A',{at:limited.sequence,limit:100}),{status:413});
   }finally{x.close();}
 });
 test('a legacy bookmarked tag resolves before the index and becomes an encrypted route afterward',async()=>{

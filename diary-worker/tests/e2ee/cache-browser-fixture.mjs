@@ -35,6 +35,7 @@ export async function verifyCacheBudget(page) {
       const indexed=await openCipherCache(name+'-indexes',{limitBytes:size*3});
       const box={version:1,iv:'AAAAAAAAAAAAAAAA',ciphertext:'AAAAAAAAAAAAAAAAAAAAAA'};
       await indexed.put('a/key/A/1',snapshot(),'a/key/A');await indexed.putIndex('a/key/A/1',1,box);
+      const combined=await indexed.readStartup('a/key/A/1','a/key/A');
       const withIndex=await indexed.usage();await indexed.get('a/key/A/1');const afterRead=await indexed.usage();
       await pause();await indexed.put('b/key/A/1',snapshot(),'b/key/A');await pause();await indexed.put('c/key/A/1',snapshot(),'c/key/A');
       const evictedIndex=await indexed.getIndex('a/key/A/1'),retainedPoint=await indexed.checkpoint('a/key/A');
@@ -47,7 +48,7 @@ export async function verifyCacheBudget(page) {
       const v3Name=name+'-v3';
       await new Promise((resolve,reject)=>{const req=indexedDB.open(v3Name,3);req.onupgradeneeded=()=>{for(const store of ['snapshots','checkpoints','usage'])req.result.createObjectStore(store);};req.onerror=reject;req.onsuccess=()=>{const db=req.result,tx=db.transaction(['snapshots','checkpoints'],'readwrite');tx.objectStore('snapshots').put(snapshot(),'a/key/A/1');tx.objectStore('checkpoints').put(7,'a/key/A');tx.oncomplete=()=>{db.close();resolve();};tx.onerror=reject;};});
       const v4=await openCipherCache(v3Name),v3Upgrade={snapshot:await v4.get('a/key/A/1'),point:await v4.checkpoint('a/key/A'),index:await v4.getIndex('a/key/A/1')};v4.close();
-      return {lru,point,oldGeneration,usage,rollback,oversized,upgrade,blockedFallback,indexBudget,v3Upgrade,defaultLimit:CIPHER_CACHE_LIMIT};
+      return {lru,point,oldGeneration,usage,rollback,oversized,upgrade,blockedFallback,indexBudget,v3Upgrade,combined,defaultLimit:CIPHER_CACHE_LIMIT};
     }finally{a.close();b.close();}
   });
   assert.equal(result.defaultLimit,50_000_000);assert.equal(result.lru,true);assert.equal(result.point,1);assert.equal(result.oldGeneration,undefined);
@@ -58,6 +59,32 @@ export async function verifyCacheBudget(page) {
   assert.equal(result.indexBudget.evictedIndex,undefined);assert.equal(result.indexBudget.retainedPoint,1);assert.equal(result.indexBudget.lateIndex,undefined);
   assert.equal(result.indexBudget.rejectsPlaintext,true);assert.ok(result.indexBudget.usage.bytes<=result.indexBudget.usage.limitBytes);
   assert.equal(result.v3Upgrade.snapshot.sequence,1);assert.equal(result.v3Upgrade.point,7);assert.equal(result.v3Upgrade.index,undefined);
+  assert.equal(result.combined.snapshot.sequence,1);
+  assert.equal(result.combined.checkpoint,1);
+  assert.equal(result.combined.index.sequence,1);
+
+  const thumbnail=await page.evaluate(async()=>{
+    const {openThumbnailCache}=await import('/diary/crypto/e2ee/cache.mjs');
+    const {encryptPhotoParts}=await import('/diary/crypto/e2ee/photo-crypto.mjs');
+    const blob=new Blob(['PRIVATE_THUMBNAIL'],{type:'image/webp'});
+    const encrypted=await encryptPhotoParts({original:blob,display:blob,thumbnail:blob},'A',crypto.randomUUID());
+    const ciphertext=await encrypted.parts.thumbnail.arrayBuffer();
+    const proof={version:1,iv:'AAAAAAAAAAAAAAAA',ciphertext:'AAAAAAAAAAAAAAAAAAAAAA'};
+    const keys=['a','b','c','d'].map(letter=>letter.repeat(43));
+    const name='thumbnail-budget-'+crypto.randomUUID(),options={limitBytes:4096,limitCount:2};
+    const one=await openThumbnailCache(name,options),two=await openThumbnailCache(name,options);
+    try {
+      await one.put(keys[0],{etag:'"a"',ciphertext,proof});
+      await two.put(keys[1],{etag:'"b"',ciphertext,proof});
+      await one.touch(keys[0],'"a"');
+      await two.put(keys[2],{etag:'"c"',ciphertext,proof});
+      const lru=Boolean(await two.get(keys[0]))&&!await one.get(keys[1])&&Boolean(await one.get(keys[2]));
+      await one.put(keys[3],{etag:'"d"',ciphertext:await blob.arrayBuffer(),proof});
+      const refused=!(await two.get(keys[3]));
+      return {lru,refused};
+    }finally{one.close();two.close();}
+  });
+  assert.deepEqual(thumbnail,{lru:true,refused:true});
 }
 
 export async function waitForPreparedIndex(page) {

@@ -95,7 +95,11 @@ export async function handleEncryptedApi(request,env,url,path,session,{json,read
     return json({record:row});
   }
   if(path==='/api/encryption/time'&&request.method==='GET')return json({timestamp:new Date().toISOString()});
-  if(path==='/api/encryption/head'&&request.method==='GET'){if(url.searchParams.get('household')!==session.activeHouseholdId)fail(403,'HouseholdDenied');return visible(json(await store.snapshotHead(actor,session.activeHouseholdId)));}
+  if(path==='/api/encryption/head'&&request.method==='GET'){
+    if(url.searchParams.get('household')!==session.activeHouseholdId)fail(403,'HouseholdDenied');
+    const pageLimit=Number(url.searchParams.get('pageLimit')??50);
+    return visible(json(await store.snapshotHead(actor,session.activeHouseholdId,{pageLimit})));
+  }
   if(path==='/api/encryption/snapshot'&&request.method==='GET') {
     const q=url.searchParams;if(q.get('household')!==session.activeHouseholdId)fail(403,'HouseholdDenied');
     const response=json(await store.snapshotPage(actor,session.activeHouseholdId,{since:Number(q.get('since')??-1),after:q.get('after'),at:q.has('at')?Number(q.get('at')):null,limit:Number(q.get('limit')||50)}));
