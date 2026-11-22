@@ -8,7 +8,9 @@ import { validatePublicTrust,DIARY_READER_PROTOCOL } from './crypto/e2ee/crypto.
 import {TRUST_PIN,sameTrust,checkTrustFloor,rememberTrustFloor} from './crypto/e2ee/trust.mjs';
 import {saveDevice,loadDevice,clearDevice} from './crypto/e2ee/device.mjs';
 import {takePreparedVault,photoReadContext} from './crypto/e2ee/session.mjs';
+import {readDiaryStartup} from './crypto/e2ee/startup-read.mjs';
 const PIN='tlain-diary-authority-public-v1';
+const CACHE_OPEN_TIMEOUT_MS = 2500;
 export async function importDiaryTrust(file) {
   if(!file||file.size>12000)throw new Error('信頼設定ファイルを確認してください。');
   const value=await validatePublicTrust(JSON.parse(await file.text()));
@@ -26,7 +28,7 @@ async function createEncryptedDiary(session,authentication,startupProfile) {
     const result=await response.json();if(!response.ok)throw Object.assign(new Error(result.error||'暗号化された日記を読み込めません。'),{status:response.status});return result;
   };
   const request=(path,init)=>nativeApi('/encryption'+path,init);
-  const initial=startupProfile??await request('/profile');
+  const initial=startupProfile??await readDiaryStartup(signal=>request('/profile',{signal}));
   if(initial.protocol!==DIARY_READER_PROTOCOL)throw new Error('暗号化対応の最新版で開き直してください。');
   let cached={privateKeys:authentication?.diaryPrivateKeys||takePreparedVault(authentication,initial.profile)};
   if(!cached.privateKeys)cached=undefined;
@@ -41,13 +43,17 @@ async function createEncryptedDiary(session,authentication,startupProfile) {
   if(authentication&&initial.profile.webAuthnCredentialId!==authentication.credentialId)throw new Error('ログインしたパスキーが一致しません。');
   const expectedAccount=initial.profile.actor.accountId,expectedCredential=initial.profile.webAuthnCredentialId;
   let client,navigation,api,media,cache,deadline=session.expiresAt||null;
-  let liveSession=session,persistDevice=async()=>{};
+  let liveSession=session,persistDevice=async()=>{},unlocking=true;
   let firstView,releaseFirstView;
   const resetFirstView=()=>{releaseFirstView?.();firstView=new Promise(resolve=>{releaseFirstView=resolve;});};
   resetFirstView();
+  async function readSession(signal) {
+    if (unlocking) return readDiaryStartup(signal => nativeApi('/session', {signal}));
+    return nativeApi('/session', {signal});
+  }
   const transport={
     backgroundReady:()=>firstView,
-    valid:async signal=>{const generation=client.generation;try{const result=await nativeApi('/session',{signal});signal?.throwIfAborted();const valid=generation===client.generation&&!client.switching&&result.authenticated&&result.encryption?.enabled&&result.encryption.protocol===DIARY_READER_PROTOCOL&&result.encryption.accountId===expectedAccount&&result.encryption.webAuthnCredentialId===expectedCredential&&result.activeHouseholdId===client.household&&result.encryption.generation===initial.rollout.generation&&(!liveSession.keySession||JSON.stringify(liveSession.keySession)===JSON.stringify(result.keySession));if(valid){deadline=result.expiresAt||deadline;liveSession=result;await persistDevice();}return valid;}catch(error){if([401,403].includes(error.status))return false;throw error;}},
+    valid:async signal=>{const generation=client.generation;try{const result=await readSession(signal);signal?.throwIfAborted();const valid=generation===client.generation&&!client.switching&&result.authenticated&&result.encryption?.enabled&&result.encryption.protocol===DIARY_READER_PROTOCOL&&result.encryption.accountId===expectedAccount&&result.encryption.webAuthnCredentialId===expectedCredential&&result.activeHouseholdId===client.household&&result.encryption.generation===initial.rollout.generation&&(!liveSession.keySession||JSON.stringify(liveSession.keySession)===JSON.stringify(result.keySession));if(valid){deadline=result.expiresAt||deadline;liveSession=result;await persistDevice();}return valid;}catch(error){if([401,403].includes(error.status))return false;throw error;}},
     timestamp:async()=>(await request('/time')).timestamp,
     snapshot:(household,since,{onPage,signal}={})=>readSnapshotPages(
       options=>request(`/snapshot?${new URLSearchParams(Object.entries(options).filter(([,value])=>value!==null))}`,{signal}),
@@ -57,7 +63,7 @@ async function createEncryptedDiary(session,authentication,startupProfile) {
     mutation:(proposal,operation)=>request('/mutation',{method:'POST',body:{proposal,operation}}),
     remove:proposal=>request('/remove',{method:'POST',body:proposal})
   };
-  try{cache=await openCipherCache();}catch{/* A browser without IndexedDB can still decrypt online. */}
+  try{cache=await openCipherCache(undefined,{openTimeoutMs:CACHE_OPEN_TIMEOUT_MS});}catch{/* A browser without IndexedDB can still decrypt online. */}
   client=new EncryptedDiaryClient({transport,profile:initial.profile,anchor:pin.anchor,minimumGeneration:Math.max(pin.minimumGeneration,initial.minimumGeneration),documentFormat:typeof CompressionStream==='function'?2:1,cache,lazy:true});
   client.onProgress=progress=>{
     const status=document.getElementById('diary-preparation-status');if(!status)return;
@@ -66,6 +72,7 @@ async function createEncryptedDiary(session,authentication,startupProfile) {
   };
   try{await client.unlock(authentication?.prfOutput,cached?.privateKeys);}
   catch(error){client.lock();cache?.close();throw error;}
+  finally{unlocking=false;}
   cached=null;
   navigation=await createPrivateNavigation(client);
   let photoBinding,thumbnailCache;

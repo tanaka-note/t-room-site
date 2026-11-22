@@ -9,10 +9,15 @@ const stableKey = key => typeof key === 'string' ? key.replace(/\/[0-9]+$/, '') 
 
 // One budget across all accounts, households and generations on this origin.
 // Eviction never removes the separate, monotonic rollback checkpoints.
-export async function openCipherCache(name = 'tlain-diary-encrypted-v1', {limitBytes = CIPHER_CACHE_LIMIT} = {}) {
+export async function openCipherCache(name = 'tlain-diary-encrypted-v1', {limitBytes = CIPHER_CACHE_LIMIT, openTimeoutMs = 0} = {}) {
   if (!Number.isSafeInteger(limitBytes) || limitBytes < 1 || limitBytes > CIPHER_CACHE_LIMIT) throw new Error('InvalidCacheLimit');
   const request = indexedDB.open(name, 4);
+  let abandoned=false, timer;
   request.onupgradeneeded = () => {
+    if (abandoned) {
+      request.transaction.abort();
+      return;
+    }
     const db = request.result, tx = request.transaction;
     for (const store of ['snapshots', 'checkpoints', 'usage', 'indexes'])
       if (!db.objectStoreNames.contains(store)) db.createObjectStore(store);
@@ -38,14 +43,15 @@ export async function openCipherCache(name = 'tlain-diary-encrypted-v1', {limitB
       cursor.continue();
     };
   };
-  let abandoned=false;
   const db = await new Promise((resolve, reject) => {
     // An older open tab may still hold the v2 database. Use the online path
     // immediately instead of blocking login until that tab is closed.
-    request.onblocked = () => {abandoned=true;reject(new Error('CacheUnavailable'));};
+    const unavailable = () => {abandoned=true;reject(new Error('CacheUnavailable'));};
+    request.onblocked = unavailable;
     request.onsuccess = () => {if(abandoned){request.result.close();return;}resolve(request.result);};
-    request.onerror = () => reject(new Error('CacheUnavailable'));
-  });
+    request.onerror = unavailable;
+    if (openTimeoutMs) timer = setTimeout(unavailable, openTimeoutMs);
+  }).finally(() => clearTimeout(timer));
   db.onversionchange = () => db.close();
   const transaction = (stores, mode, run) => new Promise((resolve, reject) => {
     const tx = db.transaction(stores, mode);let result, stale = false;

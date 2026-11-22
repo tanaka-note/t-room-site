@@ -67,7 +67,71 @@ try {
     finally{release();f.user.active=true;await context.close();}
   }
 
-  for(const reopen of [false,true]){
+  {
+    const context = await browser.newContext(devices['Pixel 7']);
+    await f.configure(context);
+    const page = await context.newPage();
+    const firstRead = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    let profileReads = 0;
+    try {
+      await page.clock.install();
+      await page.route('**' + profilePath, async route => {
+        if (++profileReads === 1) {
+          firstRead.resolve();
+          await release.promise;
+          await route.abort().catch(() => {});
+        } else {
+          await route.continue();
+        }
+      });
+      await page.goto(f.origin + '/diary/');
+      await page.locator('#passkey-login').click();
+      await firstRead.promise;
+      await page.clock.fastForward(12_050);
+      await page.locator(entryCard).first().waitFor();
+      const requests = await page.evaluate(() => window.loginMetrics.requests);
+      assert.equal(profileReads, 2);
+      assert.equal(requests.filter(path => path === '/diary/api/passkey/handoff').length, 1);
+      console.log('Timed-out startup profile read retries within the same authenticated session.');
+    } finally {
+      release.resolve();
+      await context.close();
+    }
+  }
+
+  {
+    const context = await browser.newContext(devices['Pixel 7']);
+    await f.configure(context);
+    const page = await context.newPage();
+    try {
+      await page.clock.install();
+      await page.addInitScript(() => {
+        const open = IDBFactory.prototype.open;
+        window.stalledDiaryStores = [];
+        IDBFactory.prototype.open = function(name, ...args) {
+          if (['tlain-diary-device-v1', 'tlain-diary-encrypted-v1'].includes(name)) {
+            window.stalledDiaryStores.push(name);
+            return {};
+          }
+          return open.call(this, name, ...args);
+        };
+      });
+      await page.goto(f.origin + '/diary/');
+      await page.locator('#passkey-login').click();
+      for (const name of ['tlain-diary-encrypted-v1', 'tlain-diary-device-v1']) {
+        await page.waitForFunction(name => window.stalledDiaryStores.includes(name), name);
+        await page.clock.fastForward(2550);
+      }
+      await page.locator(entryCard).first().waitFor();
+      assert.equal(await page.evaluate(() => window.loginMetrics.requests.filter(path => path === '/diary/api/passkey/handoff').length), 1);
+      console.log('Stalled optional IndexedDB opens do not prevent the first authenticated list.');
+    } finally {
+      await context.close();
+    }
+  }
+
+  for(const variant of ['same tab','reopened tab','without AbortSignal.any']){
     const context=await browser.newContext(devices['Pixel 7']);await f.configure(context);
     const releaseFirst=Promise.withResolvers(),releaseFinal=Promise.withResolvers();
     let page=await context.newPage();
@@ -87,9 +151,13 @@ try {
       },cacheKey,{polling:150});
       await page.locator('#logout-button').click();
       await page.locator('#passkey-login').waitFor({state:'visible'});
-      if(reopen){await page.close();page=await context.newPage();await page.goto(f.origin+'/diary/');}
+      if(variant==='reopened tab'){await page.close();page=await context.newPage();await page.goto(f.origin+'/diary/');}
       await page.locator('#passkey-login').waitFor({state:'visible'});
       await page.evaluate(()=>{window.loginMetrics={vaultDecrypts:0,requests:[]};});
+      if(variant==='without AbortSignal.any') {
+        await page.evaluate(() => { AbortSignal.any = undefined; });
+        await page.route('**/diary/api/households', route => route.fulfill({status:503, json:{error:'Synthetic failure'}}));
+      }
       let checks=0;
       await page.route('**/diary/api/session',async route=>{
         const step=++checks;
@@ -114,8 +182,9 @@ try {
       assert.equal(metrics.requests.filter(path=>path===profilePath).length,1);
       assert.equal(metrics.requests.includes('/diary/api/encryption/prepare'),false);
       assert.equal(metrics.requests.includes('/diary/api/encryption/head'),false);
+      assert.equal(metrics.requests.includes('/diary/api/households'),false);
       assert.equal(metrics.vaultDecrypts,1);
-      console.log(`Cached re-login (${reopen?'reopened tab':'same tab'}): delta overlap and both display gates passed.`);
+      console.log(`Cached re-login (${variant}): delta overlap and both display gates passed.`);
     }finally{releaseFirst.resolve();releaseFinal.resolve();await context.close();}
   }
   console.log('Android-emulated login pipeline passed.');
