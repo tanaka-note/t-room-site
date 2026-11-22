@@ -68,10 +68,12 @@ export class EncryptedDiaryClient {
     this.preparedBindings = new WeakMap();
     this.lazy=lazy;this.documentLoads=new WeakMap();this.background=null;
     this.indexCacheState=null;
+    this.progressTimer=null;
     this.onProgress=()=>{};this.onBackgroundError=()=>{};
   }
   async unlock(prf,cachedPrivateKeys) {
     const generation = ++this.generation;
+    clearTimeout(this.progressTimer);this.progressTimer=null;
     this.closed = true;
     this.records.clear();
     this.albumCache = null;
@@ -99,6 +101,7 @@ export class EncryptedDiaryClient {
   }
   lock() {
     ++this.generation;
+    clearTimeout(this.progressTimer);this.progressTimer=null;
     this.closed = true;
     this.keys.clear();this.recordKeys.clear();
     this.records.clear();
@@ -204,11 +207,11 @@ export class EncryptedDiaryClient {
     const digest=b64(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(snapshot))));
     return b64(await crypto.subtle.digest('SHA-256',encode({snapshot:digest,actor:this.actor,directory:this.directory})));
   }
-  async readPreparedIndex(key,snapshot) {
+  async readPreparedIndex(key,snapshot,packet=undefined) {
     if(!this.lazy||!this.cache?.getIndex)return null;
     let available=false;
     try {
-      const packet=await this.cache.getIndex(key);
+      if(packet===undefined)packet=await this.cache.getIndex(key);
       if(!packet)return null;
       available=true;
       if(packet.sequence!==snapshot.sequence)return false;
@@ -260,11 +263,20 @@ export class EncryptedDiaryClient {
     let cached=null, checkpoint=0;
     const checkpointKey=[this.actor.accountId,this.actor.credentialId,this.household].join('/');
     const cacheKey=checkpointKey+'/'+this.directory.generation;
-    if(this.sequence===undefined&&this.cache){try{cached=await this.cache.get(cacheKey);}catch{cached=null;}if(cached){validateSnapshot(cached);if(cached.delta||cached.unchanged||cached.household!==this.household)throw new Error('InvalidCache');}}
-    if (this.cache?.checkpoint) {
-      try { checkpoint = await this.cache.checkpoint(checkpointKey) ?? 0; } catch { checkpoint = 0; }
-      if (!Number.isSafeInteger(checkpoint) || checkpoint < 0) throw new Error('InvalidCache');
+    let saved;
+    if(this.sequence===undefined&&this.cache) {
+      try{
+        if(this.cache.readStartup)saved=await this.cache.readStartup(cacheKey,checkpointKey);
+        cached=saved?saved.snapshot:await this.cache.get(cacheKey);
+      }catch{/* A missing local snapshot uses the authoritative online path. */}
+      if(cached){
+        validateSnapshot(cached);
+        if(cached.delta||cached.unchanged||cached.household!==this.household)throw new Error('InvalidCache');
+      }
     }
+    if(saved)checkpoint=saved.checkpoint??0;
+    else if(this.cache?.checkpoint)try{checkpoint=await this.cache.checkpoint(checkpointKey)??0;}catch{/* Local storage is optional. */}
+    if(!Number.isSafeInteger(checkpoint)||checkpoint<0)throw new Error('InvalidCache');
     let since=this.sequence??cached?.sequence??-1;
     let pendingDelta;
     if(overlap) {
@@ -283,7 +295,7 @@ export class EncryptedDiaryClient {
         controller?.abort();throw error;
       }
     }
-    const preparedIndex=cached?this.readPreparedIndex(cacheKey,cached):Promise.resolve(null);
+    const preparedIndex=cached?this.readPreparedIndex(cacheKey,cached,saved?(saved.index??null):undefined):Promise.resolve(null);
     // Verify/decrypt the small summaries while the remaining pages are in
     // flight. Nothing becomes visible until the complete fixed snapshot and
     // live session have passed the same validation as the non-pipelined path.
@@ -373,11 +385,22 @@ export class EncryptedDiaryClient {
     // snapshot was not rewritten, bind its exact existing bytes, not a newly
     // assembled array with a different completion order.
     if(this.lazy&&this.cache?.putIndex)this.indexCacheState={key:cacheKey,snapshot:cacheUnchanged?cached:{version:1,household:this.household,sequence:this.sequence,baseSequence:-1,delta:false,unchanged:false,removed:[],records:[...records.values()].map(r=>r.row)},records:new Map(records),ready:cacheUnchanged&&Boolean(restored)};
-    if(this.lazy)this.progress();
+    if(this.lazy)this.progress(true);
     if(generation!==this.generation||this.closed)throw new Error("SessionChanged");
     return this.records;
   }
-  progress() {
+  progress(immediate=false) {
+    if(!immediate) {
+      if(this.progressTimer===null) {
+        const generation=this.generation;
+        this.progressTimer=setTimeout(()=>{
+          this.progressTimer=null;
+          if(!this.closed&&generation===this.generation)this.progress(true);
+        },150);
+      }
+      return;
+    }
+    clearTimeout(this.progressTimer);this.progressTimer=null;
     const total=this.records.size,completed=[...this.records.values()].filter(record=>record.entry).length;
     this.onProgress({phase:completed===total?'complete':'documents',completed,total});
   }
@@ -436,12 +459,14 @@ export class EncryptedDiaryClient {
       await this.persistPreparedIndex();
       while(!this.closed&&generation===this.generation) {
         const queue=[...this.records.values()].filter(r=>!r.entry).sort((a,b)=>String(b.summary?.entryDate||'').localeCompare(String(a.summary?.entryDate||''))).map(r=>r.row.id);
-        if(!queue.length)return;
-        for(let index=0;index<queue.length&&!this.closed&&generation===this.generation;index+=2) {
-          await Promise.all(queue.slice(index,index+2).map(id=>this.hydrate(id).catch(error=>{
+        if(!queue.length){this.progress(true);return;}
+        for(let index=0;index<queue.length&&!this.closed&&generation===this.generation;) {
+          const count=globalThis.navigator?.scheduling?.isInputPending?.()?2:8;
+          await Promise.all(queue.slice(index,index+count).map(id=>this.hydrate(id).catch(error=>{
             // A concurrent, authenticated delta may legitimately remove a row.
             if(error.status===404&&!this.records.has(id))return;throw error;
           })));
+          index+=count;
           await new Promise(resolve=>setTimeout(resolve,0));
         }
       }

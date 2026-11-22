@@ -4,7 +4,8 @@ import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {encryptPhotoParts,decryptPhotoPart,photoHeader,PHOTO_PREFIX} from '../../e2ee/photo-crypto.mjs';
 import {createEncryptedMediaClient} from '../../e2ee/media-client.mjs';
-import {PHOTO_CONTEXT_HEADER, PHOTO_FORMAT_HEADER, photoReadContext} from '../../e2ee/session.mjs';
+import {PHOTO_CONTEXT_HEADER, PHOTO_FORMAT_HEADER, PHOTO_EXPIRY_HEADER, photoReadContext} from '../../e2ee/session.mjs';
+import {preferencesScope} from '../../e2ee/policy.mjs';
 import {EncryptedDiaryClient} from '../../e2ee/client.mjs';
 import {createStore} from '../../e2ee/store.mjs';
 import {readSnapshotPages} from '../../e2ee/snapshot.mjs';
@@ -12,6 +13,77 @@ import {systemFixture} from './system-fixture.mjs';
 
 const kinds=['original','display','thumbnail'],household='tanaka-household';
 const parts=()=>Object.fromEntries(kinds.map(kind=>[kind,new File([`PRIVATE_${kind}`],kind+'.jpg',{type:'image/jpeg'})]));
+
+test('durable thumbnails require fresh photo authorization and authenticated cache bytes',async()=>{
+  const id=crypto.randomUUID(),encrypted=await encryptPhotoParts(parts(),household,id);
+  const photo={id,crypto:encrypted.descriptor,originalSize:parts().original.size};
+  const scope=preferencesScope(household,'main-user');
+  const key=await crypto.subtle.generateKey({name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+  const client={
+    actor:{accountId:'main-user',credentialId:'recipient-a'},household,generation:1,sequence:1,
+    records:new Map([['entry',{row:{photoIds:[id]}}]]),keys:new Map([[scope,key]]),
+    directory:{generation:1,epochs:{[scope]:1}},assertOpen(){}
+  };
+  const onDisk=new Map();
+  const durable={
+    get:async id=>onDisk.get(id),
+    put:async(id,value)=>{onDisk.set(id,structuredClone(value));},
+    touch:async()=>{}
+  };
+  let allowed=true;
+  const validators=[];
+  const fetch=async(url,init)=>{
+    const validator=init.headers.get('If-None-Match');
+    validators.push(validator);
+    if(!allowed)return new Response(null,{status:401});
+    const etag='"server-tag"';
+    const headers={[PHOTO_CONTEXT_HEADER]:'current-session',[PHOTO_FORMAT_HEADER]:'encrypted',
+      [PHOTO_EXPIRY_HEADER]:String(Math.floor(Date.now()/1000)+60),ETag:etag};
+    if(validator===etag)return new Response(null,{status:304,headers});
+    return new Response(encrypted.parts[url.split('/').at(-1)],{status:200,headers});
+  };
+  const newView=()=>createEncryptedMediaClient(client,()=>{},fetch,{
+    photoContext:()=> 'current-session',getThumbnailCache:async()=>durable
+  });
+  let view=newView();
+  const useThumbnail=async()=>assert.equal(await (await view.read(photo,'thumbnail')).text(),'PRIVATE_thumbnail');
+  const waitStored=async(predicate)=>{
+    for(let attempt=0;attempt<100;attempt++){
+      if(predicate())return;
+      await new Promise(resolve=>setTimeout(resolve,10));
+    }
+    assert.fail('thumbnail was not written');
+  };
+  await useThumbnail();await waitStored(()=>onDisk.size===1);
+  const [storageKey,packet]=[...onDisk][0];
+  assert.equal(validators.at(-1),null);
+  assert.notEqual(storageKey,id);
+  assert.ok(!JSON.stringify(packet).includes(photo.crypto.key));
+  assert.ok(!new TextDecoder().decode(packet.ciphertext).includes('PRIVATE_thumbnail'));
+  view.close();view=newView();await useThumbnail();assert.equal(validators.at(-1),packet.etag);
+  view.close();view=newView();allowed=false;
+  await assert.rejects(view.read(photo,'thumbnail'),{status:401});
+  assert.equal(validators.at(-1),packet.etag);
+  allowed=true;view.close();view=newView();
+  // Keep the valid server ETag but alter the local object.
+  new Uint8Array(packet.ciphertext)[packet.ciphertext.byteLength-1]^=1;
+  await useThumbnail();
+  assert.deepEqual(validators.slice(-2),[packet.etag,null]);
+  await waitStored(()=>onDisk.get(storageKey)!==packet);
+  view.close();
+  client.actor={...client.actor,credentialId:'recipient-b'};
+  view=newView();await useThumbnail();assert.equal(validators.at(-1),null);
+  await waitStored(()=>onDisk.size===2);
+  view.close();view=newView();
+  await view.read(photo,'original');await view.read(photo,'display');
+  assert.equal(onDisk.size,2);
+  assert.deepEqual(validators.slice(-2),[null,null]);
+  view.close();
+  client.directory={...client.directory,generation:2};
+  view=newView();await useThumbnail();assert.equal(validators.at(-1),null);
+  await waitStored(()=>onDisk.size===3);view.close();
+});
+
 test('binary encryption authenticates every variant, ID, household and byte, including large originals',async()=>{
   const id=crypto.randomUUID(),plain=parts();plain.original=new Blob([new Uint8Array(8*1024*1024).fill(71)],{type:'image/jpeg'});
   const a=await encryptPhotoParts(plain,household,id),b=await encryptPhotoParts(plain,household,id);

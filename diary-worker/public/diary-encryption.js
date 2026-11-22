@@ -1,6 +1,6 @@
 import { EncryptedDiaryClient } from './crypto/e2ee/client.mjs';
-import { readSnapshotPages } from './crypto/e2ee/snapshot.mjs';
-import { openCipherCache } from './crypto/e2ee/cache.mjs';
+import { readSnapshotPages,LARGE_SNAPSHOT_PAGE_SIZE } from './crypto/e2ee/snapshot.mjs';
+import { openCipherCache,openThumbnailCache } from './crypto/e2ee/cache.mjs';
 import { createPrivateNavigation } from './crypto/e2ee/privacy.mjs';
 import { createEncryptedDiaryApi } from './crypto/e2ee/ui-api.mjs';
 import { createEncryptedMediaClient } from './crypto/e2ee/media-client.mjs';
@@ -49,7 +49,11 @@ async function createEncryptedDiary(session,authentication,startupProfile) {
     backgroundReady:()=>firstView,
     valid:async()=>{const generation=client.generation;try{const result=await nativeApi('/session');const valid=generation===client.generation&&!client.switching&&result.authenticated&&result.encryption?.enabled&&result.encryption.protocol===DIARY_READER_PROTOCOL&&result.encryption.accountId===expectedAccount&&result.encryption.webAuthnCredentialId===expectedCredential&&result.activeHouseholdId===client.household&&result.encryption.generation===initial.rollout.generation&&(!liveSession.keySession||JSON.stringify(liveSession.keySession)===JSON.stringify(result.keySession));if(valid){deadline=result.expiresAt||deadline;liveSession=result;await persistDevice();}return valid;}catch(error){if([401,403].includes(error.status))return false;throw error;}},
     timestamp:async()=>(await request('/time')).timestamp,
-    snapshot:(household,since,{onPage,signal}={})=>readSnapshotPages(options=>request(`/snapshot?${new URLSearchParams(Object.entries(options).filter(([,value])=>value!==null))}`,{signal}),household,since,{onPage,fetchHead:h=>request(`/head?household=${encodeURIComponent(h)}`,{signal})}),
+    snapshot:(household,since,{onPage,signal}={})=>readSnapshotPages(
+      options=>request(`/snapshot?${new URLSearchParams(Object.entries(options).filter(([,value])=>value!==null))}`,{signal}),
+      household,since,{onPage,pageLimit:LARGE_SNAPSHOT_PAGE_SIZE,
+        fetchHead:h=>request(`/head?${new URLSearchParams({household:h,pageLimit:LARGE_SNAPSHOT_PAGE_SIZE})}`,{signal})}
+    ),
     mutation:(proposal,operation)=>request('/mutation',{method:'POST',body:{proposal,operation}}),
     remove:proposal=>request('/remove',{method:'POST',body:proposal})
   };
@@ -64,8 +68,9 @@ async function createEncryptedDiary(session,authentication,startupProfile) {
   catch(error){client.lock();cache?.close();throw error;}
   cached=null;
   navigation=await createPrivateNavigation(client);
-  let photoBinding;
+  let photoBinding,thumbnailCache;
   media=createEncryptedMediaClient(client,request,nativeFetch,{
+    getThumbnailCache:()=>thumbnailCache??=openThumbnailCache().catch(()=>null),
     encryptedOnly:initial.rollout.photoReadsEncryptedOnly===true,
     photoContext:()=>{
       if(photoBinding?.generation!==client.generation)photoBinding={generation:client.generation,
@@ -110,6 +115,7 @@ async function createEncryptedDiary(session,authentication,startupProfile) {
     if(cleanup)return cleanup;
     closed=true;releaseFirstView();clearInterval(timer);signals.abort();if(!external)channel?.postMessage({type:'changed',reason:logout?'logout':'closed',session:sessionIdentity()});channel?.close();
     client.lock();media.close();navigation.close();cache?.close();
+    void thumbnailCache?.then(store=>store?.close());
     cleanup=clearDevice(liveSession,{all:logout}).catch(()=>{});return cleanup;
   };
   return {

@@ -4,6 +4,8 @@ export function createPhotoImages(runtime) {
   const tasks=new Map(),urls=new Map(),downloads=new Set();
   const observers = new Map();
   const prefetchMargin=2000;
+  const albumMargin=4000;
+  const idleAlbumSlots=12;
   const limits={selected:2,visible:8,nearby:6};
   const running={selected:new Set(),visible:new Set(),nearby:new Set()};
   let frame=0,generation=0;
@@ -23,7 +25,7 @@ export function createPhotoImages(runtime) {
         }
       }
       schedule();
-    }, { root, rootMargin: `${prefetchMargin}px 0px` });
+    }, { root, rootMargin: `${root?.id==='camera-roll-dialog'?albumMargin:prefetchMargin}px 0px` });
     observers.set(root, observer);
     return observer;
   }
@@ -56,12 +58,20 @@ export function createPhotoImages(runtime) {
   function laneFor(task,distance) {
     return task.eager?'selected':task.image&&distance===0?'visible':'nearby';
   }
+  const albumThumbnail=task=>task.root?.id==='camera-roll-dialog'&&task.kind==='thumbnail'&&Boolean(task.photo.crypto);
   function pump(){
     if(document.hidden)return;
     const candidates=[...tasks.values()]
       .filter(task=>!task.started&&(!task.readyAt||task.readyAt<=performance.now())&&(task.eager||task.near!==false)&&(!task.image||task.image.isConnected))
       .map(task => ({ task, distance: distanceFromViewport(task) }))
-      .filter(({ task, distance }) => (task.eager||distance<=prefetchMargin)&&(!task.visibleOnly||distance===0));
+      .filter(({ task, distance }) => (task.eager||distance<=(albumThumbnail(task)?albumMargin:prefetchMargin))&&(!task.visibleOnly||distance===0));
+    const foreground=running.selected.size+running.visible.size>0||candidates.some(({task,distance})=>laneFor(task,distance)!=='nearby');
+    if(foreground)for(const task of running.nearby) {
+      if(task.extraPrefetch&&distanceFromViewport(task)>0) {
+        task.preempted=true;
+        task.controller.abort();
+      }
+    }
     candidates.sort((a, b) => Number(b.task.eager) - Number(a.task.eager)
       || Number(laneFor(a.task,a.distance)==='nearby') - Number(laneFor(b.task,b.distance)==='nearby')
       || Number(Boolean(a.task.visibleOnly)) - Number(Boolean(b.task.visibleOnly))
@@ -76,12 +86,15 @@ export function createPhotoImages(runtime) {
     }
     for(const {task,distance} of candidates) {
       const lane=laneFor(task,distance);
-      if(running[lane].size>=limits[lane])continue;
+      const boost=lane==='nearby'&&!foreground&&albumThumbnail(task);
+      if(lane==='nearby'&&distance>prefetchMargin&&!boost)continue;
+      if(running[lane].size>=(boost?idleAlbumSlots:limits[lane]))continue;
       if(lane==='nearby'&&(running.selected.size||running.visible.size>=4))continue;
       const version=generation;
       const controller=new AbortController();
       task.started=true;
       task.controller=controller;
+      task.extraPrefetch=boost&&(distance>prefetchMargin||running.nearby.size>=limits.nearby);
       running[lane].add(task);
       const options={signal:controller.signal,priority:lane==='nearby'?'low':'high'};
       const load=task.image||!runtime.prefetchPhoto

@@ -180,6 +180,43 @@ try{
     }
   });
   assert.deepEqual(priority,{filled:true,selectedBeforePreemption:true,newViewport:true,preempted:true});
+
+  const idlePrefetch=await page.evaluate(async()=>{
+    const {createPhotoImages}=await import('/diary/diary-photo-images.js');
+    const pending=new Map(),aborted=new Set();
+    const loader=createPhotoImages({readPhoto:(photo,_kind,{signal})=>new Promise((resolve,reject)=>{
+      pending.set(photo.id,()=>resolve(new Blob(['image'],{type:'image/png'})));
+      signal.addEventListener('abort',()=>{
+        aborted.add(photo.id);reject(new DOMException('Aborted','AbortError'));
+      },{once:true});
+    })});
+    const host=document.createElement('div');
+    host.id='camera-roll-dialog';
+    host.style.cssText='position:fixed;top:0;left:0;height:200px;width:200px;overflow:auto;z-index:99999';
+    document.body.append(host);
+    const add=(id,eager=false)=>{
+      const image=document.createElement('img');
+      image.style.cssText='display:block;width:200px;height:400px';
+      host.append(image);
+      loader.bind(image,{id,crypto:{version:1}},'thumbnail',{root:host,eager});
+    };
+    const waitFor=async predicate=>{
+      const deadline=performance.now()+4000;
+      while(!predicate()&&performance.now()<deadline)await new Promise(requestAnimationFrame);
+      return predicate();
+    };
+    try {
+      for(let i=0;i<14;i++)add(String(i));
+      const firstStarted=await waitFor(()=>pending.has('0'));
+      const heldBack=!pending.has('7');
+      pending.get('0')?.();
+      const widened=await waitFor(()=>pending.has('7'));
+      add('selected',true);
+      const preempted=await waitFor(()=>pending.has('selected')&&aborted.has('7'));
+      return {firstStarted,heldBack,widened,preempted};
+    }finally{loader.reset();host.remove();}
+  });
+  assert.deepEqual(idlePrefetch,{firstStarted:true,heldBack:true,widened:true,preempted:true});
   await page.click('#logout-button');await page.locator('#login-view').waitFor({state:'visible'});
   assert.equal(await page.locator('img[src^="blob:"]').count(),0,'logout releases plaintext object URLs');
   await page.click('#passkey-login');await page.locator('#app-view').waitFor({state:'visible'});
@@ -237,6 +274,35 @@ try{
     await loaded(far).waitFor({ state: 'attached' });
     console.log('Album prefetch: the scrolling dialog loads nearby thumbnails before scrolling and defers distant ones.');
   }
+  if(await page.locator('#camera-roll-dialog').isVisible()) {
+    await page.click('[data-close-dialog="camera-roll-dialog"]');
+    await page.locator('#camera-roll-dialog').waitFor({state:'hidden'});
+  }
+  await page.waitForFunction(async()=>{
+    const db=await new Promise((resolve,reject)=>{
+      const request=indexedDB.open('tlain-diary-thumbnails-v1');
+      request.onsuccess=()=>resolve(request.result);request.onerror=reject;
+    });
+    try {
+      const packets=await new Promise((resolve,reject)=>{
+        const request=db.transaction('thumbnails').objectStore('thumbnails').getAll();
+        request.onsuccess=()=>resolve(request.result);request.onerror=reject;
+      });
+      return packets.length===1&&packets.every(packet=>Object.keys(packet).sort().join(',')==='ciphertext,etag,proof'
+        &&new Uint8Array(packet.ciphertext)[0]===84);
+    }finally{db.close();}
+  });
+  await page.click('#logout-button');
+  await page.locator('#passkey-login').waitFor({state:'visible'});
+  await page.reload();
+  await page.click('#passkey-login');
+  await page.locator('#entry-list .diary-entry-card').first().waitFor({state:'visible'});
+  const afterLogout=requests.length;
+  const thumbPath=`/diary/api/photos/${newId}/thumbnail`;
+  await page.click('#camera-roll-button');
+  await page.locator(`#camera-roll-grid [data-photo-id="${newId}"] img[data-photo-state="ready"]`).waitFor();
+  assert.deepEqual(requests.slice(afterLogout).filter(row=>row.path===thumbPath).map(row=>row.status),[304],
+    'a new authenticated runtime uses the durable thumbnail only after live revalidation');
   assert.deepEqual(errors,[]);await context.close();
   console.log('Mixed photo browser: existing plaintext + new encrypted photos survive edit/reload, decode in detail/viewer, save exact original bytes; bounded near-viewport prefetch and reset reject late results.');
 }finally{writer.lock();await browser.close();await new Promise(resolve=>server.close(resolve));await f.close();}
