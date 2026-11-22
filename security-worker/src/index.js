@@ -1626,12 +1626,19 @@ async function approvalCloudKeys(env, identityId, credentialId, admin) {
   const config = await env.CLOUD_AUTH.getPrimaryAdminCryptoConfig();
   if (!config?.initialized || !config.publicKeyJwk) throw new HttpError(409, "T-Cloudの管理鍵を確認できません。");
   const adminFingerprint = await sha256(canonicalJwk(config.publicKeyJwk));
+  const delivered = await env.DB.prepare(`SELECT t.service_link_id FROM security_tcloud_admin_key_transfers t
+    JOIN security_credentials source ON source.credential_id=t.source_credential_id AND source.identity_id=t.identity_id
+    WHERE t.identity_id=? AND t.credential_id=? AND t.admin_key_fingerprint=?
+      AND t.transfer_ciphertext IS NOT NULL AND source.status='active'`)
+    .bind(identityId, credentialId, adminFingerprint).first();
+  const missing = links.filter(link => link.accountId !== "admin" || link.id !== delivered?.service_link_id);
+  if (!missing.length) return { adminFingerprint, targets: [] };
   const envelope = await env.DB.prepare(`SELECT encrypted_payload AS encryptedPayload, payload_iv AS payloadIv
     FROM security_tcloud_key_envelopes own WHERE own.credential_id = ?1 AND own.identity_id = ?2
     AND own.envelope_type = 'admin_private_prf' AND ${CLOUD_KEY_SENDER}`)
     .bind(admin.credentialId, admin.identityId).first();
   if (!envelope) throw new HttpError(409, "T-Cloudの管理鍵を持つ既存の第一管理者パスキーで本人確認してください。");
-  const targets = await Promise.all(links.map(async link => {
+  const targets = await Promise.all(missing.map(async link => {
     const recipient = link.accountId === "admin"
       ? await env.DB.prepare(`SELECT public_key_jwk, public_key_fingerprint FROM security_tcloud_admin_key_transfers
         WHERE identity_id = ? AND credential_id = ? AND service_link_id = ?`).bind(identityId, credentialId, link.id).first()
@@ -1773,7 +1780,7 @@ async function approveIdentity(identityId, request, env, admin) {
   const diaryTargets = (await diaryApprovalTargets(env, identityId, credentialId)).filter(link => !link.grantGeneration);
   const householdTargets = await approvalHouseholdKeys(env, identityId, credentialId, admin);
   const billing = await approvalBillingKeys(env, identityId, credentialId, admin);
-  if (credential.status === "active" && !pendingLinks && !cloud && !diaryTargets.length && !householdTargets.length && !billing) {
+  if (credential.status === "active" && !pendingLinks && !cloud?.targets.length && !diaryTargets.length && !householdTargets.length && !billing) {
     return json({ ok: true, alreadyApproved: true });
   }
   if (body.linkHash !== credential.linkHash) {
@@ -1811,6 +1818,7 @@ async function approveIdentity(identityId, request, env, admin) {
 }
 
 async function commitIdentityApproval(env, { identityId, credentialId, credential, cloud, cloudStatements, admin, audit, diary, lease }) {
+  requireFreshSecurityAdmin(admin);
   if (lease && Date.now() >= lease.expiresAt - 5000) {
     throw new HttpError(409, "日記の鍵を照合する時間が切れました。もう一度承認してください。");
   }
@@ -1824,7 +1832,7 @@ async function commitIdentityApproval(env, { identityId, credentialId, credentia
   const updates = [
     ...cloudStatements,
     env.DB.prepare(`UPDATE security_credentials SET status = 'active', approved_at = COALESCE(approved_at, CURRENT_TIMESTAMP)
-      WHERE credential_id = ?1 AND identity_id = ?2 AND status IN ('pending','active') AND ${ready}
+      WHERE credential_id = ?1 AND identity_id = ?2 AND status = ?6 AND ${ready}
         AND EXISTS (SELECT 1 FROM security_identities WHERE id = ?2 AND status IN ('pending_approval','active'))
         AND EXISTS (SELECT 1 FROM security_credentials approver JOIN security_identities owner ON owner.id = approver.identity_id
           WHERE approver.credential_id = ?4 AND owner.id = 'primary-admin' AND approver.status = 'active'
@@ -1836,8 +1844,8 @@ async function commitIdentityApproval(env, { identityId, credentialId, credentia
             AND l.service_account_id = json_extract(expected.value, '$.service_account_id')
             AND l.cloud_root_folder_id IS json_extract(expected.value, '$.cloud_root_folder_id')
             AND l.status = json_extract(expected.value, '$.status')))
-        ${diary ? "AND COALESCE((SELECT generation FROM security_diary_key_config WHERE id=1),0)=?6 AND unixepoch()*1000<?7" : ""}`)
-      .bind(credentialId, identityId, cloud?.adminFingerprint || null, admin.credentialId, JSON.stringify(credential.links),
+        ${diary ? "AND COALESCE((SELECT generation FROM security_diary_key_config WHERE id=1),0)=?7 AND unixepoch()*1000<?8" : ""}`)
+      .bind(credentialId, identityId, cloud?.adminFingerprint || null, admin.credentialId, JSON.stringify(credential.links), credential.status,
         ...(diary ? [diary.expectedGeneration, lease.expiresAt] : []))
   ];
   // changes() is evaluated inside the same D1 batch. A lost guard must not

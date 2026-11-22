@@ -110,6 +110,8 @@ test("primary-admin B remains pending until the existing admin has delivered the
     const sender = await TRoomCrypto.cloudPasskeyPreparation(prfA);
     const packet = await sender.sendAdminKey(cloud.envelope, cloud.targets[0].publicKey, binding);
     assert.equal((await f.approve({ cloudEnvelopes: [{ ...packet, ...binding }] })).tcloudPasskeyReady, true);
+    assert.equal((await f.approve()).alreadyApproved, true);
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM security_audit_events WHERE event_type='identity_approved'").get().count, 1);
     assert.equal((await f.context.createHandoff({ service: "diary" }, f.env)).link.service_account_id, "main-admin");
     await assert.rejects(f.context.createHandoff({ service: "cloud" }, f.env), e => e.status === 403);
     const keys = await f.context.cloudKeyPreparation({ action: "status", credentialId: "credential-B" }, f.env);

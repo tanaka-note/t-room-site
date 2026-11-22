@@ -711,7 +711,7 @@
       const { cloud, diary, household, billing, linkHash } = await post(`${endpoint}/prepare`, { credentialId });
       const diaryConfiguration = diary ? await (await import("/security/diary-setup.mjs")).prepareDiaryApproval(diary, auth, id) : null;
       const cloudEnvelopes = [];
-      if (cloud) {
+      if (cloud?.targets.length) {
         if (!auth.prfOutput) throw new Error("T-Cloudの管理鍵を解除できる既存の管理者パスキーで本人確認してください。");
         const keys = await TRoomCrypto.cloudPasskeyPreparation(auth.prfOutput);
         for (const target of cloud.targets) {
