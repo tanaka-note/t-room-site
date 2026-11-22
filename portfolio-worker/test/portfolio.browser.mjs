@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { verifyPasskeyLogin } from './passkey-login.browser.mjs';
 import { pickDate, verifyDatePickers } from './date-picker.browser.mjs';
 import { verifyMoneyInputs } from './money-input.browser.mjs';
@@ -69,7 +70,7 @@ try{
    assert.equal(JSON.parse(backup.changes[1].saved_record).rawMarketValue,1234567);
    await pickDate(page, 'view-date', '2026-10-31');await page.locator('.holdings-panel').waitFor({state:'visible'});
   }
-  if(await page.locator('#cancel-edit').isVisible())await page.locator('#cancel-edit').click();await page.screenshot({path:new URL(`../../tmp/portfolio-screens/${width}.png`,import.meta.url).pathname,fullPage:true});
+  if(await page.locator('#cancel-edit').isVisible())await page.locator('#cancel-edit').click();await page.screenshot({path:fileURLToPath(new URL(`../../tmp/portfolio-screens/${width}.png`,import.meta.url)),fullPage:true});
   assert.deepEqual(errors,[]);await context.close();
  }
  const context=await browser.newContext(),page=await context.newPage();await routeApi(page,viewer);await page.goto(url);await page.locator('#report-app').waitFor({state:'visible'});assert.equal(await page.locator('#edit-toggle').isVisible(),false);

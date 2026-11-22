@@ -36,6 +36,8 @@ export async function verifyPasskeyLogin(browser,url,state){
    await page.route('**/asset-report/api/data',r=>r.fulfill({json:state}));
    await page.goto(url);await page.locator('#login-button').waitFor({state:'visible'});await page.waitForFunction(() => window.TRoomPasskeys);
    const button = page.locator('#login-button');
+   assert.equal(await page.locator('#login-panel').getByRole('link').count(), 0,
+    'Regular Portfolio login has no setup link');
    assert.equal(await button.locator('.passkey-icon').count(), 1);
    assert.equal(await button.evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(87, 114, 99)');
    await button.focus();
