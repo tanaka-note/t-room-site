@@ -714,13 +714,13 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       if (attempt !== loginAttempt) return;
       photoImages.reset();
       encryptionRuntime?.lock();encryptionRuntime=null;
-      let preparationMessage;
+      let preparationMessage,startupProfile;
       if(session.encryption) {
         try {
           const preparation=await import(new URL(`diary-key-preparation.js${scriptUrl.search}`,scriptUrl).href);
-          await preparation.prepareDiaryKeys(api,session,authentication,()=>{if(attempt!==loginAttempt)throw new Error('ログイン状態が変わりました。');},progress=>{elements.loginMessage.textContent=preparation.diaryMigrationMessage(progress);});
+          ({startupProfile}=await preparation.prepareDiaryKeys(api,session,authentication,()=>{if(attempt!==loginAttempt)throw new Error('ログイン状態が変わりました。');},progress=>{elements.loginMessage.textContent=preparation.diaryMigrationMessage(progress);},{reusePreparedProfile:true}));
         }catch(error){if(session.encryption.enabled||error.migrationPending||error.sessionChanged||[401,403].includes(error.status))throw error;preparationMessage='日記は利用できますが、暗号化の利用準備を完了できませんでした。対応するパスキーで次回ログイン時に再試行します。';}
-        if(session.encryption.enabled){const encryption=await import(new URL(`diary-encryption.js${scriptUrl.search}`,scriptUrl).href);encryptionRuntime=await encryption.startEncryptedDiary(session,authentication);photoImages.setRuntime(encryptionRuntime);}
+        if(session.encryption.enabled){const encryption=await import(new URL(`diary-encryption.js${scriptUrl.search}`,scriptUrl).href);encryptionRuntime=await encryption.startEncryptedDiary(session,authentication,startupProfile);photoImages.setRuntime(encryptionRuntime);}
       }
       if(attempt!==loginAttempt)return;
       await enterDiary(session);

@@ -1,11 +1,11 @@
 import { findPhotoMarkers } from '../public/diary-rich-text.js';
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status});};
-export function createEncryptedDiaryApi(client,{session,nativeApi,media,onHousehold,prepareNavigation=async()=>{}}) {
+export function createEncryptedDiaryApi(client,{session,nativeApi,media,onHousehold,parallelStartupRead=false,prepareNavigation=async()=>{}}) {
   let initialized=false,syncing=null,selecting=null;
   const synchronize=async()=>{
     const generation=client.generation;
     if(!syncing||syncing.generation!==generation){
-      const pending={generation,promise:client.sync()};syncing=pending;
+      const pending={generation,promise:client.sync({parallelStartupRead:parallelStartupRead&&!initialized})};syncing=pending;
       void pending.promise.finally(()=>{if(syncing===pending)syncing=null;}).catch(()=>{});
     }
     await syncing.promise;client.assertOpen(generation);await prepareNavigation();client.assertOpen(generation);initialized=true;

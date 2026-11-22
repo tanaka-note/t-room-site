@@ -250,9 +250,13 @@ export class EncryptedDiaryClient {
     return state.pending;
   }
 
-  async syncSnapshot({sessionChecked=false}={}) {
-    if(sessionChecked)this.assertOpen();else await this.check();
+  async syncSnapshot({sessionChecked=false,parallelStartupRead=false}={}) {
     const generation = this.generation;
+    this.assertOpen(generation);
+    const sessionCheck=sessionChecked?null:this.check();
+    const overlap=parallelStartupRead&&!sessionChecked&&this.sequence===undefined&&Boolean(this.cache);
+    if(overlap)void sessionCheck.catch(()=>{});
+    else await sessionCheck;
     let cached=null, checkpoint=0;
     const checkpointKey=[this.actor.accountId,this.actor.credentialId,this.household].join('/');
     const cacheKey=checkpointKey+'/'+this.directory.generation;
@@ -262,6 +266,23 @@ export class EncryptedDiaryClient {
       if (!Number.isSafeInteger(checkpoint) || checkpoint < 0) throw new Error('InvalidCache');
     }
     let since=this.sequence??cached?.sequence??-1;
+    let pendingDelta;
+    if(overlap) {
+      // The delta request has its own live authorization and yields ciphertext.
+      // Wait for the separate session check before opening or applying anything.
+      this.assertOpen(generation);
+      const controller=cached?new AbortController():null;
+      if(controller) {
+        pendingDelta=this.transport.snapshot(this.household,since,{signal:controller.signal});
+        void pendingDelta.catch(()=>{});
+      }
+      try {
+        await sessionCheck;
+        this.assertOpen(generation);
+      }catch(error){
+        controller?.abort();throw error;
+      }
+    }
     const preparedIndex=cached?this.readPreparedIndex(cacheKey,cached):Promise.resolve(null);
     // Verify/decrypt the small summaries while the remaining pages are in
     // flight. Nothing becomes visible until the complete fixed snapshot and
@@ -274,8 +295,7 @@ export class EncryptedDiaryClient {
       }));
       if(this.lazy)this.onProgress({phase:'index',completed:prefetched.size,total});
     }:undefined;
-    let snapshot=await this.transport.snapshot(this.household,since,{onPage});
-    const restored=await preparedIndex;
+    let [snapshot,restored]=await Promise.all([pendingDelta??this.transport.snapshot(this.household,since,{onPage}),preparedIndex]);
     if(cached&&restored===false){
       // Never repair a damaged/context-mismatched local pair by trusting a
       // potentially incomplete cached snapshot. Retain the durable checkpoint

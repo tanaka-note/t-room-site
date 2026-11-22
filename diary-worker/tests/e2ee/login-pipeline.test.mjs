@@ -6,7 +6,12 @@ import {takePreparedVault,unlockSession} from '../../e2ee/session.mjs';
 import {publicTrustPackage} from '../../e2ee/setup.mjs';
 
 let f,trust;
-before(async()=>{f=await systemFixture();trust=await publicTrustPackage(f.configuration);});
+before(async()=>{
+  f=await systemFixture();
+  f.users['main-user'].sessionId='fixture-viewer-session';
+  f.users['main-admin'].sessionId='fixture-owner-session';
+  trust=await publicTrustPackage(f.configuration);
+});
 after(async()=>{await f?.close();});
 function apiFor(account) {
   const cookie=f.cookie(account),origin=f.env.DIARY_ENCRYPTION_ORIGIN;
@@ -53,12 +58,66 @@ test('prepared keys cannot bypass revocation after cryptographic validation',asy
   assert.equal(checks,2);assert.equal(auth.diaryPreparedKeys,null);assert.ok(auth.prfOutput.every(value=>value===0));
 });
 
+test('an opted-in viewer prepares from the live profile and reuses the bound keys',async()=>{
+  const native=apiFor('main-user'),session=await native('/session'),auth=authentication('main-user'),paths=[];
+  await prepareDiaryKeys(native,session,auth);
+  const api=(path,options)=>{paths.push(path);return native(path,options);};
+  try {
+    const {startupProfile}=await prepareDiaryKeys(api,session,auth,undefined,undefined,{reusePreparedProfile:true});
+    assert.deepEqual(paths,['/encryption/profile']);
+    assert.equal(startupProfile.profile.household,session.activeHouseholdId);
+    assert.equal(takePreparedVault(auth,startupProfile.profile)?.rsa.extractable,false);
+    assert.equal(takePreparedVault(auth,startupProfile.profile),undefined);
+  }finally{auth.prfOutput.fill(0);}
+});
+
+test('viewer profile reuse falls back for incomplete setup and rejects stale bindings or authorization failures',async()=>{
+  const native=apiFor('main-user'),session=await native('/session'),setupAuth=authentication('main-user');
+  try{await prepareDiaryKeys(native,session,setupAuth);}
+  finally{setupAuth.prfOutput.fill(0);setupAuth.diaryPreparedKeys=null;}
+  const initial=await native('/encryption/profile');
+  const options={reusePreparedProfile:true};
+  const cases=[
+    ['unprepared',Object.assign(new Error('PreparationRequired'),{status:409}),true],
+    ['missing trust',{...initial,profile:{...initial.profile,vault:{...initial.profile.vault,trust:null}}},true],
+    ['stale trust',{...initial,minimumGeneration:initial.minimumGeneration+1},true],
+    ['rekey',{...initial,rekeyRequired:true},true],
+    ['different account',{...initial,profile:{...initial.profile,actor:{...initial.profile.actor,accountId:'different'}}}],
+    ['different credential',{...initial,profile:{...initial.profile,webAuthnCredentialId:'different'}}],
+    ['different household',{...initial,profile:{...initial.profile,household:'different'}}],
+    ['different rollout',{...initial,rollout:{...initial.rollout,generation:initial.rollout.generation+1}}],
+    ['revoked',Object.assign(new Error('Revoked'),{status:401})],
+    ['forbidden',Object.assign(new Error('Forbidden'),{status:403})]
+  ];
+  for(const [name,profile,fallsBack] of cases) {
+    const auth=authentication('main-user'),paths=[];
+    const api=async(path,init)=>{
+      paths.push(path);
+      if(path!=='/encryption/profile')return native(path,init);
+      if(profile instanceof Error)throw profile;
+      return profile;
+    };
+    try {
+      const result=prepareDiaryKeys(api,session,auth,undefined,undefined,options);
+      if(fallsBack) {
+        assert.deepEqual(await result,{prepared:true},name);
+        assert.deepEqual(paths,['/encryption/profile','/encryption/prepare'],name);
+      }else{
+        await assert.rejects(result,error=>error===profile||error.sessionChanged===true,name);
+        assert.deepEqual(paths,['/encryption/profile'],name);
+        assert.equal(auth.diaryPreparedKeys,null,name);
+      }
+    }finally{auth.prfOutput.fill(0);auth.diaryPreparedKeys=null;}
+  }
+});
+
 test('independent owner reads overlap, and a vault write requires a newer admin inventory', {timeout:10000},async()=>{
   const native=apiFor('main-admin'),session=await native('/session');
   for(const changed of [false,true]) {
     let release,adminReads=0,writes=0;
     const gate=new Promise(resolve=>{release=resolve;});
     const api=async(path,options)=>{
+      assert.notEqual(path,'/encryption/profile','owners must use automatic key preparation');
       if(path==='/encryption/manage/own'){
         await gate;const own=await native(path,options);
         return changed?{...own,links:own.links.map((link,i)=>i===0?{...link,prepared:false}:link)}:own;
@@ -68,7 +127,7 @@ test('independent owner reads overlap, and a vault write requires a newer admin 
       return native(path,options);
     };
     const auth=authentication('main-admin');
-    try{await prepareDiaryKeys(api,session,auth);assert.equal(adminReads,changed?2:1);assert.equal(writes,changed?1:0);}
+    try{await prepareDiaryKeys(api,session,auth,undefined,undefined,{reusePreparedProfile:true});assert.equal(adminReads,changed?2:1);assert.equal(writes,changed?1:0);}
     finally{release();auth.prfOutput.fill(0);auth.diaryPreparedKeys=null;}
   }
 });

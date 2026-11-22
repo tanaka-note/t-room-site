@@ -64,10 +64,41 @@ test('fresh additions, edits and removals are reconciled before a cached list be
     await x.writer.sync();await x.writer.saveEntry({...x.writer.entry('1'),title:'CURRENT_TITLE',entryDate:'2030-01-01'},'1');
     await x.writer.transition('2','trash',x.writer.entry('2').revision);await x.writer.transition('2','purge',x.writer.records.get('2').row.revision);
     await x.writer.commit(entry({entryDate:'2031-01-01',title:'NEW_CURRENT_TITLE',photos:[]}),{id:'100'},{refresh:false});
-    await x.warm.sync();await x.warm.ensureList(new URLSearchParams({limit:'3'}));
+    await x.warm.sync({parallelStartupRead:true});await x.warm.ensureList(new URLSearchParams({limit:'3'}));
     assert.deepEqual(x.warm.list(new URLSearchParams({limit:'3'})).entries.map(e=>e.id),[100,1,12]);
     assert.equal(x.warm.entry('1').title,'CURRENT_TITLE');assert.equal(x.warm.records.has('2'),false);
   }finally{x.close();}
+});
+
+for(const revokedAt of [0,1,2])test(`startup overlaps the delta and honors both live sync checks (revocation at ${revokedAt||'neither'})`,{timeout:10000},async()=>{
+  const x=await setup(6);
+  const firstCheck=Promise.withResolvers(),deltaRequested=Promise.withResolvers(),lastCheck=Promise.withResolvers(),lastRequested=Promise.withResolvers();
+  try {
+    const warm=x.warm,transport=warm.transport,readIndex=warm.readPreparedIndex.bind(warm);
+    let checks=0,indexReads=0;
+    warm.readPreparedIndex=(...args)=>{indexReads++;return readIndex(...args);};
+    warm.transport={...transport,
+      valid:async()=>{if(++checks===1)return firstCheck.promise;lastRequested.resolve();return lastCheck.promise;},
+      snapshot:async(h,since,options)=>{assert.ok(since>=0);deltaRequested.resolve(options.signal);return transport.snapshot(h,since,options);}
+    };
+    const pending=warm.sync({parallelStartupRead:true});
+    const result=revokedAt?assert.rejects(pending,{status:401}):pending;
+    const signal=await deltaRequested.promise;
+    assert.equal(checks,1);
+    assert.equal(indexReads,0,'the encrypted index stays sealed until session validation');
+    assert.equal(warm.records.size,0);
+    firstCheck.resolve(revokedAt!==1);
+    if(revokedAt!==1){
+      await lastRequested.promise;
+      assert.equal(indexReads,1);
+      assert.equal(warm.records.size,0,'a validated delta is still withheld until the final live check');
+      lastCheck.resolve(revokedAt!==2);
+    }
+    await result;
+    assert.equal(checks,revokedAt===1?1:2);
+    assert.equal(warm.records.size,revokedAt?0:6);
+    assert.equal(signal.aborted,revokedAt===1);
+  }finally{firstCheck.resolve(false);lastCheck.resolve(false);x.close();}
 });
 test('damaged or absent derived cache falls back to the ordinary verified snapshot',async()=>{
   const x=await setup(12);try{

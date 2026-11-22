@@ -85,14 +85,48 @@ export async function prepareDiaryKeys(...args) {
     throw error;
   }finally{globalThis.document?.removeEventListener('troom:before-auto-update',preventUpdate);}
 }
-async function prepareKeys(api,session,authentication,check=()=>{},onProgress=()=>{}) {
+async function readPreparedProfile(api,session,authentication,check) {
+  if(session.role!=='user'||session.isGlobalOwner||!session.keySession?.id
+    ||!session.encryption.enabled||session.encryption.phase!=='encrypted')return null;
+  let result;
+  try {
+    result=await api('/encryption/profile');
+  }catch(error){
+    // A newly linked recipient may still need automatic vault preparation.
+    check();
+    if(error.status===409)return null;
+    throw error;
+  }
+  check();
+  const {profile,rollout}=result;
+  if(result.protocol!==session.encryption.protocol||rollout?.generation!==session.encryption.generation
+    ||profile?.household!==session.activeHouseholdId||profile?.actor?.accountId!==session.encryption.accountId
+    ||profile?.webAuthnCredentialId!==authentication.credentialId) {
+    throw Object.assign(new Error('ログイン状態が変わりました。パスキーでログインし直してください。'),{sessionChanged:true});
+  }
+  if(rollout?.phase!=='encrypted'||result.rekeyRequired||!profile.vault?.trust
+    ||profile.vault.trust.generation!==result.minimumGeneration)return null;
+  return result;
+}
+
+async function prepareKeys(api,session,authentication,check=()=>{},onProgress=()=>{},{reusePreparedProfile=false}={}) {
   if(!(authentication?.prfOutput instanceof Uint8Array)||authentication.prfOutput.length!==32)throw new Error('暗号化の利用準備にはPRF対応のパスキーが必要です。');
   const assertOwn=value=>{
     check();
     if(value.accountId!==session.encryption.accountId||value.webAuthnCredentialId!==authentication.credentialId||typeof value.recipientId!=='string')throw Object.assign(new Error('ログイン状態が変わりました。パスキーでログインし直してください。'),{sessionChanged:true});
     return value;
   };
-  let info=assertOwn(await api('/encryption/prepare'));
+  let startupProfile=reusePreparedProfile?await readPreparedProfile(api,session,authentication,check):null;
+  let info;
+  if(startupProfile) {
+    const {profile}=startupProfile;
+    info=assertOwn({
+      accountId:profile.actor.accountId,
+      webAuthnCredentialId:profile.webAuthnCredentialId,
+      recipientId:profile.actor.credentialId,
+      vault:profile.vault
+    });
+  }else info=assertOwn(await api('/encryption/prepare'));
   if(!info.vault) {
     const vault=await createVault(authentication.prfOutput,info.recipientId);check();
     info=assertOwn(await api('/encryption/prepare',{method:'POST',body:{recipientId:info.recipientId,vault}}));
@@ -110,6 +144,7 @@ async function prepareKeys(api,session,authentication,check=()=>{},onProgress=()
   check();trust=await approvePreparedRecipients(api,session,authentication,info.recipientId,trust,check);check();
   if(trust) {
     if(!info.vault.trust||info.vault.trust.generation!==trust.minimumGeneration) {
+      startupProfile=null;
       const packet=await sealTrust(authentication.prfOutput,info.recipientId,trust);check();
       info=assertOwn(await api('/encryption/prepare',{method:'POST',body:{recipientId:info.recipientId,trust:packet}}));
     }
@@ -124,5 +159,5 @@ async function prepareKeys(api,session,authentication,check=()=>{},onProgress=()
     Object.assign(session,fresh);
   }
   if(!authentication.diaryPrivateKeys)rememberPreparedVault(authentication,unlocked,unlocked.privateKeys);
-  return {prepared:true};
+  return startupProfile?{prepared:true,startupProfile}:{prepared:true};
 }
