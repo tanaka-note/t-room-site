@@ -72,7 +72,7 @@ const server = createServer(async (req,res) => {
       res.setHeader('Content-Type','text/html'); res.end('<!doctype html><meta charset="utf-8"><script src="/cloud/crypto-vault.js"></script>'); return;
     }
     const mapping = path.startsWith('/security/') ? ['security-worker/public', path.slice(10)]
-      : path.startsWith('/diary/') ? ['diary-worker/public',path==='/diary/investment/'?'investment.html':path.slice(7)]
+      : path.startsWith('/diary/') ? ['diary-worker/public',path.slice(7)]
       : path === '/cloud/crypto-vault.js' ? ['cloud-worker/public','crypto-vault.js'] : null;
     if (!mapping) {res.writeHead(404); res.end(); return;}
     const base = resolve(root,mapping[0]), file = resolve(base,mapping[1]);
@@ -139,25 +139,21 @@ try {
   const financialRecords=[{date:'2026-01-01',total:7812345670,cash:7812345670,stocks:0,funds:0,bonds:0,crypto:0,futures:0,points:0,other:0},
     {date:'2026-02-01',total:7812345671,cash:7812345671,stocks:0,funds:0,bonds:0,crypto:0,futures:0,points:0,other:0}];
   assert.equal(await page.evaluate(async records=>{try{await (await import('/security/diary-setup.mjs')).importDiaryInvestment(new File([JSON.stringify({records})],'investment.json'));return false;}catch{return true;}},financialRecords),true);
-  await page.evaluate(async records=>(await import('/security/diary-setup.mjs')).importDiaryInvestment(new File([JSON.stringify({records})],'investment.json')),financialRecords);
-  const portfolio=await context.newPage();portfolio.on('pageerror',error=>errors.push(error.message));
-  await portfolio.route('**/security/passkey-client.js*',route=>route.fulfill({contentType:'text/javascript',body:'/* Synthetic authentication is injected through the isolated test channel. */'}));
-  await portfolio.addInitScript(({prf,credentialId})=>{window.TRoomPasskeys={authenticate:async()=>({credentialId,prfOutput:new Uint8Array(prf),link:{accountId:'main-admin'},handoff:{handoffToken:'main-admin'}})};},{prf:[...user.prf],credentialId:user.credentialId});
-  await portfolio.goto(origin+'/diary/investment/');
-  await portfolio.waitForSelector('#investment-passkey',{state:'visible'});await portfolio.click('#investment-passkey');
-  await portfolio.waitForSelector('#dashboard:not([hidden])',{timeout:10000}).catch(async error=>{
-    const reason=await portfolio.evaluate(async()=>{try{await(await import('/diary/investment-encryption.js')).loadEncryptedInvestment(await(await fetch('/diary/api/session')).json(),await TRoomPasskeys.authenticate());return 'direct retry succeeded';}catch(error){return error.message;}});
-    throw new Error('Investment unlock: '+reason,{cause:error});
+  const imported=await page.evaluate(async records=>(await import('/security/diary-setup.mjs')).importDiaryInvestment(new File([JSON.stringify({records})],'investment.json')),financialRecords);
+  assert.deepEqual(imported,{completed:true});
+  const proposals=wire.filter(row=>row.path==='/security/api/diary/investment'&&row.body);
+  assert.equal(proposals.length,2,'a lost response triggers exactly one retry');
+  assert.equal(proposals[0].body,proposals[1].body,'the retry sends the same encrypted proposal');
+  const record=await page.evaluate(async()=>{
+    const response=await fetch('/diary/api/encryption/investment');
+    if(!response.ok)throw new Error('Investment history read failed: '+response.status);
+    return (await response.json()).record;
   });
-  assert.equal((await portfolio.locator('#current-total').innerText()).replace(/[^0-9]/g,''),'7812345671');
-  const investmentLogins=wire.filter(row=>row.path==='/diary/api/passkey/handoff').length;
-  await portfolio.reload();await portfolio.waitForSelector('#dashboard:not([hidden])');
-  assert.equal(wire.filter(row=>row.path==='/diary/api/passkey/handoff').length,investmentLogins,'investment reload reuses only its current live session device key');
+  assert.equal(record.state,'investment');
+  assert.equal(record.revision,1,'retry after a lost response preserves a single revision');
+  assert.equal(JSON.stringify(record).includes('7812345670'),false);
   assert.equal(JSON.stringify(wire).includes('7812345670'),false);
   assert.equal(JSON.stringify(f.db.sqlite.prepare('SELECT * FROM diary_e2ee_records').all()).includes('7812345670'),false);
-  const cache=await portfolio.evaluate(async()=>{const store=await (await import('/diary/crypto/e2ee/cache.mjs')).openCipherCache();const tx=JSON.stringify(await store.get('investment/main-admin/'+(await (await fetch('/diary/api/encryption/profile')).json()).profile.actor.credentialId));store.close();return tx;});
-  assert.equal(cache.includes('7812345670'),false);
-  await portfolio.close();
   // Exercise the same public management entrypoint as the real UI, through
   // Security's HTTP/session/mutation gates, rather than only the pure controller.
   await page.evaluate(()=>window.fixtureBridge.lock());await f.close();
@@ -208,7 +204,7 @@ try {
   assert.equal(await page.evaluate(()=>window.lastSetupPrf.every(value=>value===0)),true);user.prf.fill(0);
   assert.deepEqual(errors,[]);
   await page.evaluate(() => window.fixtureBridge?.lock());
-  console.log('Recovery browser: full Security HTTP/session gates, real T-Cloud PRF envelope, safe setup diagnostics, encrypted Diary/Investment, and the public migration entrypoint through checkpoint creation passed (synthetic authentication).');
+  console.log('Recovery browser: full Security HTTP/session gates, real T-Cloud PRF envelope, safe setup diagnostics, encrypted Diary and preserved investment API, and the public migration entrypoint through checkpoint creation passed (synthetic authentication).');
 } finally {await browser.close(); await new Promise(r => server.close(r)); await f.close();}
 
 await import('./automatic-preparation.browser.mjs');

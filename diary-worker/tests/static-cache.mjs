@@ -9,6 +9,7 @@ registerHooks({ resolve(specifier, context, next) {
 } });
 const worker = (await import("../src/index.js")).default;
 const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
+assert.doesNotMatch(html, /investment-section|href="\/diary\/investment/);
 const build = html.match(/name="troom-app-build" content="([^"]+)"/)[1];
 const origin = "https://fixture.test";
 const env = { ASSETS: { fetch: async () => new Response("public fixture", { headers: { "Content-Type": "text/javascript" } }) } };
@@ -27,8 +28,31 @@ for (const [path, expected] of [
   assert.equal(response.status, 200, path);
   assert.equal(response.headers.get("Cache-Control"), expected, path);
 }
-for (const path of ["investment.js", "investment.css"]) {
-  assert.equal((await worker.fetch(new Request(`${origin}/diary/${path}?v=${build}`), env, {})).status, 404, "protected assets still require authorization");
+const retirementEnv = {
+  DIARY_ENCRYPTION_ENABLED: "true",
+  DIARY_ENCRYPTION_ORIGIN: "https://diary.tanaka-note.com",
+  get DB() { assert.fail("The retired page must not read diary data"); },
+  ASSETS: { fetch: async () => assert.fail("Retired page assets must not be served") }
+};
+for (const host of ["https://tanaka-note.com", retirementEnv.DIARY_ENCRYPTION_ORIGIN]) {
+  for (const path of ["/diary/investment", "/diary/investment/"]) {
+    const url = `${host}${path}?legacy=fixture`;
+    for (const method of ["GET", "HEAD"]) {
+      const response = await worker.fetch(new Request(url, { method }), retirementEnv, {});
+      assert.equal(response.status, 302, `${method} ${url}`);
+      assert.equal(response.headers.get("Location"), "https://tanaka-note.com/household/");
+      assert.equal(response.headers.get("Cache-Control"), "no-store");
+      assert.equal(response.headers.get("Referrer-Policy"), "no-referrer");
+      assert.equal(await response.text(), "");
+    }
+    const post = await worker.fetch(new Request(url, { method: "POST" }), retirementEnv, {});
+    assert.equal(post.status, 405);
+    assert.equal(post.headers.get("Location"), null);
+  }
+  for (const file of ["investment.html", "investment.js", "investment.css", "investment-encryption.js"]) {
+    const response = await worker.fetch(new Request(`${host}/diary/${file}?v=${build}`), retirementEnv, {});
+    assert.equal(response.status, 404, file);
+  }
 }
 for (const [file, exported] of [
   ["diary-photo-save.js", /export function createPhotoSaveManager/],
@@ -85,6 +109,7 @@ stores.set("troom-diary-shell-old", {});
 await lifecycle("install"); await lifecycle("activate");
 assert.equal(stores.has("troom-diary-shell-old"), false);
 assert.ok(fetched.some(url => url.includes("diary-bootstrap.js")));
+assert.equal(fetched.some(url => new URL(url).pathname.startsWith("/diary/investment")), false);
 assert.equal(fetched.some(url => /\/(?:diary|diary-search|diary-photo-processing|diary-photo-upload|diary-photo-images|diary-photo-viewer|diary-rich-text|diary-weather|dialog-navigation|troom-date-picker)\.js\?/.test(url)), false, "install must not undo deferred loading");
 const path = `/diary/diary.js?v=${build}`;
 let count = fetched.length;
@@ -107,7 +132,7 @@ for (const file of ["diary-photo-viewer.js", "diary-photo-images.js"]) {
   offline = false;
 }
 for (const path of ["/diary/", "/diary/api/bootstrap", "/diary/api/session", "/diary/api/photos/id/display",
-  `/diary/investment.js?v=${build}`, `/diary/manifest.webmanifest?v=${build}`, "/diary/service-worker.js",
+  "/diary/investment", "/diary/investment/", `/diary/investment.js?v=${build}`, `/diary/manifest.webmanifest?v=${build}`, "/diary/service-worker.js",
   "/diary/diary.js?v=diary-000000000000", `/diary/diary.js?v=${build}&other=1`]) {
   assert.equal(await fetchAsset(path), undefined, `${path}: bypass static caching`);
 }
@@ -123,4 +148,4 @@ assert.equal(fetched.length, count + 2, "errors must not be cached");
 noStoreBodies = true; cacheControl = "no-store"; status = 200; count = fetched.length;
 await lifecycle("install");
 assert.equal(canceled, fetched.length - count, "uncacheable install bodies must be canceled to release network connections");
-console.log("Diary static caching: exact public build URLs, deferred install, cold/warm/offline, no-store and protected exclusions passed.");
+console.log("Diary static caching: exact public build URLs, deferred install, cold/warm/offline, no-store and retired routes passed.");

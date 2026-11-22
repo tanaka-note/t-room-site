@@ -6,5 +6,4 @@ assert.doesNotMatch(html,/initial-password|type="password"|id="login-id"|remembe
 assert.doesNotMatch(script,/initialPassword|PasswordCredential|rememberLogin|api\("\/login"/);
 assert.match(html,/id="passkey-login"[^>]*type="button"/);
 assert.match(script,/TRoomPasskeys\.authenticate\("diary", choosePasskeyLink\)/);
-assert.match(script,/elements\.investmentSection\.hidden = !state\.canViewInvestment/);
 console.log("Diary passkey-only UI contract passed (password setup retired).");

@@ -69,7 +69,7 @@ try {
       if (document.querySelector("#app-view")?.hidden === false) {
         mark("app-shell");
         if (!document.querySelector("#app-view").inert) mark("app-interactive");
-        for (const id of ["new-entry-button", "draft-button", "trash-button", "investment-section", "household-switcher-wrap"]) {
+        for (const id of ["new-entry-button", "draft-button", "trash-button", "household-switcher-wrap"]) {
           if (document.querySelector(`#${id}`)?.hidden === false) window.authorizationFlash = id;
         }
         if (document.querySelector("#entry-list")?.textContent.includes("起動確認")) mark("entries-ready");

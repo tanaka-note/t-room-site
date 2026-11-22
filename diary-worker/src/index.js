@@ -210,9 +210,16 @@ export default {
           path === '/api/encryption/snapshot' ? 'manual' : 'automatic');
       }
 
+      if ((path === "/investment" || path === "/investment/") && (request.method === "GET" || request.method === "HEAD")) {
+        return secureResponse(new Response(null, {
+          status: 302,
+          headers: { Location: "https://tanaka-note.com/household/", "Cache-Control": "no-store" }
+        }));
+      }
+
       const isPhotoMigration=path==='/photo-encryption-migration/'||path==='/photo-encryption-migration';
       if(isPhotoMigration&&!photoMigrationEnabled(env))return secureResponse(new Response('Not found',{status:404}));
-      const isDiaryNavigation=isPhotoMigration||path==='/'||path==='/tags'||path==='/tags/'||path.startsWith('/entry/')||path.startsWith('/tag/')||path==='/trash'||path==='/favorites'||path==='/favorites/'||path==='/investment'||path==='/investment/';
+      const isDiaryNavigation=isPhotoMigration||path==='/'||path==='/tags'||path==='/tags/'||path.startsWith('/entry/')||path.startsWith('/tag/')||path==='/trash'||path==='/favorites'||path==='/favorites/';
       if(isDiaryNavigation&&request.method==='GET'&&encryptionEnabled(env)&&env.DIARY_ENCRYPTION_ORIGIN&&url.origin!==diaryEncryptionOrigin(env)) {
         const control=await readRollout(env.DB);
         if(control.phase==='legacy'||control.everEncrypted||control.phase==='migrating') {
@@ -227,16 +234,6 @@ export default {
       }
       if (request.method !== "GET" && request.method !== "HEAD") {
         return secureResponse(json({ error: "Method not allowed" }, 405));
-      }
-
-      if (isInvestmentAssetPath(path)) {
-        const session = await readSession(request, env);
-        if (!session || !session.canViewInvestment) {
-          const isPageRequest = path === "/investment" || path === "/investment/";
-          return secureResponse(isPageRequest
-            ? Response.redirect(`${url.origin}${BASE_PATH}/`, 302)
-            : new Response("Not found", { status: 404 }));
-        }
       }
 
       return secureResponse(await serveAsset(request, env, url, path));
@@ -682,45 +679,29 @@ async function serveAsset(request, env, url, path) {
     ["/icons/favicon-64-v2.png", "/icons/favicon-64-v2.png"],
     ["/icons/favicon-64-v3.png", "/icons/favicon-64-v3.png"],
     ["/icons/favicon-64-v4.png", "/icons/favicon-64-v4.png"],
-    ["/investment.css", "/investment.css"],
-    ["/investment.js", "/investment.js"],
     ["/diary-key-preparation.js","/diary-key-preparation.js"],
     ["/diary-automatic-migration.js","/diary-automatic-migration.js"],
     ["/diary-restore.mjs","/diary-restore.mjs"],
     ["/vendor/sql-wasm.wasm","/vendor/sql-wasm.wasm"],
-    ["/vendor/sqlite-license.txt","/vendor/sqlite-license.txt"],
-    ["/investment-encryption.js","/investment-encryption.js"]
+    ["/vendor/sqlite-license.txt","/vendor/sqlite-license.txt"]
   ]);
   const isDiaryRoute = path === "/" || path === "/photo-encryption-migration/" || path === "/photo-encryption-migration" || path === "/tags" || path === "/tags/" || path.startsWith("/entry/") || path.startsWith("/tag/") || path === "/trash" || path === "/favorites" || path === "/favorites/";
-  const isInvestmentRoute = path === "/investment" || path === "/investment/";
   const encryptedAsset=/^\/crypto\/(?:e2ee\/[a-z-]+\.mjs|src\/entry-domain\.js|public\/diary-(?:rich-text|search)\.js)$/.test(path)?path:null;
-  const assetPath = assetPaths.get(path) || encryptedAsset || (isDiaryRoute ? "/" : (isInvestmentRoute ? "/investment.html" : null));
+  const assetPath = assetPaths.get(path) || encryptedAsset || (isDiaryRoute ? "/" : null);
   if (!assetPath) return new Response("Not found", { status: 404 });
 
   const assetUrl = new URL(assetPath, url.origin);
   const assetRequest = new Request(assetUrl, request);
-  let response = await env.ASSETS.fetch(assetRequest);
-  if (isInvestmentRoute && response.status >= 300 && response.status < 400 && response.headers.get("Location")) {
-    const redirectedAssetUrl = new URL(response.headers.get("Location"), url.origin);
-    response = await env.ASSETS.fetch(new Request(redirectedAssetUrl, request));
-  }
+  const response = await env.ASSETS.fetch(assetRequest);
   const headers = new Headers(response.headers);
   headers.set("X-Robots-Tag", "noindex, nofollow, noarchive");
   const immutable = response.ok && /^diary-[a-f0-9]{12}$/.test(url.searchParams.get("v") || "")
-    && /\.(?:js|css|png)$/.test(assetPath) && !isInvestmentAssetPath(path);
-  headers.set("Cache-Control", encryptedAsset||["/diary-automatic-migration.js","/diary-restore.mjs","/vendor/sql-wasm.wasm"].includes(path)?"no-cache":assetPath === "/" || assetPath === "/investment.html"
+    && /\.(?:js|css|png)$/.test(assetPath);
+  headers.set("Cache-Control", encryptedAsset||["/diary-automatic-migration.js","/diary-restore.mjs","/vendor/sql-wasm.wasm"].includes(path)?"no-cache":assetPath === "/"
     ? "no-store"
     : assetPath === "/service-worker.js" ? "no-cache"
       : immutable ? "public, max-age=31536000, immutable" : "public, max-age=3600");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
-}
-
-function isInvestmentAssetPath(path) {
-  return path === "/investment"
-    || path === "/investment/"
-    || path === "/investment.css"
-    || path === "/investment.js"
-    || path === "/investment-encryption.js";
 }
 
 async function listInvestmentHistory(env) {
