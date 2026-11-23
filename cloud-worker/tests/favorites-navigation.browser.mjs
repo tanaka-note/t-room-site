@@ -96,5 +96,90 @@ try { for(const [name,engine,launch] of engines){
   assert.equal(await page.locator('.file-card').count(),0);
   assert.equal(writes.length,2,'account navigation and logout make no favorite writes');
   console.log('PASS',name,'batch file/folder favorites, state labels, folder/back, desktop account, mobile six-item layout, shares/conflicts navigation, role gates, logout');
+  await verifyProgressiveFavorites(browser, name);
  }finally{await browser.close();}
 }}finally{await fixture.close();}
+
+async function verifyProgressiveFavorites(browser, name) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  const initialFolders = Array.from({ length: 32 }, (_, i) => ({
+    id: i + 100, name: `Saved folder ${i + 1}`, cryptoVersion: 0, isUnlocked: true
+  }));
+  const initialFiles = Array.from({ length: 32 }, (_, i) => ({
+    id: i + 1, folderId: 100, name: `Document ${i + 1}.txt`, cryptoVersion: 0, mediaKind: 'document',
+    mimeType: 'text/plain', sizeBytes: 100, createdAt: '2026-10-01 00:00:00'
+  }));
+  const lastFolder = { id: 200, name: 'A favorite from page two', cryptoVersion: 0, isUnlocked: true };
+  const lastFile = { ...initialFiles[0], id: 40, name: 'Newer favorite.txt', createdAt: '2026-10-02 00:00:00' };
+  const continuation = Promise.withResolvers();
+  let denyContinuation = false;
+  await page.route('**/cloud/api/**', async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith('/favorites')) {
+      const folderOffset = Number(url.searchParams.get('folderOffset'));
+      const fileOffset = Number(url.searchParams.get('fileOffset'));
+      if (folderOffset || fileOffset) {
+        await continuation.promise;
+        if (denyContinuation) {
+          await route.fulfill({ status: 403, json: { error: 'アクセスできません。' } });
+          return;
+        }
+      }
+      const folders = url.searchParams.has('filesOnly') ? []
+        : folderOffset ? [lastFolder] : initialFolders;
+      const files = url.searchParams.has('foldersOnly') ? []
+        : fileOffset ? [lastFile] : initialFiles;
+      await route.fulfill({ json: {
+        folders, files,
+        nextFolderOffset: folderOffset || !folders.length ? null : initialFolders.length,
+        nextFileOffset: fileOffset || !files.length ? null : initialFiles.length
+      } });
+      return;
+    }
+    const json = url.pathname.endsWith('/favorites/status')
+      ? { fileIds: [1], folderIds: [] } : { folders: [], files: [], breadcrumbs: [] };
+    await route.fulfill({ json });
+  });
+  try {
+    await preparePage(page, fixture.origin, 0);
+    const firstPage = page.waitForRequest(request => {
+      const url = new URL(request.url());
+      return url.pathname.endsWith('/favorites') && url.searchParams.get('folderOffset') === '0';
+    }, { timeout: 5000 });
+    await page.locator('.sidebar [data-view="favorites"]').click();
+    assert.equal(new URL((await firstPage).url()).searchParams.get('pageSize'), '32');
+    const firstCard = page.locator('.file-card[data-file-id="1"]');
+    await firstCard.waitFor({ state: 'visible', timeout: 5000 }).catch(async error => {
+      const notice = await page.locator('#notice').textContent();
+      throw new Error(`The first page did not render: ${notice}`, { cause: error });
+    });
+    assert.equal(await page.locator('.file-card').count(), initialFiles.length);
+    assert.equal(await page.locator('.folder-card').count(), initialFolders.length);
+    const select = firstCard.locator('.file-select-button');
+    await select.click();
+    continuation.resolve();
+    const laterFolder = page.locator('.folder-card[data-folder-id="200"] .folder-open-button');
+    await laterFolder.waitFor({ state: 'visible', timeout: 5000 });
+    assert.equal(await page.locator('.folder-card').first().getAttribute('data-folder-id'), '200');
+    assert.equal(await page.locator('.file-card').first().getAttribute('data-file-id'), '40');
+    assert.equal(await select.getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.locator('.file-card').count(), initialFiles.length + 1);
+
+    await page.locator('#selection-clear').click();
+    await page.waitForFunction(() => !history.state?.selection);
+    await laterFolder.click();
+    await page.waitForFunction(() => __test.state.folderId === 200 && document.querySelector('#view-title').textContent === 'A favorite from page two');
+    await page.goBack();
+    await laterFolder.waitFor({ state: 'visible', timeout: 5000 });
+    await page.waitForFunction(() => __test.state.view === 'favorites' && __test.state.files.length === 33);
+
+    denyContinuation = true;
+    await page.evaluate(() => __test.loadItems());
+    await page.waitForFunction(() => document.querySelector('#notice').textContent === 'アクセスできません。');
+    assert.equal(await page.locator('#content-grid :is(.file-card, .folder-card)').count(), 0);
+    console.log('PASS', name, 'favorites first page before continuation, sorted merge, selected card, folder/back and permission denial');
+  } finally {
+    continuation.resolve();
+    await page.close();
+  }
+}
