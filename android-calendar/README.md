@@ -34,7 +34,7 @@ Credential Managerで既存のパスキーを使用し、Security Centerで明�
 
 キャッシュ・未送信変更はAndroid KeystoreのAES-GCMで保護し、Identityとアカウントを照合する。初期上限100MiB、設定で50/100/200/500MiBを選択できる。全期間のテキストを上限内で保存し、上限を超える保存は失敗を表示して既存データを維持する。履歴を黙って間引いて追跡集計を不正確にしない。未送信変更を自動削除しない。
 
-通知snapshotと認証は閲覧データの予算から独立させる。通常保存には64MiB以上の空き領域を要求し、対応するファイルシステムでは16MiBを重要更新用に事前確保する。領域不足時はこの枠を通知・認証の更新へ解放する。原子的な書込みで既存の正常データを保護する。通知許可・正確なアラームの許可が必要。予約失敗を保存成功と混同せず、設定画面とエラー表示から再確認できる。
+通知snapshotと認証は閲覧データの予算から独立させる。通常保存には64MiB以上の空き領域を要求し、対応するファイルシステムでは16MiBを重要更新用に事前確保する。領域不足時はこの枠を通知・認証の更新へ解放する。原子的な書込みで既存の正常データを保護する。カレンダーの利用にはAndroidの通知と正確なアラームの両方の許可が必要。起動時・復帰時に確認し、不足している間は許可を案内するポップアップを表示する。Androidの設定から戻って両方が許可されるとカレンダーを開き、保存済みの予定の通知を再構成する。設定途中でアプリを閉じた場合も、次回起動時に不足している許可を案内する。
 
 ## ビルド
 
@@ -53,7 +53,9 @@ JDK 17以上とAndroid SDK 36を使用する。`local.properties`に`sdk.dir`を
 配布APKは最適化が有効なrelease版そのものを、専用のAndroid 16エミュレーターで起動確認する。debugビルド・JVM単体試験では、Roomが反射で生成するWorkManager内部DBのコンストラクター欠落を検出できない。`proguard-rules.pro`でこの生成処理を保持する。初回画面と、ローカル選択後の再起動を各3回確認する。
 
 ```powershell
-# 専用エミュレーターの起動完了後、android-calendar/で実行
+# 新規の専用エミュレーターが起動したら、android-calendar/で権限設定を検証
+node tools/smoke-release.mjs --adb <adb.exe> --serial emulator-5556 --apk <release.apk> --screen permissions
+# 権限設定の検証後、両方の許可を有効にした状態で初回画面を確認
 node tools/smoke-release.mjs --adb <adb.exe> --serial emulator-5556 --apk <release.apk> --screen welcome
 # ローカル利用を選択した後
 node tools/smoke-release.mjs --adb <adb.exe> --serial emulator-5556 --apk <release.apk> --screen local

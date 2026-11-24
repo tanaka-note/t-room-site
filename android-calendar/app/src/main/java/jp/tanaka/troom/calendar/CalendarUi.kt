@@ -5,6 +5,8 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.*
@@ -34,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.*
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
@@ -62,9 +65,41 @@ private val timeFormat = DateTimeFormatter.ofPattern("HH:mm")
     }
     MaterialTheme(colorScheme = colors) {
         Surface(Modifier.fillMaxSize()) {
-            if (state.account == null) LoginScreen(state, model, activity) else CalendarShell(state, model, activity)
+            if (activity.calendarOpened) {
+                if (state.account == null) LoginScreen(state, model, activity) else CalendarShell(state, model, activity)
+            }
         }
+        activity.missingReminderPermission?.let { ReminderPermissionDialog(it, activity) }
     }
+}
+
+@Composable
+private fun ReminderPermissionDialog(permission: ReminderPermission, activity: MainActivity) {
+    var settingsUnavailable by remember(permission) { mutableStateOf(false) }
+    val requestNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        activity.onNotificationPermissionResult()
+    }
+    val closeApp: () -> Unit = { activity.moveTaskToBack(true) }
+    val (message, action) = when (permission) {
+        ReminderPermission.NOTIFICATIONS ->
+            "予定の通知を受け取るため、カレンダーの通知を許可してください。" to "通知を許可"
+        ReminderPermission.EXACT_ALARMS ->
+            "指定した時刻に通知するため、Androidの「アラームとリマインダー」でカレンダーを許可してください。" to "時刻の予約を許可"
+    }
+    AlertDialog(
+        onDismissRequest = closeApp,
+        title = { Text("通知の設定が必要です") },
+        text = {
+            Text(if (settingsUnavailable) "$message 端末の設定から許可してください。" else message)
+        },
+        confirmButton = {
+            Button(onClick = {
+                settingsUnavailable = !activity.requestReminderPermission(permission) { requestNotifications.launch(it) }
+            }) { Text(action) }
+        },
+        dismissButton = { TextButton(onClick = closeApp) { Text("アプリを閉じる") } },
+        properties = DialogProperties(dismissOnClickOutside = false),
+    )
 }
 
 @Composable private fun LoginScreen(state: CalendarState, model: MainViewModel, activity: MainActivity) {

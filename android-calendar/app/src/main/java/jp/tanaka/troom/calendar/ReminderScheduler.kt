@@ -51,11 +51,19 @@ fun reminderPlans(events: List<CalendarEvent>, settings: CalendarSettings, now: 
     return events.filter { e -> e.deletedAt == null && !e.cancelled && (settings.reminders.isNotEmpty() || e.id in overrides) && (e.repeat.mode != "NONE" || e.start.atZone(JAPAN).toEpochSecond() > now) }.map(::minimal)
 }
 
+enum class ReminderPermission { NOTIFICATIONS, EXACT_ALARMS }
+
 object ReminderScheduler {
     private const val CHANNEL = "calendar-events"
     private fun alarm(context: Context) = context.getSystemService(AlarmManager::class.java)
     private fun pending(context: Context) = PendingIntent.getBroadcast(context, 1, Intent(context, ReminderReceiver::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-    fun permitted(context: Context) = context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED && alarm(context).canScheduleExactAlarms()
+    fun missingPermission(context: Context): ReminderPermission? = when {
+        !context.getSystemService(NotificationManager::class.java).areNotificationsEnabled() -> ReminderPermission.NOTIFICATIONS
+        !alarm(context).canScheduleExactAlarms() -> ReminderPermission.EXACT_ALARMS
+        else -> null
+    }
+
+    fun permitted(context: Context) = missingPermission(context) == null
     fun rebuild(context: Context, state: CalendarState, storage: CalendarStore) = synchronized(CalendarSelectionLock) { rebuildLocked(context, state, storage) }
     private fun rebuildLocked(context: Context, state: CalendarState, storage: CalendarStore) {
         val account = state.account ?: return clear(context)
