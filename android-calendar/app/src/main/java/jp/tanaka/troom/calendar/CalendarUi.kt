@@ -29,6 +29,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -139,6 +140,7 @@ private fun ReminderPermissionDialog(permission: ReminderPermission, activity: M
     val startupPage = CalendarPage.entries.firstOrNull { it.name == state.settings.startPage } ?: CalendarPage.MONTH
     val drawerVisible = drawer.isOpen || drawer.targetValue == DrawerValue.Open
     val focusManager = LocalFocusManager.current
+    val view = LocalView.current
     var selected by remember { mutableStateOf(today()) }
     var month by remember { mutableStateOf(YearMonth.from(selected)) }
     val headingMonth = if (page == CalendarPage.WEEK) YearMonth.from(selected) else month
@@ -185,6 +187,7 @@ private fun ReminderPermissionDialog(permission: ReminderPermission, activity: M
         activity.clearExitConfirmation()
     }
     BackHandler {
+        if (view.hideKeyboardIfVisible()) return@BackHandler
         when {
             drawerVisible -> scope.launch { drawer.close() }
             searching -> closeSearch()

@@ -113,14 +113,17 @@ if(process.argv.includes('--back-only')){
     assert.fail(expected?'Calendar must remain in the foreground':'The second Back must take Calendar to the background');
   }
   const imeVisible=()=>/\bmInputShown=true\b/.test(run('shell','dumpsys','input_method'));
+  async function focusTextField(){
+    tap(nodes.find(n=>n.class==='android.widget.EditText'));
+    for(let attempt=0;attempt<8&&!imeVisible();attempt++) await delay(200);
+    assert(imeVisible(),'The keyboard should open for the text field');
+  }
   const searchLabel='表示中の予定・追跡・タグを検索';
   const shown=moveMonth(initial,1);
   tap(desc('次へ'));await dump('back-visible-month');assertMonth(shown,initial);
 
   tap(desc('検索'));await dump('back-search');
-  tap(nodes.find(n=>n.class==='android.widget.EditText'));
-  for(let attempt=0;attempt<8&&!imeVisible();attempt++) await delay(200);
-  assert(imeVisible(),'Search keyboard should be visible');
+  await focusTextField();
   back();await dump('back-keyboard-closed');
   assert(!imeVisible(),'Back should first close the keyboard');
   assert(text(searchLabel),'The search field must remain for the next Back');
@@ -134,6 +137,9 @@ if(process.argv.includes('--back-only')){
   assertMonth(shown,initial);
 
   tap(desc('予定を追加'));await dump('back-editor');
+  await focusTextField();
+  back();await dump('back-editor-keyboard-closed');
+  assert(!imeVisible()&&text('保存')&&!text('編集を終了しますか？'),'Back should first close only the editor keyboard');
   back();await dump('back-editor-confirmation');
   assert(text('編集を終了しますか？'),'Back should protect unsaved editor input');
   back();await dump('back-editor-keep-editing');

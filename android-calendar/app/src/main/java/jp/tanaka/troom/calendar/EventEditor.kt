@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -136,7 +137,8 @@ import java.util.Locale
         LaunchedEffect(error, errorField) {
             if (error != null) when (errorField) { "title" -> { titleFocus.requestFocus(); titleView.bringIntoView() }; "dates" -> dateView.bringIntoView(); "tracking" -> trackView.bringIntoView(); "repeat" -> repeatView.bringIntoView(); "url" -> urlView.bringIntoView() }
         }
-        BackHandler { close() }
+        val editorView = LocalView.current
+        BackHandler { if (!editorView.hideKeyboardIfVisible()) close() }
         if (discard) AlertDialog(onDismissRequest = { discard = false }, title = { Text("編集を終了しますか？") }, text = { Text("保存していない入力は破棄されます。") }, confirmButton = { TextButton(onClick = onDismiss) { Text("破棄して戻る") } }, dismissButton = { TextButton(onClick = { discard = false }) { Text("編集を続ける") } })
         if (deleting) AlertDialog(onDismissRequest = { if (!saving) deleting = false }, title = { Text("予定全体をゴミ箱へ移しますか？") }, text = { Text("編集中の内容は保存せず、繰り返しを含むこの予定全体を移します。30日以内は復元できます。") }, confirmButton = { TextButton(enabled = !saving, onClick = { saving = true; scope.launch { try { if (onDelete?.invoke() == true) onDismiss() else error = "削除できませんでした。" } finally { saving = false; deleting = false } } }) { Text("ゴミ箱へ移す") } }, dismissButton = { TextButton(enabled = !saving, onClick = { deleting = false }) { Text("戻る") } })
     }

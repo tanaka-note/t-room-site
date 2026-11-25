@@ -8,6 +8,8 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.Settings
+import android.view.View
+import android.view.WindowInsets
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -18,6 +20,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
 private const val EXIT_CONFIRMATION_MILLIS = 2_000L
+
+internal fun View.hideKeyboardIfVisible(): Boolean {
+    val ime = WindowInsets.Type.ime()
+    if (rootWindowInsets?.isVisible(ime) != true) return false
+    windowInsetsController?.hide(ime)
+    return true
+}
 
 class MainActivity : ComponentActivity() {
     private val model: MainViewModel by viewModels()
