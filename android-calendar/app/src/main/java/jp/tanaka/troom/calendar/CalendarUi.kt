@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -80,7 +81,7 @@ private fun ReminderPermissionDialog(permission: ReminderPermission, activity: M
     val requestNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         activity.onNotificationPermissionResult()
     }
-    val closeApp: () -> Unit = { activity.moveTaskToBack(true) }
+
     val (message, action) = when (permission) {
         ReminderPermission.NOTIFICATIONS ->
             "予定の通知を受け取るため、カレンダーの通知を許可してください。" to "通知を許可"
@@ -88,7 +89,7 @@ private fun ReminderPermissionDialog(permission: ReminderPermission, activity: M
             "指定した時刻に通知するため、Androidの「アラームとリマインダー」でカレンダーを許可してください。" to "時刻の予約を許可"
     }
     AlertDialog(
-        onDismissRequest = closeApp,
+        onDismissRequest = activity::requestExitConfirmation,
         title = { Text("通知の設定が必要です") },
         text = {
             Text(if (settingsUnavailable) "$message 端末の設定から許可してください。" else message)
@@ -98,18 +99,25 @@ private fun ReminderPermissionDialog(permission: ReminderPermission, activity: M
                 settingsUnavailable = !activity.requestReminderPermission(permission) { requestNotifications.launch(it) }
             }) { Text(action) }
         },
-        dismissButton = { TextButton(onClick = closeApp) { Text("アプリを閉じる") } },
+        dismissButton = { TextButton(onClick = activity::closeCalendar) { Text("アプリを閉じる") } },
         properties = DialogProperties(dismissOnClickOutside = false),
     )
 }
 
 @Composable private fun LoginScreen(state: CalendarState, model: MainViewModel, activity: MainActivity) {
+    val selectingAccount = state.links.isNotEmpty()
+    LaunchedEffect(selectingAccount, state.busy) { activity.clearExitConfirmation() }
+    BackHandler {
+        if (!state.busy) {
+            if (selectingAccount) model.cancelLogin() else activity.requestExitConfirmation()
+        }
+    }
     Column(Modifier.fillMaxSize().systemBarsPadding().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Icon(Icons.Default.CalendarMonth, null, Modifier.size(60.dp), tint = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.height(20.dp)); Text("カレンダー", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(12.dp)); Text("予定と、最後からの日数をまとめて管理", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(28.dp))
-        if (state.links.isNotEmpty()) {
+        if (selectingAccount) {
             TextButton(onClick = { model.login(activity) }, enabled = !state.busy) { Text("別のパスキーで認証") }
             Text("利用するアカウントを選択", style = MaterialTheme.typography.titleMedium)
             state.links.forEach { link -> OutlinedButton(onClick = { model.select(link) }, enabled = !state.busy, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text(link.name) } }
@@ -128,6 +136,9 @@ private fun ReminderPermissionDialog(permission: ReminderPermission, activity: M
 @Composable private fun CalendarShell(state: CalendarState, model: MainViewModel, activity: MainActivity) {
     val drawer = rememberDrawerState(DrawerValue.Closed); val scope = rememberCoroutineScope()
     var page by remember { mutableStateOf(CalendarPage.MONTH) }; var initialPageApplied by remember { mutableStateOf(false) }
+    val startupPage = CalendarPage.entries.firstOrNull { it.name == state.settings.startPage } ?: CalendarPage.MONTH
+    val drawerVisible = drawer.isOpen || drawer.targetValue == DrawerValue.Open
+    val focusManager = LocalFocusManager.current
     var selected by remember { mutableStateOf(today()) }
     var month by remember { mutableStateOf(YearMonth.from(selected)) }
     val headingMonth = if (page == CalendarPage.WEEK) YearMonth.from(selected) else month
@@ -143,22 +154,51 @@ private fun ReminderPermissionDialog(permission: ReminderPermission, activity: M
     var logoutDialog by remember { mutableStateOf(false) }; var seriesChoice by remember { mutableStateOf<Occurrence?>(null) }
     var reviewConflict by remember { mutableStateOf(true) }
     var settingsView by remember { mutableStateOf("settings") }
-    fun backFromSettings() { if (settingsView != "settings") settingsView = "settings" else { initialPageApplied = true; page = CalendarPage.MONTH } }
+    fun closeSearch() {
+        if (searching) focusManager.clearFocus()
+        searching = false
+        query = ""
+    }
+    fun navigateToPage(destination: CalendarPage) {
+        initialPageApplied = true
+        page = destination
+        settingsView = "settings"
+        trackFilter = null
+        trackDetail = null
+        closeSearch()
+    }
+    fun backFromSettings() {
+        if (settingsView != "settings") settingsView = "settings"
+        else navigateToPage(if (startupPage == CalendarPage.SETTINGS) CalendarPage.MONTH else startupPage)
+    }
     fun addEvent() { editing = null; editingOccurrence = null; prefillTrack = trackDetail?.id; editMode = "ALL"; editorOpen = true }
     val savedScreens = rememberSaveableStateHolder()
     val events = model.events()
     val visible = events.filter { it.deletedAt == null }
     val matches: (Occurrence) -> Boolean = { occurrence -> val e = occurrence.event; (trackFilter == null || trackFilter in e.trackIds) && (query.isBlank() || (e.title + e.memo + e.place + e.url + state.tracks.filter { it.id in e.trackIds }.joinToString { it.name } + state.tags.filter { it.id in e.tagIds }.joinToString { it.name }).contains(query, true)) }
     LaunchedEffect(state.conflict?.pending?.requestId) { reviewConflict = true }
-    LaunchedEffect(state.account?.id, state.lastSync) { if (!initialPageApplied && (state.lastSync > 0 || state.entities.any { it.kind == "settings" })) { page = runCatching { CalendarPage.valueOf(state.settings.startPage) }.getOrDefault(CalendarPage.MONTH); initialPageApplied = true } }
+    LaunchedEffect(state.account?.id, state.lastSync, startupPage) {
+        if (!initialPageApplied && (state.lastSync > 0 || state.entities.any { it.kind == "settings" })) navigateToPage(startupPage)
+    }
     LaunchedEffect(Unit) { while (true) { delay(30000); if (CalendarActivityWindow.foreground) model.sync(false) } }
-    BackHandler(drawer.isOpen) { scope.launch { drawer.close() } }
-    BackHandler(trackDetail != null && !drawer.isOpen) { trackDetail = null }
-    BackHandler(page == CalendarPage.SETTINGS && !drawer.isOpen && !logoutDialog) { backFromSettings() }
+    LaunchedEffect(page, startupPage, drawerVisible, searching, settingsView, trackFilter, trackDetail?.id) {
+        activity.clearExitConfirmation()
+    }
+    BackHandler {
+        when {
+            drawerVisible -> scope.launch { drawer.close() }
+            searching -> closeSearch()
+            page == CalendarPage.TRACKS && trackDetail != null -> trackDetail = null
+            page == CalendarPage.SETTINGS && settingsView != "settings" -> backFromSettings()
+            trackFilter != null -> trackFilter = null
+            page != startupPage -> navigateToPage(startupPage)
+            else -> activity.requestExitConfirmation()
+        }
+    }
     ModalNavigationDrawer(drawerState = drawer, gesturesEnabled = !editorOpen && (page != CalendarPage.MONTH || drawer.isOpen), drawerContent = {
         ModalDrawerSheet(Modifier.width(292.dp)) {
             Spacer(Modifier.height(12.dp)); Text(state.account?.name.orEmpty(), Modifier.padding(horizontal = 20.dp, vertical = 12.dp), style = MaterialTheme.typography.titleMedium)
-            CalendarPage.entries.forEach { item -> NavigationDrawerItem(label = { Text(item.label) }, selected = page == item, onClick = { initialPageApplied = true; page = item; settingsView = "settings"; trackFilter = null; trackDetail = null; query = ""; scope.launch { drawer.close() } }, modifier = Modifier.padding(horizontal = 8.dp, vertical = 1.dp)) }
+            CalendarPage.entries.forEach { item -> NavigationDrawerItem(label = { Text(item.label) }, selected = page == item, onClick = { navigateToPage(item); scope.launch { drawer.close() } }, modifier = Modifier.padding(horizontal = 8.dp, vertical = 1.dp)) }
             HorizontalDivider(Modifier.padding(vertical = 12.dp))
             TextButton(onClick = { scope.launch { drawer.close() }; logoutDialog = true }, modifier = Modifier.padding(horizontal = 12.dp)) { Text(if (state.account?.localOnly == true) "利用方法を選び直す" else "アカウントを選び直す") }
             if (state.account?.localOnly != true) TextButton(onClick = { model.sync(); scope.launch { drawer.close() } }, modifier = Modifier.padding(horizontal = 12.dp)) { Text("今すぐ同期") }
@@ -169,7 +209,11 @@ private fun ReminderPermissionDialog(permission: ReminderPermission, activity: M
         }) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
                 Row(Modifier.fillMaxWidth().height(48.dp).background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = .55f)), verticalAlignment = Alignment.CenterVertically) {
-                    if (page == CalendarPage.SETTINGS) IconButton(onClick = { backFromSettings() }, modifier = Modifier.size(44.dp)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, if (settingsView == "settings") "カレンダーへ戻る" else "設定へ戻る") }
+                    if (page == CalendarPage.SETTINGS) IconButton(onClick = { backFromSettings() }, modifier = Modifier.size(44.dp)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, when {
+                        settingsView != "settings" -> "設定へ戻る"
+                        startupPage == CalendarPage.MONTH || startupPage == CalendarPage.SETTINGS -> "カレンダーへ戻る"
+                        else -> "起動画面へ戻る"
+                    }) }
                     else IconButton(onClick = { scope.launch { drawer.open() } }, modifier = Modifier.size(44.dp)) { Icon(Icons.Default.Menu, "メニュー") }
                     Text(if (page in listOf(CalendarPage.MONTH, CalendarPage.WEEK, CalendarPage.AGENDA)) "${headingMonth.year}年${headingMonth.monthValue}月" else page.label, Modifier.weight(1f), maxLines = 1, style = MaterialTheme.typography.titleMedium)
                     if (page == CalendarPage.SETTINGS) IconButton(onClick = { scope.launch { drawer.open() } }, modifier = Modifier.size(44.dp)) { Icon(Icons.Default.Menu, "メニュー") }
@@ -177,7 +221,7 @@ private fun ReminderPermissionDialog(permission: ReminderPermission, activity: M
                         IconButton(onClick = { if (page == CalendarPage.WEEK) selectDay(selected.minusWeeks(1)) else month = month.minusMonths(1) }, enabled = headingMonth > YearMonth.of(1, 1), modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ChevronLeft, "前へ") }
                         IconButton(onClick = { if (page == CalendarPage.WEEK) selectDay(selected.plusWeeks(1)) else month = month.plusMonths(1) }, enabled = headingMonth < YearMonth.of(9999, 12), modifier = Modifier.size(40.dp)) { Icon(Icons.Default.ChevronRight, "次へ") }
                         IconButton(onClick = { selectDay(today()) }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Today, "今日") }
-                        IconButton(onClick = { searching = !searching; if (!searching) query = "" }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Search, "検索") }
+                        IconButton(onClick = { if (searching) closeSearch() else searching = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Default.Search, "検索") }
                     }
                 }
                 if (searching && page in listOf(CalendarPage.MONTH, CalendarPage.WEEK, CalendarPage.AGENDA)) OutlinedTextField(query, { query = it }, label = { Text("表示中の予定・追跡・タグを検索") }, modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp), singleLine = true)
@@ -195,7 +239,11 @@ private fun ReminderPermissionDialog(permission: ReminderPermission, activity: M
                         CalendarPage.MONTH -> MonthScreen(month, selected, visible, model.holidays, onDay = { selectDay(it) }, onEvent = { detail = it }, onMonth = { month = it }, matches = matches)
                         CalendarPage.WEEK -> WeekScreen(selected, visible, model.holidays, onEvent = { detail = it }, matches = matches)
                         CalendarPage.AGENDA -> AgendaScreen(month, visible, model.holidays, onEvent = { detail = it }, matches = matches)
-                        CalendarPage.TRACKS -> if (trackDetail == null) TrackingScreen(state, events, onSelect = { trackDetail = it }, onSettings = { model.settings(it) }, onNew = { name -> model.named("track", NamedItem(name = name)) }) else TrackingDetail(trackDetail!!, state, events, onBack = { trackDetail = null }, onAdd = { editing = null; editingOccurrence = null; prefillTrack = trackDetail?.id; editMode = "ALL"; editorOpen = true }, onCalendar = { trackFilter = trackDetail?.id; page = CalendarPage.MONTH; trackDetail = null }, onEvent = { detail = it }, onEdit = { model.named("track", it); trackDetail = it }, onMerge = { source, target -> scope.launch { model.merge("track", source, target); trackDetail = null; } })
+                        CalendarPage.TRACKS -> if (trackDetail == null) TrackingScreen(state, events, onSelect = { trackDetail = it }, onSettings = { model.settings(it) }, onNew = { name -> model.named("track", NamedItem(name = name)) }) else TrackingDetail(trackDetail!!, state, events, onBack = { trackDetail = null }, onAdd = { editing = null; editingOccurrence = null; prefillTrack = trackDetail?.id; editMode = "ALL"; editorOpen = true }, onCalendar = {
+                            val trackId = trackDetail?.id
+                            navigateToPage(CalendarPage.MONTH)
+                            trackFilter = trackId
+                        }, onEvent = { detail = it }, onEdit = { model.named("track", it); trackDetail = it }, onMerge = { source, target -> scope.launch { model.merge("track", source, target); trackDetail = null; } })
                         CalendarPage.SETTINGS -> SettingsScreen(state, model, activity, settingsView, onLogout = { logoutDialog = true }) { settingsView = it }
                     }
                     }

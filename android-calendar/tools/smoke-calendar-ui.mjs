@@ -101,6 +101,95 @@ if(process.argv.includes('--account-only')){
   console.log('PASS account section, local identity, cancel/back, return to login, logged-out restart and retained local data');
   process.exit(0);
 }
+if(process.argv.includes('--back-only')){
+  const back=()=>run('shell','input','keyevent','KEYCODE_BACK');
+  const foreground=()=>run('shell','dumpsys','activity','activities').split(/\r?\n/)
+    .some(line=>line.includes('topResumedActivity=')&&line.includes(pkg+'/'));
+  async function waitForeground(expected){
+    for(let attempt=0;attempt<10;attempt++){
+      if(foreground()===expected) return;
+      await delay(200);
+    }
+    assert.fail(expected?'Calendar must remain in the foreground':'The second Back must take Calendar to the background');
+  }
+  const imeVisible=()=>/\bmInputShown=true\b/.test(run('shell','dumpsys','input_method'));
+  const searchLabel='表示中の予定・追跡・タグを検索';
+  const shown=moveMonth(initial,1);
+  tap(desc('次へ'));await dump('back-visible-month');assertMonth(shown,initial);
+
+  tap(desc('検索'));await dump('back-search');
+  tap(nodes.find(n=>n.class==='android.widget.EditText'));
+  for(let attempt=0;attempt<8&&!imeVisible();attempt++) await delay(200);
+  assert(imeVisible(),'Search keyboard should be visible');
+  back();await dump('back-keyboard-closed');
+  assert(!imeVisible(),'Back should first close the keyboard');
+  assert(text(searchLabel),'The search field must remain for the next Back');
+  back();await dump('back-search-closed');
+  assert(!text(searchLabel),'The second Back should close search');
+  assertMonth(shown,initial);
+
+  tap(desc('メニュー'));await dump('back-drawer-open');
+  back();await dump('back-drawer-closed');
+  assert(!text('利用方法を選び直す'),'Back should close the drawer only');
+  assertMonth(shown,initial);
+
+  tap(desc('予定を追加'));await dump('back-editor');
+  back();await dump('back-editor-confirmation');
+  assert(text('編集を終了しますか？'),'Back should protect unsaved editor input');
+  back();await dump('back-editor-keep-editing');
+  assert(text('保存')&&!text('編集を終了しますか？'),'Back should close only the discard confirmation');
+  back();await dump('back-editor-confirm-again');
+  tap(text('破棄して戻る'));await dump('back-from-editor');
+  assertMonth(shown,initial);
+
+  await openPage('設定');
+  tap(await reveal('タグを管理'));await dump('back-settings-child');
+  assert(desc('設定へ戻る'));
+  back();await dump('back-settings-root');
+  assert(desc('カレンダーへ戻る'),'Back should return to the root of Settings');
+  back();await dump('back-from-settings');
+  assertMonth(shown,initial);
+
+  await openPage('追跡');
+  const track='Back42';
+  tap(text('追跡を作成'));await dump('back-new-track');
+  tap(nodes.find(n=>n.class==='android.widget.EditText'));
+  await delay(700);run('shell','input','text',track);
+  await dump('back-track-name');
+  tap(text('作成'));await dump('back-tracking-list');
+  tap(text(track));await dump('back-track-detail');
+  assert(desc('追跡一覧へ戻る'));
+  back();await dump('back-track-parent');
+  assert(text('追跡を作成'),'A tracking detail must first return to the tracking list');
+  back();await dump('back-from-tracking');
+  assertMonth(shown,initial);
+  console.log('PASS one-level Back for the keyboard, search, drawer, editor, Settings and tracking');
+
+  await openPage('設定');
+  tap(await reveal('月間カレンダー'));await dump('back-startup-options');
+  tap(text('予定一覧'));await dump('back-agenda-startup-setting');
+  assert(text('予定一覧'),'The configured startup page should update');
+  back();await dump('back-configured-startup');
+  assert.equal(heading(),monthLabel(shown));
+  assert(!nodes.some(n=>n['content-desc']?.startsWith('選択中の日付：')),'Back should open the configured agenda');
+  await openPage('月間カレンダー');
+  assertMonth(shown,initial);
+  back();await dump('back-month-to-agenda');
+  assert(!nodes.some(n=>n['content-desc']?.startsWith('選択中の日付：')),'Back should return to the agenda from Calendar');
+
+  back();await delay(250);assert(foreground(),'The first Back at startup should leave Calendar open');
+  await delay(2100);
+  back();await delay(250);assert(foreground(),'Back after the confirmation window should leave Calendar open');
+  await delay(2100);
+  run('shell','input','keyevent','KEYCODE_BACK','KEYCODE_BACK');
+  await waitForeground(false);
+  run('shell','am','start','-W','-n',`${pkg}/.MainActivity`);
+  await waitForeground(true);
+  back();await delay(250);assert(foreground(),'A new foreground visit should reset exit confirmation');
+  assert(!run('logcat','-d','-b','crash').includes(pkg),'No release Back navigation crash');
+  console.log('PASS configured startup, two-second confirmation, exit and reopening');
+  process.exit(0);
+}
 if(!process.argv.includes('--settings-only')){
 const nextMonth=moveMonth(initial,1);
 tap(desc('次へ'));await dump('next-month');assertMonth(nextMonth,initial);
