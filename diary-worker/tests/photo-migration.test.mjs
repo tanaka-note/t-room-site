@@ -116,7 +116,7 @@ test('year mismatch and mixed-year data are rejected without changing a 2025 jou
   assert.throws(() => new PhotoMigration({ manifest: value, journal: saved, destination }), /保存先/);
   value.year = 2025;
   assert.throws(() => validateManifest(value), /日付/);
-  value.year = 2022;
+  value.year = 2021;
   assert.throws(() => validateManifest(value), /形式/);
   assert.deepEqual(f.journal, saved);
 });
