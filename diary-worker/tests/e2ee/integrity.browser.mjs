@@ -173,7 +173,8 @@ try {
   // journal across an attachment receipt failure, reload and publication loss.
   const migration=await context.newPage();
   const photoId=crypto.randomUUID(),digest=Buffer.from(await crypto.subtle.digest('SHA-256',png)).toString('hex');
-  const manifest={version:1,id:'c'.repeat(64),year:2025,timezone:'Asia/Tokyo',days:[{date:'2025-01-01',title:'2025-01-01',requestId:crypto.randomUUID(),photos:[{id:photoId,date:'2025-01-01',timestamp:1735700400,fileName:'SYNTHETIC_TAKEOUT.png',mimeType:'image/png',width:1,height:1,...Object.fromEntries(['original','display','thumbnail'].map(kind=>[kind,{path:`photos/${photoId}/${kind}.bin`,bytes:png.length,sha256:digest}]))}]}]};
+  const migrationDate='2022-12-31';
+  const manifest={version:1,id:'c'.repeat(64),year:2022,timezone:'Asia/Tokyo',days:[{date:migrationDate,title:migrationDate,requestId:crypto.randomUUID(),photos:[{id:photoId,date:migrationDate,timestamp:Date.parse(migrationDate+'T12:00:00+09:00')/1000,fileName:'SYNTHETIC_TAKEOUT.png',mimeType:'image/png',width:1,height:1,...Object.fromEntries(['original','display','thumbnail'].map(kind=>[kind,{path:`photos/${photoId}/${kind}.bin`,bytes:png.length,sha256:digest}]))}]}]};
   await migration.addInitScript(({manifest,bytes})=>{
     const values=new Map([['manifest.json',JSON.stringify(manifest)]]);window.syntheticMigrationFiles=values;
     function directory(prefix=''){return {getDirectoryHandle:async name=>directory(prefix+name+'/'),getFileHandle:async(name,options={})=>{
@@ -182,17 +183,20 @@ try {
     }};}
     window.showDirectoryPicker=async()=>directory();
   },{manifest,bytes:[...png]});
-  await migration.goto(origin+'/diary/?takeout-migration=2025');await migration.locator('#migration-folder').waitFor({state:'visible'});
+  await migration.goto(origin+'/diary/?takeout-migration=2022');await migration.locator('#migration-folder').waitFor({state:'visible'});
+  assert.equal(await migration.locator('#migration-through').inputValue(),migrationDate);
   await migration.click('#migration-folder');await migration.getByText('準備完了',{exact:true}).waitFor();
   failCommit=true;await migration.click('#migration-test');await migration.waitForFunction(()=>document.querySelector('#migration-state').textContent.startsWith('停止：'),{},{timeout:30000});
   assert.equal(f.db.sqlite.prepare('SELECT status FROM diary_e2ee_media WHERE id=?').get(photoId).status,'attached');
   failCommit=false;await migration.reload();await migration.locator('#migration-folder').waitFor({state:'visible'});await migration.click('#migration-folder');await migration.getByText('準備完了',{exact:true}).waitFor();
   await migration.evaluate(()=>{window.losePublishedReply=true;});await migration.click('#migration-test');await migration.waitForFunction(()=>document.querySelector('#migration-state').textContent.startsWith('停止：'));
   await migration.reload();await migration.locator('#migration-folder').waitFor({state:'visible'});await migration.click('#migration-folder');await migration.getByText('準備完了',{exact:true}).waitFor();await migration.click('#migration-test');
-  await migration.getByText('処理完了：1/1日を保存済み',{exact:true}).first().waitFor();
-  await migration.click('#migration-verify');await migration.getByText('処理完了：1/1日を保存済み',{exact:true}).first().waitFor();
+  const migrationComplete=migration.locator('#migration-state').and(migration.getByText('処理完了：1/1日を保存済み',{exact:true}));
+  await migrationComplete.waitFor();
+  await migration.click('#migration-verify');await migrationComplete.waitFor();
   const rows=f.db.sqlite.prepare('SELECT state,id FROM diary_e2ee_records WHERE photo_ids LIKE ?').all(`%${photoId}%`);assert.equal(rows.length,1);assert.equal(rows[0].state,'published');
-  const photo=f.db.sqlite.prepare('SELECT original_key FROM diary_e2ee_media WHERE id=?').get(photoId);assert.ok(photoHeader(f.r2.get(photo.original_key).bytes));
+  const photo=f.db.sqlite.prepare('SELECT original_key, display_key, thumbnail_key FROM diary_e2ee_media WHERE id=?').get(photoId);
+  for(const key of Object.values(photo))assert.ok(photoHeader(f.r2.get(key).bytes));
   assert.equal(requests.filter(r=>r.status===426).length,0,'encrypted migration must not call guarded legacy routes');
   assert.equal(requests.filter(r=>r.method==='POST'&&/\/uploads\/[^/]+\/photos$/.test(r.path)).length,1,'recovery does not upload the original again');
   assert.deepEqual(errors,[]);console.log(JSON.stringify({engine:process.env.TROOM_BROWSER||'chromium',desktop:process.argv.includes('--desktop'),account:user.serviceAccountId,sameSessionTabs:true,logoutClears:true,liveRefreshPreservesEditor:true,staleDraftSave:true,publicationConflict:true,deletedByVisible:true,takeoutReloadRecovery:true,originalPreserved:true,noLegacyApi:true}));

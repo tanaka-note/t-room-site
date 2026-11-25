@@ -90,7 +90,7 @@ test('opt-in compressed snapshots retain identical ciphertext, permission filter
 });
 
 test('legacy Takeout bookmarks preserve only the public supported migration year on redirect',async()=>{
- for(const year of ['2023','2024','2025','2026']){
+ for(const year of ['2022','2023','2024','2025','2026']){
   const response=await f.worker.fetch(new Request(`https://tanaka-note.com/diary/?takeout-migration=${year}&q=SYNTHETIC_PRIVATE_QUERY`),f.env,f.ctx);
   assert.equal(response.status,308);const target=new URL(response.headers.get('Location'));
   assert.equal(target.origin,f.env.DIARY_ENCRYPTION_ORIGIN);assert.equal(target.searchParams.has('q'),false);
