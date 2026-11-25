@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import kotlinx.coroutines.*
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 import java.time.*
 
@@ -53,6 +54,18 @@ fun reminderPlans(events: List<CalendarEvent>, settings: CalendarSettings, now: 
 
 enum class ReminderPermission { NOTIFICATIONS, EXACT_ALARMS }
 
+enum class ReminderIssue(val message: String) {
+    PERMISSION("通知を予約するには、Androidの通知と「アラームとリマインダー」を許可してください。"),
+    READ("端末の通知用データを読み込めませんでした。"),
+    WRITE("端末に通知用データを保存できませんでした。"),
+    LIMIT("通知の件数が上限を超えています。通知設定を減らしてください。"),
+    ALARM("Androidに通知を予約できませんでした。"),
+    REBUILD("通知の予約を更新できませんでした。"),
+}
+
+internal class ReminderRebuildException(val issue: ReminderIssue, cause: Exception? = null) :
+    Exception(issue.message, cause)
+
 object ReminderScheduler {
     private const val CHANNEL = "calendar-events"
     private fun alarm(context: Context) = context.getSystemService(AlarmManager::class.java)
@@ -64,19 +77,34 @@ object ReminderScheduler {
     }
 
     fun permitted(context: Context) = missingPermission(context) == null
-    fun rebuild(context: Context, state: CalendarState, storage: CalendarStore) = synchronized(CalendarSelectionLock) { rebuildLocked(context, state, storage) }
-    private fun rebuildLocked(context: Context, state: CalendarState, storage: CalendarStore) {
+    fun rebuild(context: Context, state: CalendarState, storage: CalendarStore, allowSnapshotRepair: Boolean = false) =
+        synchronized(CalendarSelectionLock) { rebuildLocked(context, state, storage, allowSnapshotRepair) }
+
+    private fun rebuildLocked(context: Context, state: CalendarState, storage: CalendarStore, allowSnapshotRepair: Boolean) {
         val account = state.account ?: return clear(context)
         val scope = selectedReminderScope(storage) ?: return clear(context)
         if (scope.accountId != account.id || scope.identityId != account.identityId || scope.local != account.localOnly || scope.version != account.sessionVersion) return
         val now = scope.now
-        val existing = storage.read("reminders")
+        val canRepair = scope.local || allowSnapshotRepair
+        val existing = try {
+            storage.read("reminders")
+        } catch (error: InvalidCalendarRecordException) {
+            if (!canRepair) throw ReminderRebuildException(ReminderIssue.READ, error)
+            null
+        } catch (error: Exception) {
+            throw ReminderRebuildException(ReminderIssue.READ, error)
+        }
         val knownIds = state.entities.filter { it.kind == "event" }.map { it.id }.toSet()
         val kept = if (!scope.local && existing != null && scope.matches(existing)) {
-            entries(existing).filter { it.eventId !in knownIds && it.at > now && it.at < scope.deadline }
+            try {
+                entries(existing).filter { it.eventId !in knownIds && it.at > now && it.at < scope.deadline }
+            } catch (error: JSONException) {
+                if (!canRepair) throw ReminderRebuildException(ReminderIssue.READ, error)
+                emptyList()
+            }
         } else emptyList()
         val values = (reminderEntries(state.events, state.settings, Instant.ofEpochSecond(now), scope.deadline) + kept).distinctBy { it.key }.sortedBy { it.at }
-        check(values.size <= 20000) { "通知の件数が多すぎます。通知設定を減らしてください。" }
+        if (values.size > 20000) throw ReminderRebuildException(ReminderIssue.LIMIT)
         val snapshot = JSONObject().put("accountId", account.id).put("identityId", account.identityId).put("sessionVersion", account.sessionVersion).put("selectionId", scope.selectionId).put("localOnly", scope.local).put("expiresAt", scope.expiresAt ?: JSONObject.NULL).put("items", JSONArray(values.map { it.json() }))
         var plans = emptyList<CalendarEvent>()
         if (scope.local) {
@@ -85,22 +113,35 @@ object ReminderScheduler {
             val notices = CalendarSettings(reminders = state.settings.reminders, eventReminders = state.settings.eventReminders.filterKeys { it.substringBefore('@') in ids })
             snapshot.put("plans", JSONArray(plans.map { it.json() })).put("notices", notices.json())
         }
-        if (existing?.toString() != snapshot.toString()) storage.write("reminders", snapshot)
+        if (existing?.toString() != snapshot.toString()) {
+            try {
+                storage.write("reminders", snapshot)
+            } catch (error: Exception) {
+                throw ReminderRebuildException(ReminderIssue.WRITE, error)
+            }
+        }
         schedule(context, values, now, scope.expiresAt, plans.isNotEmpty())
     }
     private fun entries(v: JSONObject): List<ReminderEntry> = v.optJSONArray("items")?.let { a -> (0 until a.length()).map { ReminderEntry.parse(a.getJSONObject(it)) } }.orEmpty()
     private fun schedule(context: Context, values: List<ReminderEntry>, now: Long, expiresAt: Long?, maintainLocal: Boolean = false) {
-        alarm(context).cancel(pending(context))
-        val maintenance = if (maintainLocal) now + 86400 else expiresAt
-        val due = values.firstOrNull()?.at
-        val allowed = permitted(context)
-        val next = listOfNotNull(if (allowed) due else null, maintenance).filter { it > now }.minOrNull() ?: return
-        if (allowed && due != null && next == due) {
-            alarm(context).setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, maxOf(due, now + 1) * 1000, pending(context))
-        } else {
-            alarm(context).setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next * 1000, pending(context))
+        val allowed = try {
+            val manager = alarm(context)
+            val operation = pending(context)
+            val maintenance = if (maintainLocal) now + 86400 else expiresAt
+            val due = values.firstOrNull()?.at
+            val hasPermissions = permitted(context)
+            val next = listOfNotNull(if (hasPermissions) due else null, maintenance).filter { it > now }.minOrNull()
+            // Android replaces a reservation with the same PendingIntent. Cancel only when no alarm is needed.
+            when {
+                next == null -> manager.cancel(operation)
+                hasPermissions && next == due -> manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next * 1000, operation)
+                else -> manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, next * 1000, operation)
+            }
+            hasPermissions
+        } catch (error: Exception) {
+            throw ReminderRebuildException(ReminderIssue.ALARM, error)
         }
-        check(allowed || values.isEmpty() && !maintainLocal) { "通知とアラームの許可が必要です。" }
+        if (!allowed && (values.isNotEmpty() || maintainLocal)) throw ReminderRebuildException(ReminderIssue.PERMISSION)
     }
     fun resume(context: Context) = synchronized(CalendarSelectionLock) { resumeLocked(context) }
     private fun resumeLocked(context: Context) {

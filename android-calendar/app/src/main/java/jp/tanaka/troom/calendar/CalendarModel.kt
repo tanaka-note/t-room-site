@@ -252,6 +252,7 @@ data class CalendarState(
     val expiresAt: Long = 0, val lastSync: Long = 0, val offline: Boolean = false, val busy: Boolean = false,
     val error: String? = null, val links: List<LoginLink> = emptyList(), val conflict: Conflict? = null,
     val recoveryRequired: Boolean = false,
+    val reminderIssue: ReminderIssue? = null,
 ) {
     val events get() = entities.filter { it.kind == "event" && !it.purged }.mapNotNull { runCatching { CalendarEvent.parse(it.body).copy(revision = it.version) }.getOrNull() }
     val tracks get() = named("track")

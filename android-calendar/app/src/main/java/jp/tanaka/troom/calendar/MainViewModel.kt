@@ -17,7 +17,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         values.keys().asSequence().associate { LocalDate.parse(it) to values.getString(it) }
     }
     init { viewModelScope.launch { app.ready.await(); repository.sync() } }
-    fun sync(active: Boolean = true) = viewModelScope.launch { if (active) CalendarActivityWindow.touch(); app.ready.await(); repository.sync(active) }
+    fun sync(active: Boolean = true, retryRemindersFirst: Boolean = false) = viewModelScope.launch {
+        if (active) CalendarActivityWindow.touch()
+        app.ready.await()
+        if (retryRemindersFirst) repository.retryReminders()
+        repository.sync(active)
+    }
     fun login(activity: ComponentActivity) = viewModelScope.launch { repository.login(activity); if (state.value.account != null) repository.sync() }
     fun select(link: LoginLink) = viewModelScope.launch { repository.selectAccount(link); if (state.value.account != null) repository.sync() }
     fun useLocal() = viewModelScope.launch { app.ready.await(); repository.useLocal() }

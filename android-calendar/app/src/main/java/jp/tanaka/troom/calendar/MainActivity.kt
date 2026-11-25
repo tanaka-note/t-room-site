@@ -33,10 +33,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        refreshReminderPermission()
+        val permissionsRestored = refreshReminderPermission()
         CalendarActivityWindow.foreground = true
         CalendarActivityWindow.touch()
-        model.sync()
+        model.sync(retryRemindersFirst = permissionsRestored)
     }
 
     override fun onPause() {
@@ -49,15 +49,15 @@ class MainActivity : ComponentActivity() {
         CalendarActivityWindow.touch()
     }
 
-    private fun refreshReminderPermission() {
+    private fun refreshReminderPermission(): Boolean {
+        val wasBlocked = missingReminderPermission != null
         missingReminderPermission = ReminderScheduler.missingPermission(this)
         if (missingReminderPermission == null) calendarOpened = true
+        return wasBlocked && missingReminderPermission == null
     }
 
     internal fun onNotificationPermissionResult() {
-        val wasBlocked = missingReminderPermission != null
-        refreshReminderPermission()
-        if (wasBlocked && missingReminderPermission == null) model.sync()
+        if (refreshReminderPermission()) model.sync(retryRemindersFirst = true)
     }
 
     internal fun requestReminderPermission(permission: ReminderPermission, requestNotifications: (String) -> Unit): Boolean {

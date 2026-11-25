@@ -181,6 +181,9 @@ private fun ReminderPermissionDialog(permission: ReminderPermission, activity: M
                 if (trackFilter != null) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) { Text("追跡：${state.tracks.find { it.id == trackFilter }?.name.orEmpty()}", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium); TextButton(onClick = { trackFilter = null }) { Text("全予定へ") } }
                 if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
                 state.error?.takeUnless { state.offline && it.startsWith("オフライン") }?.let { Text(it, Modifier.fillMaxWidth().padding(8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                state.reminderIssue?.let {
+                    Text(it.message, Modifier.fillMaxWidth().padding(8.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
                 if (state.conflict != null && !reviewConflict) TextButton(onClick = { reviewConflict = true }) { Text("同期の競合を確認") }
                 Box(Modifier.weight(1f)) {
                     savedScreens.SaveableStateProvider(if (page == CalendarPage.TRACKS && trackDetail != null) "TRACK-${trackDetail!!.id}" else page.name) {

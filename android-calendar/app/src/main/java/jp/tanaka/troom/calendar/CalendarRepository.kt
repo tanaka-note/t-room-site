@@ -70,7 +70,8 @@ class CalendarRepository(
     private val context: Context,
     val storage: CalendarStore = CalendarStorage(context),
     private val http: CalendarTransport = CalendarHttp(storage),
-    private val schedule: (CalendarState, CalendarStore) -> Unit = { state, store -> ReminderScheduler.rebuild(context, state, store) },
+    private val schedule: (CalendarState, CalendarStore, Boolean) -> Unit =
+        { state, store, allowRepair -> ReminderScheduler.rebuild(context, state, store, allowRepair) },
     private val clearScheduled: () -> Unit = { ReminderScheduler.clear(context) },
 ) {
     private val mutex = Mutex()
@@ -193,7 +194,7 @@ class CalendarRepository(
                 persist(next, nextCursor); cursor = nextCursor; mutable.value = next
             }
             mutable.value = mutable.value.copy(busy = false, error = null)
-            rebuildReminders()
+            rebuildReminders(allowSnapshotRepair = !more)
         } catch (error: Exception) {
             if (error is CalendarApiException && error.status in listOf(401, 403)) {
                 generation++; ReminderScheduler.clear(context); storage.delete("auth")
@@ -282,8 +283,23 @@ class CalendarRepository(
             .put("entities", JSONArray(value.entities.map { it.json() })).put("pending", JSONArray(value.pending.map { it.json() }))
         storage.write(if (value.account?.localOnly == true) "local-cache" else "cache", json)
     }
-    fun rebuildReminders() {
-        runCatching { schedule(mutable.value, storage) }.onFailure { mutable.value = mutable.value.copy(error = "予定は保存済みですが、通知の予約を確認できません。通知設定と端末の空き容量を確認してください。") }
+    suspend fun retryReminders() = mutex.withLock {
+        val current = mutable.value
+        if (current.account != null && !current.recoveryRequired && current.conflict == null) rebuildReminders()
+    }
+
+    private fun rebuildReminders(allowSnapshotRepair: Boolean = false) {
+        val issue = try {
+            schedule(mutable.value, storage, allowSnapshotRepair)
+            null
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: ReminderRebuildException) {
+            error.issue
+        } catch (_: Exception) {
+            ReminderIssue.REBUILD
+        }
+        mutable.value = mutable.value.copy(reminderIssue = issue)
     }
     suspend fun useLocal() = mutex.withLock {
         try {
