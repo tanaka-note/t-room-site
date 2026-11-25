@@ -1,12 +1,8 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package jp.tanaka.troom.calendar
 
-import android.Manifest
 import android.content.Intent
 import android.net.Uri
-import android.provider.Settings
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -78,7 +74,6 @@ import java.util.Locale
     var editItem by remember { mutableStateOf<Pair<String, NamedItem>?>(null) }; var mergeItem by remember { mutableStateOf<Pair<String, NamedItem>?>(null) }
     var permanentlyDeleting by remember { mutableStateOf<TrashEntry?>(null) }
     val scope = rememberCoroutineScope(); val settings = state.settings
-    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { model.repository.rebuildReminders() }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(14.dp, 6.dp, 14.dp, 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (view == "settings") {
             item {
@@ -95,7 +90,7 @@ import java.util.Locale
             item { Text("起動時の画面", style = MaterialTheme.typography.titleSmall); ChoiceField(CalendarPage.entries.firstOrNull { it.name == settings.startPage }?.label ?: "月間カレンダー", CalendarPage.entries.map { it.name to it.label }) { model.settings(settings.copy(startPage = it)) } }
             item { Text("予定の初期の長さ", style = MaterialTheme.typography.titleSmall); ChoiceField("${settings.durationMinutes}分", listOf(15, 30, 60, 90, 120, 180).map { it.toString() to "${it}分" }) { model.settings(settings.copy(durationMinutes = it.toInt())) } }
             item { HorizontalDivider(); Text("標準の通知", Modifier.padding(top = 12.dp), style = MaterialTheme.typography.titleSmall); Text("終日予定は開始日の0:00を基準にします。", style = MaterialTheme.typography.bodySmall); ReminderOptions(settings.reminders) { model.settings(settings.copy(reminders = it)) } }
-            item { if (!ReminderScheduler.permitted(activity)) Column { Text("通知を利用するには、通知と「アラームとリマインダー」の許可が必要です。", style = MaterialTheme.typography.bodySmall); Row { TextButton(onClick = { permissions.launch(Manifest.permission.POST_NOTIFICATIONS) }) { Text("通知を許可") }; TextButton(onClick = { activity.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${activity.packageName}"))) }) { Text("時刻の予約を許可") } } } else Text("通知の許可：有効", color = MaterialTheme.colorScheme.primary) }
+            item { Text("通知の許可：有効", color = MaterialTheme.colorScheme.primary) }
             item { HorizontalDivider(); Text(if (state.account?.localOnly == true) "この端末で利用中" else "オフライン保存", Modifier.padding(top = 12.dp), style = MaterialTheme.typography.titleSmall); ChoiceField("上限 ${settings.cacheMiB}MiB", listOf(50, 100, 200, 500).map { it.toString() to "${it}MiB" }) { model.settings(settings.copy(cacheMiB = it.toInt())) }; Text(if (state.account?.localOnly == true) "予定はこの端末内に保存されます。端末間の同期とサーバーへのバックアップは行いません。" else "取得済みの予定を圏外でも利用できます。通知に必要な情報と未同期の変更は保護します。", style = MaterialTheme.typography.bodySmall); Text("保存上限は、端末内の予定とサーバーから取得済みのデータの合計です。", style = MaterialTheme.typography.bodySmall); if (state.account?.localOnly != true) { Text("未同期：${state.pending.size}件", style = MaterialTheme.typography.bodySmall); TextButton(onClick = { model.sync() }) { Text("今すぐ同期") } } }
             item { HorizontalDivider(); TextButton(onClick = { onView("archives") }) { Text("アーカイブした追跡") }; TextButton(onClick = { onView("tags") }) { Text("タグを管理") }; TextButton(onClick = { onView("trash") }) { Text("ゴミ箱（30日）") } }
             item { HorizontalDivider(); Text("バージョン ${BuildConfig.VERSION_NAME}／Android 14以上", style = MaterialTheme.typography.bodySmall); TextButton(onClick = { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www8.cao.go.jp/chosei/shukujitsu/gaiyou.html"))) }) { Text("祝日データ：内閣府（2027年まで）") } }

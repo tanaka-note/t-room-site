@@ -5,16 +5,21 @@ import android.os.SystemClock
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.AtomicFile
+import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
 import java.io.RandomAccessFile
 import android.system.Os
 import java.security.KeyStore
 import java.util.concurrent.ConcurrentHashMap
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+
+internal class InvalidCalendarRecordException(cause: Exception? = null) :
+    IllegalStateException("保存データを確認できません。", cause)
 
 object CalendarSelectionLock
 /** AtomicFile needs a shared lock even when separate storage wrappers use it. */
@@ -64,11 +69,17 @@ class CalendarStorage(private val context: Context) : CalendarStore {
         val target = AtomicFile(File(directory, "$name.bin"))
         if (!target.baseFile.exists()) return@withRecord null
         val bytes = target.openRead().use { it.readBytes() }
-        check(bytes.size > 29 && bytes[0] == 1.toByte()) { "保存データを確認できません。" }
+        if (bytes.size <= 29 || bytes[0] != 1.toByte()) throw InvalidCalendarRecordException()
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, bytes.copyOfRange(1, 13)))
         cipher.updateAAD(name.toByteArray())
-        JSONObject(cipher.doFinal(bytes.copyOfRange(13, bytes.size)).toString(Charsets.UTF_8))
+        try {
+            JSONObject(cipher.doFinal(bytes.copyOfRange(13, bytes.size)).toString(Charsets.UTF_8))
+        } catch (error: AEADBadTagException) {
+            throw InvalidCalendarRecordException(error)
+        } catch (error: JSONException) {
+            throw InvalidCalendarRecordException(error)
+        }
     }
     override fun delete(name: String) { CalendarRecordLocks.withRecord(File(directory, "$name.bin").absolutePath) { AtomicFile(File(directory, "$name.bin")).delete() } }
     override fun renewCookie(expected: String, replacement: String, expiresAt: Long?, serverNow: Long?) { CalendarRecordLocks.withRecord(File(directory, "auth.bin").absolutePath) {

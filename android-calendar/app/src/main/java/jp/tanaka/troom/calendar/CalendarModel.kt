@@ -12,7 +12,6 @@ fun nowJapan(): LocalDateTime = LocalDateTime.now(JAPAN)
 const val CALENDAR_MONTH_COUNT = 9999 * 12
 fun calendarMonthPage(month: YearMonth): Int = (month.year - 1) * 12 + month.monthValue - 1
 fun calendarMonthAt(page: Int): YearMonth = YearMonth.of(page.coerceIn(0, CALENDAR_MONTH_COUNT - 1) / 12 + 1, page.coerceIn(0, CALENDAR_MONTH_COUNT - 1) % 12 + 1)
-fun calendarSelectedDate(month: YearMonth, preferredDay: Int): LocalDate = month.atDay(preferredDay.coerceIn(1, month.lengthOfMonth()))
 fun newId(): String = UUID.randomUUID().toString()
 fun JSONObject.strings(name: String): List<String> = optJSONArray(name)?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
 fun JSONObject.ints(name: String): List<Int> = optJSONArray(name)?.let { a -> (0 until a.length()).map { a.getInt(it) } } ?: emptyList()
@@ -252,6 +251,7 @@ data class CalendarState(
     val expiresAt: Long = 0, val lastSync: Long = 0, val offline: Boolean = false, val busy: Boolean = false,
     val error: String? = null, val links: List<LoginLink> = emptyList(), val conflict: Conflict? = null,
     val recoveryRequired: Boolean = false,
+    val reminderIssue: ReminderIssue? = null,
 ) {
     val events get() = entities.filter { it.kind == "event" && !it.purged }.mapNotNull { runCatching { CalendarEvent.parse(it.body).copy(revision = it.version) }.getOrNull() }
     val tracks get() = named("track")

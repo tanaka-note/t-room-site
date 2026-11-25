@@ -26,7 +26,7 @@ class LocalModeTest {
             calls++; throw AssertionError("Local mode made a network request")
         }
     }
-    private fun repository(store: MemoryStore, network: NoNetwork) = CalendarRepository(Application(), store, network, schedule = { _, _ -> }, clearScheduled = {})
+    private fun repository(store: MemoryStore, network: NoNetwork) = CalendarRepository(Application(), store, network, schedule = { _, _, _ -> }, clearScheduled = {})
     private fun event(title: String = "食事") = CalendarEvent(title = title, start = LocalDateTime.parse("2026-11-10T18:00"), end = LocalDateTime.parse("2026-11-10T19:00"), allDay = false)
 
     @Test fun localUsePersistsEventsTrackingAndSettingsWithoutAuthenticationNetworkOrAnOutbox() = runBlocking {

@@ -15,7 +15,16 @@ assert(!/flags=\[[^\n]*\bDEBUGGABLE\b/.test(run('shell','dumpsys','package',pkg)
 const decode=s=>s.replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');
 let nodes=[];
 async function dump(name){
-  await delay(400);run('shell','uiautomator','dump','/sdcard/calendar-ui-smoke.xml');
+  const remote='/sdcard/calendar-ui-smoke.xml';
+  for(let attempt=1;attempt<=4;attempt++){
+    await delay(400);
+    try {
+      if(run('shell','uiautomator','dump',remote).includes('dumped to:')) break;
+    } catch(error) {
+      if(attempt===4) throw error;
+    }
+    assert(attempt<4,'Could not read the Android UI');
+  }
   const xml=run('shell','cat','/sdcard/calendar-ui-smoke.xml');
   writeFileSync(resolve(output,`${name}.xml`),xml);
   nodes=[...xml.matchAll(/<node\b([^>]+)>/g)].map(m=>Object.fromEntries([...m[1].matchAll(/([\w-]+)="([^"]*)"/g)].map(a=>[a[1],decode(a[2])])));
@@ -25,17 +34,39 @@ async function dump(name){
 const text=s=>nodes.find(n=>n.text===s),desc=s=>nodes.find(n=>n['content-desc']===s);
 const bounds=n=>{assert(n,'Expected UI element');const a=n.bounds.match(/\d+/g).map(Number);return {x:(a[0]+a[2])/2,y:(a[1]+a[3])/2,left:a[0],top:a[1],right:a[2],bottom:a[3]};};
 const tap=n=>{const b=bounds(n);run('shell','input','tap',String(Math.round(b.x)),String(Math.round(b.y)));};
-const selectedLabel=()=>nodes.find(n=>n['content-desc']?.includes('選択中'))?.['content-desc'];
-const selectedDate=()=>{const s=selectedLabel();assert(s,'Selected day must have an accessible label');const [,y,m,d]=s.match(/(\d+)年(\d+)月(\d+)日/);return {y:+y,m:+m,d:+d};};
+const selectedDate=()=>{
+  const label=nodes.find(n=>n['content-desc']?.startsWith('選択中の日付：'))?.['content-desc'];
+  assert(label,'Selected date must be accessible even outside the visible month');
+  const [,y,m,d]=label.match(/(\d+)年(\d+)月(\d+)日/).map(Number);
+  return {y,m,d};
+};
 const heading=()=>nodes.find(n=>/^\d+年\d+月$/.test(n.text))?.text;
-const moveDate=(d,amount)=>{const dt=new Date(Date.UTC(d.y,d.m-1+amount,1));return {y:dt.getUTCFullYear(),m:dt.getUTCMonth()+1,d:Math.min(d.d,new Date(Date.UTC(dt.getUTCFullYear(),dt.getUTCMonth()+1,0)).getUTCDate())};};
-function assertMonth(d){assert.equal(heading(),`${d.y}年${d.m}月`);assert.deepEqual(selectedDate(),d);}
+const visibleMonth=()=>{const [,y,m]=heading().match(/^(\d+)年(\d+)月$/).map(Number);return {y,m};};
+const moveMonth=(month,amount)=>{
+  const date=new Date(Date.UTC(month.y,month.m-1+amount,1));
+  return {y:date.getUTCFullYear(),m:date.getUTCMonth()+1};
+};
+const monthLabel=month=>`${month.y}年${month.m}月`;
+const datePrefix=date=>`${monthLabel(date)}${date.d}日`;
+function assertMonth(shown,selection=shown){
+  assert.equal(heading(),monthLabel(shown));
+  assert.deepEqual(selectedDate(),selection);
+  const highlights=nodes.filter(n=>n['content-desc']?.includes(' 選択中'));
+  for(const item of highlights) assert(item['content-desc'].startsWith(datePrefix(selection)+'('));
+  if(shown.y===selection.y&&shown.m===selection.m) assert(highlights.length>0,'Selected day should be highlighted in its month');
+}
 function screenshot(name){writeFileSync(resolve(output,`${name}.png`),execFileSync(adb,['-s',serial,'exec-out','screencap','-p'],{timeout:30000}));}
 const checkedLabel=s=>{const p=bounds(text(s));return nodes.some(n=>{if(n.selected!=='true'&&n.checked!=='true')return false;const b=bounds(n);return b.left<=p.x&&p.x<=b.right&&b.top<=p.y&&p.y<=b.bottom;});};
 const size=run('shell','wm','size').match(/(\d+)x(\d+)/),w=+size[1],h=+size[2];
 let scrollAttempt=0;
 async function reveal(label,locate=text){for(let i=0;i<12;i++){const n=locate(label);if(n){const b=bounds(n);if(b.y>h*.12&&b.y<h*.88)return n;}run('shell','input','swipe',String(Math.round(w*.5)),String(Math.round(h*.78)),String(Math.round(w*.5)),String(Math.round(h*.3)),'450');await dump(`scroll-${scrollAttempt++}`);}throw new Error(`Could not reveal ${label}`);}
-async function openSettings(){tap(desc('メニュー'));await dump('settings-menu');tap(text('設定'));await dump('settings');}
+async function openPage(page){
+  tap(desc('メニュー'));
+  await dump('navigation-menu');
+  tap(text(page));
+  await dump(page==='設定'?'settings':'navigation-page');
+}
+const pagingOnly=process.argv.includes('--paging-only');
 
 run('logcat','-b','crash','-c');run('shell','am','force-stop',pkg);run('shell','am','start','-W','-n',`${pkg}/.MainActivity`);await dump('initial');
 if(text('ログインせずこの端末で使う')){tap(text('ログインせずこの端末で使う'));await dump('local-choice');}
@@ -50,7 +81,7 @@ if(process.argv.includes('--account-only')){
   tap(desc('予定を追加'));await dump('account-fixture-editor');
   tap(nodes.find(n=>n.class==='android.widget.EditText'));run('shell','input','text',fixture);run('shell','input','keyevent','KEYCODE_BACK');await dump('account-fixture-entered');
   tap(text('保存'));await dump('account-fixture-saved');
-  await openSettings();
+  await openPage('設定');
   assert(text('アカウント')&&text('アカウント名')&&text('この端末（ログインなし）'),'Show the account section and explicit local identity');
   assert(!text('ログアウト'),'Do not label local use as an authenticated account');screenshot('account-settings');
   tap(text('利用方法を選び直す'));await dump('account-cancel-dialog');run('shell','input','keyevent','KEYCODE_BACK');await dump('account-cancelled');
@@ -70,8 +101,120 @@ if(process.argv.includes('--account-only')){
   console.log('PASS account section, local identity, cancel/back, return to login, logged-out restart and retained local data');
   process.exit(0);
 }
+if(process.argv.includes('--back-only')){
+  const back=()=>run('shell','input','keyevent','KEYCODE_BACK');
+  const foreground=()=>run('shell','dumpsys','activity','activities').split(/\r?\n/)
+    .some(line=>line.includes('topResumedActivity=')&&line.includes(pkg+'/'));
+  async function waitForeground(expected){
+    for(let attempt=0;attempt<10;attempt++){
+      if(foreground()===expected) return;
+      await delay(200);
+    }
+    assert.fail(expected?'Calendar must remain in the foreground':'The second Back must take Calendar to the background');
+  }
+  const imeVisible=()=>/\bmInputShown=true\b/.test(run('shell','dumpsys','input_method'));
+  async function focusTextField(){
+    tap(nodes.find(n=>n.class==='android.widget.EditText'));
+    for(let attempt=0;attempt<8&&!imeVisible();attempt++) await delay(200);
+    assert(imeVisible(),'The keyboard should open for the text field');
+  }
+  const searchLabel='表示中の予定・追跡・タグを検索';
+  const shown=moveMonth(initial,1);
+  tap(desc('次へ'));await dump('back-visible-month');assertMonth(shown,initial);
+
+  tap(desc('検索'));await dump('back-search');
+  await focusTextField();
+  back();await dump('back-keyboard-closed');
+  assert(!imeVisible(),'Back should first close the keyboard');
+  assert(text(searchLabel),'The search field must remain for the next Back');
+  back();await dump('back-search-closed');
+  assert(!text(searchLabel),'The second Back should close search');
+  assertMonth(shown,initial);
+
+  tap(desc('メニュー'));await dump('back-drawer-open');
+  back();await dump('back-drawer-closed');
+  assert(!text('利用方法を選び直す'),'Back should close the drawer only');
+  assertMonth(shown,initial);
+
+  tap(desc('予定を追加'));await dump('back-editor');
+  await focusTextField();
+  back();await dump('back-editor-keyboard-closed');
+  assert(!imeVisible()&&text('保存')&&!text('編集を終了しますか？'),'Back should first close only the editor keyboard');
+  back();await dump('back-editor-confirmation');
+  assert(text('編集を終了しますか？'),'Back should protect unsaved editor input');
+  back();await dump('back-editor-keep-editing');
+  assert(text('保存')&&!text('編集を終了しますか？'),'Back should close only the discard confirmation');
+  back();await dump('back-editor-confirm-again');
+  tap(text('破棄して戻る'));await dump('back-from-editor');
+  assertMonth(shown,initial);
+
+  await openPage('設定');
+  tap(await reveal('タグを管理'));await dump('back-settings-child');
+  assert(desc('設定へ戻る'));
+  back();await dump('back-settings-root');
+  assert(desc('カレンダーへ戻る'),'Back should return to the root of Settings');
+  back();await dump('back-from-settings');
+  assertMonth(shown,initial);
+
+  await openPage('追跡');
+  const track='Back42';
+  tap(text('追跡を作成'));await dump('back-new-track');
+  tap(nodes.find(n=>n.class==='android.widget.EditText'));
+  await delay(700);run('shell','input','text',track);
+  await dump('back-track-name');
+  tap(text('作成'));await dump('back-tracking-list');
+  tap(text(track));await dump('back-track-detail');
+  assert(desc('追跡一覧へ戻る'));
+  back();await dump('back-track-parent');
+  assert(text('追跡を作成'),'A tracking detail must first return to the tracking list');
+  back();await dump('back-from-tracking');
+  assertMonth(shown,initial);
+  console.log('PASS one-level Back for the keyboard, search, drawer, editor, Settings and tracking');
+
+  await openPage('設定');
+  tap(await reveal('月間カレンダー'));await dump('back-startup-options');
+  tap(text('予定一覧'));await dump('back-agenda-startup-setting');
+  assert(text('予定一覧'),'The configured startup page should update');
+  back();await dump('back-configured-startup');
+  assert.equal(heading(),monthLabel(shown));
+  assert(!nodes.some(n=>n['content-desc']?.startsWith('選択中の日付：')),'Back should open the configured agenda');
+  await openPage('月間カレンダー');
+  assertMonth(shown,initial);
+  back();await dump('back-month-to-agenda');
+  assert(!nodes.some(n=>n['content-desc']?.startsWith('選択中の日付：')),'Back should return to the agenda from Calendar');
+
+  back();await delay(250);assert(foreground(),'The first Back at startup should leave Calendar open');
+  await delay(2100);
+  back();await delay(250);assert(foreground(),'Back after the confirmation window should leave Calendar open');
+  await delay(2100);
+  run('shell','input','keyevent','KEYCODE_BACK','KEYCODE_BACK');
+  await waitForeground(false);
+  run('shell','am','start','-W','-n',`${pkg}/.MainActivity`);
+  await waitForeground(true);
+  back();await delay(250);assert(foreground(),'A new foreground visit should reset exit confirmation');
+  assert(!run('logcat','-d','-b','crash').includes(pkg),'No release Back navigation crash');
+  console.log('PASS configured startup, two-second confirmation, exit and reopening');
+  process.exit(0);
+}
 if(!process.argv.includes('--settings-only')){
-tap(desc('次へ'));await dump('next-month');const target=moveDate(initial,1);assertMonth(target);
+const nextMonth=moveMonth(initial,1);
+tap(desc('次へ'));await dump('next-month');assertMonth(nextMonth,initial);
+await openPage('週間カレンダー');
+assert.equal(heading(),monthLabel(initial),'Week header must match the date shown in the week');
+await openPage('月間カレンダー');assertMonth(nextMonth,initial);
+
+tap(desc('予定を追加'));await dump('editor-after-browsing');
+assert.equal(nodes.filter(n=>n.text?.startsWith(datePrefix(initial))).length,2,'New appointments still start on the selected date');
+tap(desc('戻る'));await dump('leave-editor-after-browsing');
+tap(text('破棄して戻る'));await dump('returned-from-editor');assertMonth(nextMonth,initial);
+
+const target={...nextMonth,d:initial.d===12?13:12};
+tap(nodes.find(n=>n['content-desc']?.startsWith(datePrefix(target)+'(')));
+await dump('other-date-selected');assertMonth(target);
+tap(desc('前へ'));await dump('previous-after-selection');assertMonth(initial,target);
+tap(desc('次へ'));await dump('next-after-selection');assertMonth(target);
+
+if(!pagingOnly){
 tap(desc('予定を追加'));const editorXml=await dump('editor');
 assert(editorXml.includes('例：9:00-10:00 友達とお出かけ'),'Show the requested time/title example');
 const editorDate=new RegExp(`^${target.y}年${target.m}月${target.d}日`);
@@ -98,23 +241,32 @@ assert(nodes.some(n=>n.text.includes('翌日01:00')),'Make the overnight interpr
 tap(text('保存'));await dump('overnight-saved');assert(text('OvernightFixture'));tap(text('OvernightFixture'));await dump('overnight-detail');
 assert(nodes.some(n=>/23:00.*01:00/.test(n.text)),'Persist both overnight times');run('shell','input','keyevent','KEYCODE_BACK');await dump('after-quick-entry');
 console.log('PASS one-line time input, requested example, invalid ranges and overnight entry');
+}
 
 const y=Math.round(h*.38);
-run('shell','input','swipe',String(Math.round(w*.78)),String(y),String(Math.round(w*.22)),String(y),'450');await dump('swipe-next');assertMonth(moveDate(target,1));
+run('shell','input','swipe',String(Math.round(w*.78)),String(y),String(Math.round(w*.22)),String(y),'450');await dump('swipe-next');assertMonth(moveMonth(target,1),target);
 run('shell','input','swipe',String(Math.round(w*.22)),String(y),String(Math.round(w*.78)),String(y),'450');await dump('swipe-back');assertMonth(target);
 assert(!text('利用方法を選び直す'),'A rightward month swipe must not open the drawer');
 run('shell','input','swipe',String(Math.round(w*.55)),String(y),String(Math.round(w*.47)),String(y),'650');await dump('short-swipe');assertMonth(target);
 const next=bounds(desc('次へ'));for(let i=0;i<3;i++)run('shell','input','tap',String(Math.round(next.x)),String(Math.round(next.y)));
-await dump('rapid-next');assertMonth(moveDate(target,3));
+await dump('rapid-next');assertMonth(moveMonth(target,3),target);
 tap(desc('次へ'));
 run('shell','input','swipe',String(Math.round(w*.78)),String(y),String(Math.round(w*.22)),String(y),'550');await dump('interrupted-navigation');
-const interrupted=selectedDate();assertMonth(interrupted);
-tap(desc('次へ'));await dump('after-interruption');assertMonth(moveDate(interrupted,1));
-console.log('PASS left/right paging, incomplete swipe and repeated navigation');
+const interrupted=visibleMonth();assertMonth(interrupted,target);
+tap(desc('次へ'));await dump('after-interruption');assertMonth(moveMonth(interrupted,1),target);
+console.log('PASS selected date preserved by arrows, swipes and rapid month paging');
 }
 
-const beforeSettings=selectedDate();await openSettings();tap(desc('カレンダーへ戻る'));await dump('toolbar-back');assertMonth(beforeSettings);
-await openSettings();run('shell','input','keyevent','KEYCODE_BACK');await dump('android-back');assertMonth(beforeSettings);await openSettings();
+const beforeSettings=visibleMonth(), selectedBeforeSettings=selectedDate();
+await openPage('設定');tap(desc('カレンダーへ戻る'));await dump('toolbar-back');assertMonth(beforeSettings,selectedBeforeSettings);
+await openPage('設定');run('shell','input','keyevent','KEYCODE_BACK');await dump('android-back');assertMonth(beforeSettings,selectedBeforeSettings);
+if(pagingOnly){
+  tap(desc('今日'));await dump('today-button');assertMonth(initial);
+  assert(!run('logcat','-d','-b','crash').includes(pkg),'No release paging UI crash');
+  console.log('PASS month and selected date retained through settings, and Today resets both');
+  process.exit(0);
+}
+await openPage('設定');
 for(const label of ['ブルー','ミント','ラベンダー','ローズ','ピーチ','グレー','スカイ','ターコイズ','ネイビー','プラム','アンバー','コーラル'])await reveal(label);
 tap(text('ローズ'));await dump('rose');tap(text('ダーク'));await dump('dark');
 assert(checkedLabel('ローズ'));assert(checkedLabel('ダーク'));screenshot('rose-dark');
@@ -126,7 +278,7 @@ await reveal('標準の通知');
 if(nodes.some(n=>n.text.startsWith('設定した通知：'))){tap(await reveal('通知なしにする'));await dump('reminders-cleared');}
 tap(await reveal('1日前'));await dump('one-reminder');tap(await reveal('1時間前'));await dump('two-reminders');
 assert(desc('1日前の通知を削除')&&desc('1時間前の通知を削除'));screenshot('multiple-reminders');
-run('shell','am','force-stop',pkg);run('shell','am','start','-W','-n',`${pkg}/.MainActivity`);await dump('reminders-restart');await openSettings();
+run('shell','am','force-stop',pkg);run('shell','am','start','-W','-n',`${pkg}/.MainActivity`);await dump('reminders-restart');await openPage('設定');
 await reveal('1日前の通知を削除',desc);await reveal('1時間前の通知を削除',desc);
 assert(desc('1日前の通知を削除')&&desc('1時間前の通知を削除'),'Both standard reminders must survive restart');
 tap(desc('1時間前の通知を削除'));await dump('reminder-removed');assert(desc('1日前の通知を削除'));assert(!desc('1時間前の通知を削除'));
