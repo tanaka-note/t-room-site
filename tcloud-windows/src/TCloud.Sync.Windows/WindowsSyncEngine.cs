@@ -23,6 +23,7 @@ public sealed partial class WindowsSyncEngine:IAsyncDisposable
     private readonly WindowsUploadJournal uploads;
     private readonly WindowsFileUploader uploader;
     private readonly WindowsRemoteExchange exchange;
+    private readonly WindowsRemoteFolderPlacement folderPlacement;
     private readonly CloudFilesProvider provider;
     private readonly WindowsOriginalPrefetch prefetch;
     private readonly IProgress<WindowsTransferStatus>? progress;
@@ -58,6 +59,7 @@ public sealed partial class WindowsSyncEngine:IAsyncDisposable
         uploads=new(Path.Combine(pcDirectory,"uploads"),staging,registration);uploader=new(device,registration,root,uploads,staging);
         prefetch=new(DownloadOriginalAsync,lifetime.Token);
         provider=new(root,OpenOriginalAsync);exchange=new(root,provider,catalog,registration,staging,Path.Combine(pcDirectory,"exchange.json"));
+        folderPlacement=new(root,catalog,registration,staging,Path.Combine(pcDirectory,"folder-placement.json"),protectFolder);
         watcher=new(root.Root){IncludeSubdirectories=true,NotifyFilter=NotifyFilters.FileName|NotifyFilters.DirectoryName|NotifyFilters.LastWrite|NotifyFilters.Size};
         watcher.Changed+=LocalChanged;watcher.Created+=LocalChanged;watcher.Deleted+=LocalChanged;watcher.Renamed+=LocalChanged;
         watcher.Error+=(_,_)=>{verifiedLocal.Clear();Interrupt(local:true);};watcher.EnableRaisingEvents=true;
@@ -167,10 +169,19 @@ public sealed partial class WindowsSyncEngine:IAsyncDisposable
     private async Task WorkAsync(long passGeneration,CancellationToken token)
     {
         var snapshot=await catalog.LoadAsync(token);if(snapshot.RemotePosition is null)return;
-        using var resolver=new CloudOriginalResolver(key,snapshot.Remote,keys);
         if(!catalogOnline){if(activity is not null)await ObserveOfflineAsync(snapshot,token);return;}
+        ignoreLocalEvents=true;
+        try {
+            var resumed=await folderPlacement.ResumeAsync(id=>{
+                var match=ScanTree().Folders.FirstOrDefault(item=>item.State.Id==id).Path;
+                return match is null?null:LocalPaths.ResolveUnderRoot(root.Root,match);
+            },token);
+            if(resumed)snapshot=await catalog.LoadAsync(token);
+        }finally{ignoreLocalEvents=false;}
         await exchange.ResumeAsync(token);
         var tree=ScanTree();
+        if(await ReleaseDeletedFolderMappingsAsync(snapshot,tree,token))snapshot=await catalog.LoadAsync(token);
+        using var resolver=new CloudOriginalResolver(key,snapshot.Remote,keys);
         if(activity is not null)ObserveLocal(snapshot,tree,offline:false);
         if(await ResumeMetadataAsync(snapshot,token))return;
         foreach(var pending in await uploads.LoadAsync(token)) {
@@ -334,22 +345,29 @@ public sealed partial class WindowsSyncEngine:IAsyncDisposable
             if(activity is not null)downloadsForPass.Add(DownloadItem(entry,path,WindowsActivityState.Listed));
         }
         snapshot=await catalog.LoadAsync(token);tree=ScanTree();
+        var movedDeletedFolder=false;
         foreach(var deletedFolder in snapshot.Remote.Where(e=>e.Kind=="folder"&&e.State!="present")) {
             var oldFolder=(snapshot.Folders??[]).SingleOrDefault(f=>f.Id==deletedFolder.Id);if(oldFolder is null)continue;
-            var full=LocalPaths.ResolveUnderRoot(root.Root,oldFolder.RelativePath);if(!Directory.Exists(full))continue;
-            bool Under(string relative)=>relative.Equals(oldFolder.RelativePath,StringComparison.OrdinalIgnoreCase)
-                ||relative.StartsWith(oldFolder.RelativePath+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase);
+            var actual=tree.Folders.FirstOrDefault(item=>item.State.Id==oldFolder.FileId).Path;
+            if(actual is null)continue;
+            var full=LocalPaths.ResolveUnderRoot(root.Root,actual);if(!Directory.Exists(full))continue;
+            bool Under(string relative)=>WindowsRemoteFolderPlacement.InFolder(relative,oldFolder.RelativePath)
+                ||WindowsRemoteFolderPlacement.InFolder(relative,actual);
             // A file moved out online is reconciled before its former directory.
             if(snapshot.Originals.Any(o=>!o.Deleted&&Under(o.RelativePath)&&snapshot.Remote.Any(e=>e.Kind=="file"&&e.Id==o.Id&&e.State=="present")))continue;
+            if((snapshot.Folders??[]).Any(f=>Under(f.RelativePath)&&snapshot.Remote.Any(e=>e.Kind=="folder"&&e.Id==f.Id&&e.State=="present")))continue;
             var members=Directory.EnumerateFileSystemEntries(full,"*",SearchOption.AllDirectories).Prepend(full).ToArray();
             var leases=new List<IDisposable>();
             try {
                 foreach(var member in members){_=LocalPaths.ResolveUnderRoot(root.Root,Path.GetRelativePath(root.Root,member));leases.Add(provider.AllowLocalMutation(member));}
-                var saved=await WindowsRecovery.PlanAsync(staging,oldFolder.RelativePath,"オンラインで削除されたフォルダの未送信データ",token);
-                root.VerifyPresent();Directory.Move(full,saved);
+                var saved=await WindowsRecovery.PlanAsync(staging,actual,"オンラインで削除されたフォルダの未送信データ",token);
+                root.VerifyPresent();
+                if(WindowsFileState.Read(full).Id!=oldFolder.FileId)throw new IOException("削除されたフォルダの保存先が変わりました。再確認します。");
+                Directory.Move(full,saved);movedDeletedFolder=true;
                 await RecordRecoveryAsync(oldFolder.RelativePath,saved,"オンラインで削除されたフォルダの未送信データをHDDに保全しました。",token);
             }finally{foreach(var lease in leases)lease.Dispose();}
         }
+        if(movedDeletedFolder)return;
         tree=ScanTree();
         var blocked=snapshot.Originals.Select(e=>e.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var ownedIds=snapshot.Originals.Select(e=>e.LocalFileId!=0?e.LocalFileId:e.LocalState?.Id??0).Where(id=>id!=0).ToHashSet();
@@ -612,6 +630,40 @@ public sealed partial class WindowsSyncEngine:IAsyncDisposable
         var parent=entry.Value!.Value.GetProperty("folderId");
         var mapped=parent.ValueKind==JsonValueKind.Null?null:folders.SingleOrDefault(f=>f.Id==parent.GetInt64());return mapped is null?path:Path.Combine(mapped.RelativePath,Path.GetFileName(path));
     }
+    private async Task<bool> ReleaseDeletedFolderMappingsAsync(LocalSyncSnapshot snapshot,Tree tree,CancellationToken token)
+    {
+        var tombstones=snapshot.Remote.Where(e=>e.Kind=="folder"&&e.State!="present").Select(e=>e.Id).ToHashSet();
+        if(tombstones.Count==0)return false;
+        var localIds=tree.Folders.Select(entry=>entry.State.Id).ToHashSet();
+        var retired=new HashSet<LocalFolderRecord>();
+        foreach(var mapped in snapshot.Folders??[]) {
+            if(!tombstones.Contains(mapped.Id)||localIds.Contains(mapped.FileId)||tree.Excluded.Any(item=>WindowsRemoteFolderPlacement.InFolder(mapped.RelativePath,item.RelativePath)))continue;
+            var full=LocalPaths.ResolveUnderRoot(root.Root,mapped.RelativePath);
+            try {
+                if((File.GetAttributes(full)&FileAttributes.Directory)!=0) {
+                    WindowsAtomicState.Check(full);
+                    if(WindowsFileState.Read(full).Id==mapped.FileId)continue;
+                }
+            }catch(Exception error)when(error is FileNotFoundException or DirectoryNotFoundException){ }
+            retired.Add(mapped);
+        }
+        if(retired.Count==0)return false;
+        await catalog.UpdateAsync(value=>{
+            var deleted=value.Remote.Where(e=>e.Kind=="folder"&&e.State!="present").Select(e=>e.Id).ToHashSet();
+            var folders=value.Folders??[];
+            var kept=folders.Where(entry=>!retired.Contains(entry)||!deleted.Contains(entry.Id)).ToArray();
+            return kept.Length==folders.Length?value:value with {Folders=kept};
+        },token);
+        return true;
+    }
+
+    private static bool IsFolderAlias(string path,string desired,long id)
+    {
+        var alias=desired+" (T-Cloud "+id+")";
+        return path.Equals(alias,StringComparison.OrdinalIgnoreCase)||path.StartsWith(alias+"-",StringComparison.OrdinalIgnoreCase)
+            &&int.TryParse(path.AsSpan(alias.Length+1),out var ordinal)&&ordinal>=2;
+    }
+
     private async Task<bool> ReconcileFoldersAsync(LocalSyncSnapshot snapshot,CloudOriginalResolver resolver,Tree tree,CancellationToken token)
     {
         var known=(snapshot.Folders??[]).ToList();var remote=resolver.DescribeFolders();
@@ -620,9 +672,22 @@ public sealed partial class WindowsSyncEngine:IAsyncDisposable
             var actual=old is null?null:tree.Folders.FirstOrDefault(e=>e.State.Id==old.FileId).Path;
             var desired=folder.RelativePath;
             if(folder.ParentId is {} parent&&known.SingleOrDefault(e=>e.Id==parent) is {} mapped)desired=Path.Combine(mapped.RelativePath,Path.GetFileName(desired));
-            if(known.Any(f=>f.Id!=folder.Id&&f.RelativePath.Equals(desired,StringComparison.OrdinalIgnoreCase))
-                ||old is null&&Directory.Exists(LocalPaths.ResolveUnderRoot(root.Root,desired)))desired+=" (T-Cloud "+folder.Id+")";
-            if(old is not null&&actual is not null&&actual!=old.RelativePath&&folder.Revision==old.Revision) {
+            var initial=desired;
+            bool UsedByAnother(string path)=>known.Any(f=>f.Id!=folder.Id&&f.RelativePath.Equals(path,StringComparison.OrdinalIgnoreCase));
+            bool Occupied(string path){var full=LocalPaths.ResolveUnderRoot(root.Root,path);return Directory.Exists(full)||File.Exists(full);}
+            for(var attempt=1;UsedByAnother(desired)||old is null&&Occupied(desired);attempt++)
+                desired=initial+" (T-Cloud "+folder.Id+")"+(attempt==1?"":"-"+attempt);
+            if(old is null){
+                var created=await folderPlacement.CreateAsync(folder,desired,snapshot.RemotePosition!.Epoch,token);
+                if(created is null)return true;
+                known.Add(created);continue;
+            }
+            if(actual==old.RelativePath&&old.Revision==folder.Revision&&desired==initial&&IsFolderAlias(actual,initial,folder.Id)
+                &&!Occupied(initial)&&!WindowsRemoteFolderPlacement.IsMappedSubtree(snapshot,initial)) {
+                await folderPlacement.MoveAsync(old,initial,snapshot.RemotePosition!.Epoch,token);
+                return true;
+            }
+            if(actual is not null&&actual!=old.RelativePath&&folder.Revision==old.Revision) {
                 var value=snapshot.Remote.Single(e=>e.Kind=="folder"&&e.Id==folder.Id).Value!.Value;
                 var actualParent=Path.GetDirectoryName(actual)??"";
                 var destinationParent=known.SingleOrDefault(f=>f.RelativePath.Equals(actualParent,StringComparison.OrdinalIgnoreCase));
@@ -642,9 +707,9 @@ public sealed partial class WindowsSyncEngine:IAsyncDisposable
                     snapshot.RemotePosition!.Epoch,baselinePath,old.FileId,body,DetectedAt:DateTimeOffset.UtcNow),token);
                 await ResumeMetadataAsync(snapshot,token);return true;
             }
-            var relative=actual??old?.RelativePath??desired;
+            var relative=actual??old.RelativePath;
             var full=LocalPaths.ResolveUnderRoot(root.Root,relative);
-            if(old is not null&&actual is not null&&old.Revision!=folder.Revision&&actual==old.RelativePath&&relative!=desired
+            if(actual is not null&&old.Revision!=folder.Revision&&actual==old.RelativePath&&relative!=desired
                 &&(!Directory.Exists(LocalPaths.ResolveUnderRoot(root.Root,desired))||WindowsFileState.Read(LocalPaths.ResolveUnderRoot(root.Root,desired)).Id==old.FileId)) {
                 var target=LocalPaths.ResolveUnderRoot(root.Root,desired);Directory.CreateDirectory(Path.GetDirectoryName(target)!);Directory.Move(full,target);relative=desired;full=target;
             }
