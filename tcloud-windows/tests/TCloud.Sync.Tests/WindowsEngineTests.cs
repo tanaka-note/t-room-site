@@ -144,6 +144,7 @@ internal static class WindowsEngineTests
                 await Wait(()=>File.Exists(backlogPath)&&Volatile.Read(ref deferredReads)>0,"initial mirror has an unavailable original ahead of existing files");
                 engine.TestAvailableSpace=()=>40L*1024*1024;
                 File.WriteAllText(Path.Combine(directory,"outside.txt"),"not in a cloud folder");
+                Directory.CreateDirectory(Path.Combine(directory,"unsupported-folder"));
                 File.WriteAllText(Path.Combine(directory,"saved","empty.txt"),"");
                 await File.WriteAllTextAsync(path,"saved revision");
                 await Wait(()=>committed==1,"saved edit upload");
@@ -159,6 +160,7 @@ internal static class WindowsEngineTests
                 var isolated=new WindowsSyncActivity(pc,registration with{DeviceId=Guid.NewGuid().ToString("N")});await isolated.LoadAsync(CancellationToken.None);
                 Check(isolated.Snapshot()!.Uploads.Length==0,"history stays bound to the registered device and disk");
                 await Wait(()=>activity.Snapshot()!.Uploads.Any(row=>row.RelativePath=="outside.txt"&&row.State==WindowsActivityState.Attention)
+                    &&activity.Snapshot()!.Uploads.Any(row=>row.RelativePath=="unsupported-folder"&&row.State==WindowsActivityState.Attention)
                     &&activity.Snapshot()!.Uploads.Any(row=>row.RelativePath.EndsWith("empty.txt",StringComparison.Ordinal)&&row.State==WindowsActivityState.Waiting)
                     &&activity.Snapshot()!.Downloads.Any(row=>row.RelativePath.EndsWith("backlog.txt",StringComparison.Ordinal)&&row.State==WindowsActivityState.Attention),
                     "blocked files stay visible while an eligible upload succeeds despite insufficient mirror capacity");

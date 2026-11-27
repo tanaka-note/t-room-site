@@ -33,8 +33,19 @@ public sealed partial class WindowsSyncEngine
         var originals = snapshot.Originals.Where(row => !row.Deleted).ToArray();
         var byPath = originals.ToDictionary(row => row.RelativePath, StringComparer.OrdinalIgnoreCase);
         var byId = originals.Where(row => row.LocalFileId != 0).ToLookup(row => row.LocalFileId);
-        var folders = (snapshot.Folders ?? []).Select(row => row.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var knownFolders = snapshot.Folders ?? [];
+        var folders = knownFolders.Select(row => row.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var folderIds = knownFolders.Select(row => row.FileId).ToHashSet();
+        var mapped = !offline && (snapshot.Folders is not null || !snapshot.Remote.Any(row => row.Kind == "folder" && row.State == "present"));
         var rows = tree.Excluded.Where(item => !byPath.ContainsKey(item.RelativePath)).ToList();
+        foreach (var (path, stamp) in tree.Folders)
+        {
+            if (folders.Contains(path) || folderIds.Contains(stamp.Id)) continue;
+            var top = path.Split(Path.DirectorySeparatorChar, 2)[0];
+            if (Path.GetDirectoryName(path) is not { Length: > 0 } || mapped && !folders.Contains(top))
+                rows.Add(LocalItem(path, null, WindowsActivityOperation.CreatedFolder, WindowsActivityState.Attention,
+                    "最上位フォルダはT-CloudのWeb画面で作成できます。HDDで作成する場合は既存のT-Cloudフォルダの配下を選択してください。"));
+        }
         foreach (var (path, stamp) in tree.Files)
         {
             var full = LocalPaths.ResolveUnderRoot(root.Root, path);
@@ -55,7 +66,7 @@ public sealed partial class WindowsSyncEngine
             var operation = old is null ? WindowsActivityOperation.Added : samePath ? WindowsActivityOperation.Updated : WindowsActivityOperation.Renamed;
             var parent = Path.GetDirectoryName(path) ?? "";
             var top = path.Split(Path.DirectorySeparatorChar, 2)[0];
-            var row = parent.Length == 0 || (!offline && !folders.Contains(top) && snapshot.Folders is { Length: > 0 })
+            var row = parent.Length == 0 || mapped && !folders.Contains(top)
                 ? LocalItem(path, stamp, operation, WindowsActivityState.Attention, "HDD内にある既存のT-Cloudフォルダへ移動すると自動送信されます。")
                 : stamp.Size == 0
                     ? LocalItem(path, stamp, operation, WindowsActivityState.Waiting, "ファイルが0バイトです。内容が保存されると送信します。")
