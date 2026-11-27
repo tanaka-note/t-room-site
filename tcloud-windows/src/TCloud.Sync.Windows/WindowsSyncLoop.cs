@@ -17,8 +17,13 @@ public sealed class WindowsSyncLoop(WindowsCatalogSynchronizer catalog,Action ve
 {
     private readonly TimeSpan poll=Validate(pollInterval??TimeSpan.FromSeconds(30));
     private readonly TimeSpan retry=Validate(retryInterval??TimeSpan.FromSeconds(2));
+    private readonly SemaphoreSlim check=new(0,1);
     private int running;
     private DateTimeOffset? lastCompleted;
+    public void RequestCheck()
+    {
+        try{check.Release();}catch(SemaphoreFullException){ }
+    }
     public async Task<WindowsSyncState> RunAsync(CancellationToken token)
     {
         if(Interlocked.Exchange(ref running,1)!=0)throw new InvalidOperationException("同期処理は既に実行中です。");
@@ -38,7 +43,7 @@ public sealed class WindowsSyncLoop(WindowsCatalogSynchronizer catalog,Action ve
                     await reconcile(snapshot,token);
                     lastCompleted=DateTimeOffset.UtcNow;failures=0;
                     Report(WindowsSyncState.Current);
-                    await Task.Delay(poll,token);
+                    await check.WaitAsync(poll,token);
                 }
                 catch(WindowsDeviceRevokedException){return Stop(WindowsSyncState.AuthorizationRevoked);}
                 catch(WindowsDeviceRegistrationIncompleteException){return Stop(WindowsSyncState.InitialRegistrationIncomplete);}
@@ -52,7 +57,7 @@ public sealed class WindowsSyncLoop(WindowsCatalogSynchronizer catalog,Action ve
                     // keys, saved cursor, originals, or pending local edits.
                     Report(destinationReady?WindowsSyncState.ConnectionPending:WindowsSyncState.DestinationUnavailable);
                     var milliseconds=Math.Min(60000,retry.TotalMilliseconds*Math.Pow(2,Math.Min(failures++,10)));
-                    await Task.Delay(TimeSpan.FromMilliseconds(milliseconds),token);
+                    await check.WaitAsync(TimeSpan.FromMilliseconds(milliseconds),token);
                 }
             }
         }

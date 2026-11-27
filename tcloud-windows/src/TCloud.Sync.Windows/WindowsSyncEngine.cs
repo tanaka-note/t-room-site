@@ -11,7 +11,7 @@ namespace TCloud.Sync.Windows;
 public sealed record WindowsTransferStatus(string Message,int Complete,int Total);
 
 /// <summary>One durable local worker; catalog polling and foreground opens remain independent.</summary>
-public sealed class WindowsSyncEngine:IAsyncDisposable
+public sealed partial class WindowsSyncEngine:IAsyncDisposable
 {
     private readonly WindowsDeviceClient device;
     private readonly WindowsDeviceRegistration registration;
@@ -46,9 +46,10 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
     private bool needsWork=true;
     private long generation;
     public WindowsSyncEngine(WindowsDeviceClient device,WindowsDeviceRegistration registration,CloudFilesRootRegistration root,
-        LocalSyncCatalog catalog,string pcDirectory,IProgress<WindowsTransferStatus>? progress=null,Action<string>? protectFolder=null)
+        LocalSyncCatalog catalog,string pcDirectory,IProgress<WindowsTransferStatus>? progress=null,Action<string>? protectFolder=null,
+        WindowsSyncActivity? activity=null)
     {
-        this.device=device;this.registration=registration;this.root=root;this.catalog=catalog;this.progress=progress;this.protectFolder=protectFolder;
+        this.device=device;this.registration=registration;this.root=root;this.catalog=catalog;this.progress=progress;this.protectFolder=protectFolder;this.activity=activity;
         root.VerifyPresent();key=WindowsPrivateKey.Open(registration.DataKeyId);
         staging=Path.Combine(Path.GetDirectoryName(root.Root)!,".TCloud-"+registration.DeviceId);
         _=VolumeInspector.ValidateDestination(staging,[]);Directory.CreateDirectory(staging);
@@ -68,16 +69,27 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
     internal Action<string>? BeforeHydrationValidation {get;set;}
     public async Task ReconcileAsync(LocalSyncSnapshot snapshot,CancellationToken token)
     {
-        root.VerifyPresent();if(ready&&lastRemotePosition==snapshot.RemotePosition)return;
+        root.VerifyPresent();
+        var requested=Interlocked.Exchange(ref checkRequested,0)!=0;
+        var restored=!catalogOnline;
+        if(ready&&lastRemotePosition==snapshot.RemotePosition){catalogOnline=true;if(requested||restored)Interrupt(local:false);return;}
         if(!ready){keys=await device.ReadKeysAsync(token);ready=true;}
-        if(lastRemotePosition is not null&&lastRemotePosition!=snapshot.RemotePosition)Interrupt(local:false);
+        var changed=lastRemotePosition is not null&&lastRemotePosition!=snapshot.RemotePosition;
         lastRemotePosition=snapshot.RemotePosition;
+        catalogOnline=true;
+        if(changed||requested)Interrupt(local:false);
         using var resolver=new CloudOriginalResolver(key,snapshot.Remote,keys);
+        var tracked=activity is null?null:new List<WindowsActivityItem>();
+        var originals=snapshot.Originals.ToDictionary(item=>item.Id);
         foreach(var entry in snapshot.Remote.Where(e=>e.Kind=="file"&&e.State=="present")) {
             using var value=resolver.Resolve(entry);
-            var path=snapshot.Originals.SingleOrDefault(e=>e.Id==entry.Id)?.RelativePath??value.RelativePath;
+            var saved=originals.GetValueOrDefault(entry.Id);
+            var path=saved?.RelativePath??value.RelativePath;
             downloads[Identity(entry)]=(entry,snapshot.Remote,path);
+            tracked?.Add(DownloadItem(entry,path,saved is {Complete:true}?WindowsActivityState.Unverified:WindowsActivityState.Listed,
+                reason:saved is {Complete:true}?"HDDに保存済みの原本を照合しています。":null));
         }
+        if(tracked is not null)activity!.SetDownloads(tracked,keepSameVersion:true);
         var currentIdentities=snapshot.Remote.Where(e=>e.Kind=="file"&&e.State=="present").Select(Identity).ToHashSet(StringComparer.Ordinal);
         foreach(var identity in downloads.Keys)if(!currentIdentities.Contains(identity))downloads.TryRemove(identity,out _);
         try{if(wake.CurrentCount==0)wake.Release();}catch(SemaphoreFullException){ }
@@ -86,7 +98,12 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
         "TCloud.Windows.Original.v1\n"+registration.ScopeHash+"\n"+entry.Id+"\n"+entry.Revision)));
     private static string? Version(WindowsCatalogEntry entry)=>entry.Value is {} v&&v.TryGetProperty("contentVersion",out var p)?p.GetString():null;
     private async Task<Stream> OpenOriginalAsync(string identity,IProgress<long> progress,CancellationToken token)
-        =>await (prefetch.Claim(identity,progress,token)??DownloadOriginalAsync(identity,progress,token));
+    {
+        var tracked=activity is not null&&downloads.TryGetValue(identity,out var item)
+            ? new ByteProgress(bytes=>{progress.Report(bytes);activity.DownloadProgress(DownloadItem(item.Entry,item.Path,WindowsActivityState.Receiving,bytes));}) : null;
+        var reporter=(IProgress<long>?)tracked??progress;
+        return await (prefetch.Claim(identity,reporter,token)??DownloadOriginalAsync(identity,reporter,token));
+    }
     private async Task<Stream> DownloadOriginalAsync(string identity,IProgress<long> progress,CancellationToken token)
     {
         if(!downloads.TryGetValue(identity,out var item))throw new IOException("原本の取得情報を確認しています。同期後にもう一度開いてください。");
@@ -98,7 +115,10 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
     {
         long processedGeneration=-1,lastScan=0;int failures=0;
         try {
-            while(!ready){await wake.WaitAsync(token);}
+            while(!ready){
+                if(activity is not null){root.VerifyPresent();await ObserveOfflineAsync(await catalog.LoadAsync(token),token);}
+                await wake.WaitAsync(TimeSpan.FromSeconds(30),token);
+            }
             await exchange.ResumeAsync(token);
             while(true) {
                 token.ThrowIfCancellationRequested();root.VerifyPresent();
@@ -109,13 +129,14 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                 using var pass=CancellationTokenSource.CreateLinkedTokenSource(token);
                 lock(passGate)currentPass=pass;
                 var passGeneration=Interlocked.Read(ref generation);needsWork=true;
-                try {await WorkAsync(pass.Token);processedGeneration=passGeneration;lastScan=Environment.TickCount64;failures=0;}
+                try {await WorkAsync(passGeneration,pass.Token);processedGeneration=passGeneration;lastScan=Environment.TickCount64;failures=0;}
                 catch(OperationCanceledException)when(!token.IsCancellationRequested) { }
                 catch(Exception error)when(error is HttpRequestException or IOException or System.ComponentModel.Win32Exception) {
                     if(error is InvalidDataException)throw;
                     Errors.Enqueue(error);while(Errors.Count>32)Errors.TryDequeue(out _);
                     failures=Math.Min(failures+1,5);
-                    progress?.Report(new(error is IOException?error.Message:"接続・保存処理の完了を待って再試行します。",0,0));
+                    var message=error is IOException?error.Message:"接続・保存処理の完了を待って再試行します。";
+                    progress?.Report(new(message,0,0));activity?.Invalidate(message);
                 }
                 finally{lock(passGate)currentPass=null;await prefetch.ClearAsync();}
                 await wake.WaitAsync(TimeSpan.FromSeconds(Math.Min(60,2*Math.Pow(2,failures))),token);
@@ -138,33 +159,37 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
         // Hydration itself emits write notifications. Validate that one body
         // before deciding whether it is a user edit; renames, other files,
         // remote changes and notification overflow still interrupt immediately.
-        lock(passGate)if(hydrationNoticePath is null||!string.Equals(activeHydrationPath,hydrationNoticePath,StringComparison.OrdinalIgnoreCase))currentPass?.Cancel();
+        lock(passGate)if(hydrationNoticePath is null||!string.Equals(activeHydrationPath,hydrationNoticePath,StringComparison.OrdinalIgnoreCase)){
+            activity?.Invalidate();currentPass?.Cancel();
+        }
         try{if(wake.CurrentCount==0)wake.Release();}catch(Exception error)when(error is ObjectDisposedException or SemaphoreFullException){ }
     }
-    private async Task WorkAsync(CancellationToken token)
+    private async Task WorkAsync(long passGeneration,CancellationToken token)
     {
         var snapshot=await catalog.LoadAsync(token);if(snapshot.RemotePosition is null)return;
         using var resolver=new CloudOriginalResolver(key,snapshot.Remote,keys);
+        if(!catalogOnline){if(activity is not null)await ObserveOfflineAsync(snapshot,token);return;}
         await exchange.ResumeAsync(token);
+        var tree=ScanTree();
+        if(activity is not null)ObserveLocal(snapshot,tree,offline:false);
         if(await ResumeMetadataAsync(snapshot,token))return;
         foreach(var pending in await uploads.LoadAsync(token)) {
-            try {await FinishUploadAsync(await uploader.TransferAsync(pending,resolver,token:token),token);}
+            try {await TransferAndFinishAsync(pending,resolver,null,token);}
             catch(WindowsUploadConflictException){await PreserveUploadConflictAsync(pending,token);}
         }
         if((await uploads.LoadAsync(token)).Length!=0)return;
         snapshot=await catalog.LoadAsync(token);
         long remaining=0,largest=0;
+        var originalBaselines=snapshot.Originals.ToDictionary(record=>record.Id);
         foreach(var entry in snapshot.Remote.Where(e=>e.Kind=="file"&&e.State=="present")) {
-            var baseline=snapshot.Originals.SingleOrDefault(o=>o.Id==entry.Id);var size=entry.Value!.Value.GetProperty("sizeBytes").GetInt64();
+            var baseline=originalBaselines.GetValueOrDefault(entry.Id);var size=entry.Value!.Value.GetProperty("sizeBytes").GetInt64();
             var cached=baseline?.Sha256 is not null&&baseline.ContentVersion==Version(entry)
                 &&File.Exists(LocalPaths.ResolveUnderRoot(root.Root,baseline.RelativePath))
                 &&(CloudFilesLocalStorage.PlaceholderState(LocalPaths.ResolveUnderRoot(root.Root,baseline.RelativePath))&0x30)==0;
             if(!cached){remaining=checked(remaining+size);largest=Math.Max(largest,size);}
         }
-        var needed=checked(remaining+largest+64L*1024*1024);var available=VolumeInspector.Inspect(root.Root).AvailableBytes;
+        var needed=checked(remaining+largest+64L*1024*1024);var available=AvailableSpace();
         var allowPrefetch=available>=checked(needed+2*largest);
-        if(available<needed)throw new IOException($"HDDの空き容量が不足しています。必要: {Math.Ceiling(needed/1073741824d):N0} GB、空き: {Math.Floor(available/1073741824d):N0} GB。保存済みの原本は保持しています。");
-        var tree=ScanTree();
         ignoreLocalEvents=true;
         try {if(await ReconcileFoldersAsync(snapshot,resolver,tree,token))return;}
         finally {ignoreLocalEvents=false;}
@@ -190,6 +215,8 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
         var folders=(snapshot.Folders??[]).Where(f=>snapshot.Remote.Any(e=>e.Kind=="folder"&&e.Id==f.Id&&e.State=="present"))
             .ToDictionary(e=>e.RelativePath,e=>e.Id,StringComparer.OrdinalIgnoreCase);
         var claimed=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var postponed=new List<WindowsActivityItem>();
+        var downloadsForPass=new List<WindowsActivityItem>();
         var records=snapshot.Originals.ToDictionary(e=>e.Id);
         var files=snapshot.Remote.Where(e=>e.Kind=="file").ToArray();int done=0,total=files.Count(e=>e.State=="present");
         var bodiesNeeded=new List<(WindowsCatalogEntry Entry,string Path,bool Hydrate)>();
@@ -205,6 +232,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                     // Move atomically first, then inspect the ACTUAL removed body; a late save is never discarded.
                     var saved=await WindowsRecovery.PlanAsync(staging,path,"オンラインで削除された原本の未送信編集",token);File.Move(full,saved);
                     if(await WindowsRecovery.DeleteIfUnchangedAsync(saved,old.Sha256,root.VerifyPresent,token))File.Delete(saved+".json");
+                    else await RecordRecoveryAsync(path,saved,"オンラインで削除された原本の編集をHDDに保全しました。",token);
                 }
             }
             await PutAsync(old with {Deleted=true,LocalState=null},token);
@@ -226,13 +254,16 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
             // A save/rename after the directory scan is not a missing original.
             // Re-enumerate before deciding to recreate anything at its old path.
             if(actual is not null&&!File.Exists(full))return;
-            var remoteBodyChanged=old is not null&&old.ContentVersion!=Version(entry);
+            var version=Version(entry);
+            var remoteBodyChanged=old is not null&&(old.ContentVersion!=version||version is null&&old.Revision!=entry.Revision);
             if(File.Exists(full)&&old is {Sha256:not null}&&!old.Deleted&&(CloudFilesLocalStorage.PlaceholderState(full)&0x30)==0) {
                 var stamp=WindowsFileState.Read(full);var localMoved=!path.Equals(old.RelativePath,StringComparison.Ordinal);
                 var change=localChanges.GetValueOrDefault(full);
                 var verified=verifiedLocal.TryGetValue(stamp.Id,out var proof)&&proof.State==stamp&&proof.Path==full&&proof.Change==change&&proof.Sha256==old.Sha256;
                 var changed=!stamp.SameSavedBytes(old.LocalState)&&!verified;bool dirty=false;
                 if(changed) {
+                    if(stamp.Size==0){postponed.Add(LocalItem(path,stamp,WindowsActivityOperation.Updated,WindowsActivityState.Waiting,
+                        "ファイルが0バイトです。内容が保存されると送信します。"));continue;}
                     var check=await LocalOriginalSnapshot.VerifyAsync(full,token:token);
                     dirty=check.Sha256!=old.Sha256;
                     if(!dirty&&stamp.Id==check.SourceFileId&&stamp.Usn==check.SourceUsn) {
@@ -242,21 +273,30 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                     }
                 }
                 if(dirty&&(entry.Revision!=old.Revision||remoteBodyChanged)) {
+                    var originalPath=path;
                     path=PreserveConflict(full,path);claimed.Add(path);full=LocalPaths.ResolveUnderRoot(root.Root,old.RelativePath);
+                    if(activity is not null)await activity.RecordAsync(LocalItem(originalPath,stamp,WindowsActivityOperation.Updated,
+                        WindowsActivityState.Preserved,$"別名で保全しました。保全先: {path}") with {Key="conflict:"+WindowsSyncActivity.Key(path),PreservedPath=path},token);
                     actual=null;path=old.RelativePath;
                 }else if(dirty) {
-                    if(!folders.TryGetValue(Path.GetDirectoryName(path)??"",out var folder))continue;
+                    if(!folders.TryGetValue(Path.GetDirectoryName(path)??"",out var folder)){
+                        postponed.Add(LocalItem(path,stamp,WindowsActivityOperation.Updated,WindowsActivityState.Attention,"変更したファイルの保存先を確認してください。"));continue;
+                    }
+                    if(!HasUploadSpace(path,stamp,WindowsActivityOperation.Updated,postponed))continue;
                     var name=Path.GetFileName(path)!=Path.GetFileName(old.RelativePath)?Path.GetFileName(path):resolved.Metadata!.Name;
-                    await using var prepared=await uploader.PrepareAsync(resolver,entry,folder,path,snapshot.RemotePosition!.Epoch,
-                        resolved.Metadata! with {Name=name,LastModified=new DateTimeOffset(File.GetLastWriteTimeUtc(full)).ToUnixTimeMilliseconds()},token);
-                    try {await FinishUploadAsync(await uploader.TransferAsync(prepared.Record,resolver,prepared.Snapshot.Body,token:token),token);}
+                    await using var prepared=await PrepareObservedAsync(resolver,entry,folder,path,stamp,snapshot.RemotePosition!.Epoch,
+                        resolved.Metadata! with {Name=name,LastModified=new DateTimeOffset(File.GetLastWriteTimeUtc(full)).ToUnixTimeMilliseconds()},postponed,token);
+                    if(prepared is null)continue;
+                    try {await TransferAndFinishAsync(prepared.Record,resolver,prepared.Snapshot.Body,token);}
                     catch(WindowsUploadConflictException){await PreserveUploadConflictAsync(prepared.Record,token);}
                     return;
                 }else if((CloudFilesLocalStorage.PlaceholderState(full)&1)==0) {
                     CloudFilesLocalStorage.ConvertSavedBody(full,old.PlaceholderIdentity);
                     await PutAsync(old with {LocalState=null,LocalFileId=WindowsFileState.Read(full).Id},token);return;
                 }else if(localMoved&&entry.Revision==old.Revision) {
-                    if(!folders.TryGetValue(Path.GetDirectoryName(path)??"",out var folder))continue;
+                    if(!folders.TryGetValue(Path.GetDirectoryName(path)??"",out var folder)){
+                        postponed.Add(LocalItem(path,stamp,WindowsActivityOperation.Renamed,WindowsActivityState.Attention,"移動先に既存のT-Cloudフォルダを選択してください。"));continue;
+                    }
                     await RenameFileAsync(entry,resolver,folder,path,snapshot.RemotePosition!.Epoch,
                         Path.GetFileName(path)!=Path.GetFileName(old.RelativePath)?Path.GetFileName(path):resolved.Metadata!.Name,token);return;
                 }else if(!remoteBodyChanged) {
@@ -270,6 +310,9 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                     // A stable body needs no checkpoint. In particular, do not
                     // reload and validate the entire catalog for every sibling.
                     if(updated!=old)await PutAsync(updated,token);
+                    if(activity is not null)downloadsForPass.Add(activity.UploadUnverified(entry.Id,version)
+                        ?DownloadItem(entry,path,WindowsActivityState.Unverified,reason:"送信した内容をオンライン側で確認できませんでした。PCからの同期履歴を確認してください。")
+                        :DownloadItem(entry,path,WindowsActivityState.Retained,resolved.SizeBytes));
                     done++;continue;
                 }
             }
@@ -288,6 +331,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
             }
             // Finish local saves, names and tombstones before waiting on a remote body.
             bodiesNeeded.Add((entry,path,(state&0x30)!=0&&!remoteBodyChanged));
+            if(activity is not null)downloadsForPass.Add(DownloadItem(entry,path,WindowsActivityState.Listed));
         }
         snapshot=await catalog.LoadAsync(token);tree=ScanTree();
         foreach(var deletedFolder in snapshot.Remote.Where(e=>e.Kind=="folder"&&e.State!="present")) {
@@ -303,6 +347,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                 foreach(var member in members){_=LocalPaths.ResolveUnderRoot(root.Root,Path.GetRelativePath(root.Root,member));leases.Add(provider.AllowLocalMutation(member));}
                 var saved=await WindowsRecovery.PlanAsync(staging,oldFolder.RelativePath,"オンラインで削除されたフォルダの未送信データ",token);
                 root.VerifyPresent();Directory.Move(full,saved);
+                await RecordRecoveryAsync(oldFolder.RelativePath,saved,"オンラインで削除されたフォルダの未送信データをHDDに保全しました。",token);
             }finally{foreach(var lease in leases)lease.Dispose();}
         }
         tree=ScanTree();
@@ -313,23 +358,47 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
             if(!newFiles.TryGetValue(local.Path,out var observed)||observed.State!=local.State){newFiles[local.Path]=(local.State,Environment.TickCount64);continue;}
             if(Environment.TickCount64-observed.Since<2000)continue;
             var full=LocalPaths.ResolveUnderRoot(root.Root,local.Path);var info=new FileInfo(full);if(info.Length==0)continue;
+            if(!HasUploadSpace(local.Path,local.State,WindowsActivityOperation.Added,postponed))continue;
             var (mime,kind)=MediaType(info.Extension);
-            await using var prepared=await uploader.PrepareAsync(resolver,null,folder,local.Path,snapshot.RemotePosition!.Epoch,
-                new(Path.GetFileName(local.Path),mime,kind,new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds()),token);
-            await FinishUploadAsync(await uploader.TransferAsync(prepared.Record,resolver,prepared.Snapshot.Body,token:token),token);return;
+            await using var prepared=await PrepareObservedAsync(resolver,null,folder,local.Path,local.State,snapshot.RemotePosition!.Epoch,
+                new(Path.GetFileName(local.Path),mime,kind,new DateTimeOffset(info.LastWriteTimeUtc).ToUnixTimeMilliseconds()),postponed,token);
+            if(prepared is null)continue;
+            try {await TransferAndFinishAsync(prepared.Record,resolver,prepared.Snapshot.Body,token);}
+            catch(WindowsUploadConflictException){await PreserveUploadConflictAsync(prepared.Record,token);}
+            return;
         }
         var waiting=tree.Files.Where(e=>!blocked.Contains(e.Path)&&!claimed.Contains(e.Path)&&!ownedIds.Contains(e.State.Id)).ToArray();
-        needsWork=waiting.Any(e=>folders.ContainsKey(Path.GetDirectoryName(e.Path)??""));
-        if(waiting.Any(e=>e.State.Size>0&&folders.ContainsKey(Path.GetDirectoryName(e.Path)??""))) {
+        var retrying=postponed.Any(item=>item.State==WindowsActivityState.Retry);
+        needsWork=retrying||waiting.Any(e=>e.State.Size>0&&folders.ContainsKey(Path.GetDirectoryName(e.Path)??"")
+            && !postponed.Any(item=>item.RelativePath.Equals(e.Path,StringComparison.OrdinalIgnoreCase)));
+        var capacityNotice=available<needed&&bodiesNeeded.Count!=0
+            ? $"原本をHDDに保存するための空き容量が不足しています（必要 {Math.Ceiling(needed/1073741824d):N0} GB、空き {Math.Floor(available/1073741824d):N0} GB）。" : null;
+        if(activity is not null){
+            ObserveLocal(snapshot,tree,offline:false);
+            foreach(var item in postponed)activity.BlockObserved(item);
+            var reported=downloadsForPass.Select(item=>item.Key).ToHashSet(StringComparer.Ordinal);
+            foreach(var entry in files.Where(e=>e.State=="present")){
+                var path=records.GetValueOrDefault(entry.Id)?.RelativePath??$"T-Cloud {entry.Id}";
+                var deferred=DownloadItem(entry,path,WindowsActivityState.Unverified,reason:"HDD上の変更とオンライン原本を照合しています。");
+                if(!reported.Contains(deferred.Key))downloadsForPass.Add(deferred);
+            }
+            activity.SetDownloads(capacityNotice is null?downloadsForPass:downloadsForPass.Select(item=>item.State==WindowsActivityState.Listed
+                ?item with {State=WindowsActivityState.Attention,Reason=capacityNotice}:item));
+            await activity.CheckedAsync(()=>catalogOnline&&Volatile.Read(ref checkRequested)==0
+                &&Interlocked.Read(ref generation)==passGeneration,capacityNotice,token);
+        }
+        if(needsWork&&!retrying) {
             progress?.Report(new("保存の完了を待ってアップロードします。",done,total));return;
         }
+        if(capacityNotice is not null){progress?.Report(new(capacityNotice,done,total));return;}
         for(int bodyIndex=0;bodyIndex<bodiesNeeded.Count;bodyIndex++) {
             var neededBody=bodiesNeeded[bodyIndex];
             progress?.Report(new("原本をHDDへ保存しています。",done,total));
             var (entry,path,hydrate)=neededBody;token.ThrowIfCancellationRequested();root.VerifyPresent();
             var full=LocalPaths.ResolveUnderRoot(root.Root,path);
             using var resolved=resolver.Resolve(entry);
-            if(hydrate) {
+            activity?.DownloadProgress(DownloadItem(entry,path,WindowsActivityState.Receiving));
+            try { if(hydrate) {
                 downloads[Identity(entry)]=(entry,snapshot.Remote,path);
                 long validatedChange=-1;
                 lock(passGate)activeHydrationPath=full;
@@ -364,13 +433,19 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
             }else {
                 // Recheck the current catalog before exchanging any body downloaded from an older view.
                 var source=new CloudContentSource(device,resolved.Id,resolved.StoredBytes,resolved.Revision);
+                var reporter=activity is null?null:new ByteProgress(bytes=>activity.DownloadProgress(DownloadItem(entry,path,WindowsActivityState.Receiving,bytes)));
                 await using var staged=resolved.Layout is {} layout
-                    ?await OriginalStager.DownloadAsync(staging,layout,resolved.FileKey!,source,token:token,retain:true)
-                    :await OriginalStager.DownloadLegacyAsync(staging,resolved.SizeBytes,source,token:token,retain:true);
+                    ?await OriginalStager.DownloadAsync(staging,layout,resolved.FileKey!,source,reporter,token,retain:true)
+                    :await OriginalStager.DownloadLegacyAsync(staging,resolved.SizeBytes,source,reporter,token,retain:true);
                 var current=(await catalog.LoadAsync(token)).Remote.SingleOrDefault(e=>e.Kind=="file"&&e.Id==entry.Id);
                 if(current?.Revision!=entry.Revision){await staged.DisposeAsync();root.VerifyPresent();File.Delete(staged.PersistedPath!);return;}
                 await exchange.InstallAsync(staged,new(entry.Id,entry.Revision,path,Identity(entry),resolved.SizeBytes,staged.Sha256,true,Version(entry),RemoteName:resolved.Metadata?.Name),token);
+            }}catch(OperationCanceledException)when(token.IsCancellationRequested){
+                activity?.DownloadProgress(DownloadItem(entry,path,WindowsActivityState.Listed));throw;
+            }catch(Exception error)when(error is IOException or HttpRequestException or System.ComponentModel.Win32Exception){
+                activity?.DownloadProgress(DownloadItem(entry,path,WindowsActivityState.Retry,reason:"原本の取得を中断しました。接続・保存状況を確認して自動で再試行します。"));throw;
             }
+            activity?.DownloadProgress(DownloadItem(entry,path,WindowsActivityState.Retained,resolved.SizeBytes));
             done++;progress?.Report(new("原本をHDDへ保存しています。",done,total));
         }
         if(waiting.Any(e=>string.IsNullOrEmpty(Path.GetDirectoryName(e.Path)))||tree.Folders.Any(f=>string.IsNullOrEmpty(Path.GetDirectoryName(f.Path))
@@ -394,16 +469,23 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
         // The catalog may still describe the previous head until the next poll.
         // A pending acknowledgement blocks resubmission until that exact revision is observed.
         var snapshot=await catalog.LoadAsync(token);var remote=snapshot.Remote.SingleOrDefault(e=>e.Kind=="file"&&e.Id==result.FileId&&e.Revision>=result.Revision);
-        if(remote is null)return;
+        if(remote is null){
+            if(snapshot.RemotePosition is {} position&&position.Cursor>=result.Revision)
+                activity?.Track(UploadItem(record,WindowsActivityState.Unverified,"送信は確定しましたが、現在のオンライン一覧で対象を確認できません。"));
+            return;
+        }
         if(result.ContentVersion?.Length!=64)throw new InvalidDataException("送信原本の版情報がありません。");
         var baseline=new RetainedOriginalRecord(result.FileId,result.Revision,record.RelativePath,Identity(remote with {Revision=result.Revision}),record.SizeBytes,record.Sha256,true,result.ContentVersion,stamp,LocalFileId:record.SourceFileId,RemoteName:record.MetadataName);
-        await PutAsync(baseline,token);await uploads.ForgetAsync(record,token);root.VerifyPresent();File.Delete(uploads.SnapshotPath(record));
+        await PutAsync(baseline,token);await RecordUploadAsync(record,snapshot,remote,token);
+        await uploads.ForgetAsync(record,token);root.VerifyPresent();File.Delete(uploads.SnapshotPath(record));
     }
     private async Task PreserveUploadConflictAsync(PendingWindowsUpload record,CancellationToken token)
     {
         // Keep the captured save in Recovery even if the foreground path has since changed.
         await uploader.CancelAsync(record,token);
         await WindowsRecovery.RetainAsync(staging,uploads.SnapshotPath(record),record.RelativePath,"送信が競合した保存済み原本",token);
+        if(activity is not null)await activity.RecordAsync(UploadItem(record,WindowsActivityState.Preserved,
+            "オンラインの変更と競合したため、編集した原本を保全しました。"),token);
         await uploads.ForgetAsync(record,token);
         var full=LocalPaths.ResolveUnderRoot(root.Root,record.RelativePath);if(File.Exists(full))PreserveConflict(full,record.RelativePath);
         progress?.Report(new("競合した編集を別名で保全しました。",0,0));
@@ -427,7 +509,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
             fastDisplay=value.TryGetProperty("displayMetadataVersion",out var display)&&display.GetInt32()==1&&metadata.MediaKind!="video"
                 ?(object)new{name=metadata.Name,mimeType=metadata.MimeType,mediaKind=metadata.MediaKind,lastModified=metadata.LastModified}:null});
         var intent=new WindowsMetadataIntent(registration.ScopeHash,registration.RootFileId!.Value,"file",entry.Id,entry.Revision,epoch,path,
-            WindowsFileState.Read(LocalPaths.ResolveUnderRoot(root.Root,path)).Id,request);
+            WindowsFileState.Read(LocalPaths.ResolveUnderRoot(root.Root,path)).Id,request,DetectedAt:DateTimeOffset.UtcNow);
         await WindowsAtomicState.SaveAsync(metadataPath,intent,token);await ResumeMetadataAsync(await catalog.LoadAsync(token),token);
     }
     private async Task<bool> ResumeMetadataAsync(LocalSyncSnapshot snapshot,CancellationToken token)
@@ -436,13 +518,14 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
         root.VerifyPresent();_=LocalPaths.ResolveUnderRoot(root.Root,intent.RelativePath);
         if(intent.ScopeHash!=registration.ScopeHash||intent.RootFileId!=registration.RootFileId||intent.Kind is not("file" or "folder" or "create-folder")
             ||intent.Id<1||intent.Kind!="create-folder"&&intent.ExpectedRevision<1||intent.Request.ValueKind!=JsonValueKind.Object)throw new InvalidDataException("名前変更の再開情報が一致しません。");
+        activity?.Track(MetadataItem(intent,WindowsActivityState.Checking,"オンラインの名前と保存先を照合しています。"));
         if(intent.Kind=="create-folder") {
             var created=snapshot.Remote.SingleOrDefault(e=>e.Kind=="folder"&&e.State=="present"&&e.Value is {} v
                 &&v.TryGetProperty("encryptedName",out var name)&&name.GetString()==intent.Request.GetProperty("encryptedName").GetString()
                 &&v.GetProperty("nameIv").GetString()==intent.Request.GetProperty("nameIv").GetString());
-            if(created is not null) {
+            if(created is not null&&snapshot.RemotePosition?.Epoch==intent.Epoch) {
                 await catalog.UpdateAsync(s=>s with {Folders=[..(s.Folders??[]).Where(f=>f.Id!=created.Id),new(created.Id,intent.RelativePath,intent.LocalFileId,created.Revision)]},token);
-                File.Delete(metadataPath);return false;
+                await RecordMetadataAsync(intent,WindowsActivityState.Confirmed,token);File.Delete(metadataPath);return false;
             }
             if(snapshot.RemotePosition?.Epoch!=intent.Epoch)throw new InvalidDataException("新規フォルダの同期中にオンラインの復旧を検出しました。ローカルの原本を保持して停止しました。");
             if(!intent.Acknowledged) {
@@ -453,24 +536,31 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
         }
         var remote=snapshot.Remote.SingleOrDefault(e=>e.Kind==intent.Kind&&e.Id==intent.Id);
         if(remote is null)return true;
-        if(remote.State!="present"){File.Delete(metadataPath);return false;}
+        if(remote.State!="present"){
+            await RecordMetadataAsync(intent,WindowsActivityState.Unverified,token,"オンラインで削除されたため、名前変更を確認できません。");
+            File.Delete(metadataPath);return false;
+        }
         var value=remote.Value!.Value;
         bool Same(string name)=>value.TryGetProperty(name,out var actual)&&intent.Request.TryGetProperty(name,out var expected)&&actual.GetRawText()==expected.GetRawText();
         var matches=intent.Kind=="file"?Same("encryptedMetadata")&&Same("metadataIv")&&Same("folderId")
             :intent.Request.TryGetProperty("parentId",out _)?Same("parentId")&&Same("parentWrappedKey")&&Same("parentWrapIv"):Same("name");
-        if(matches) {
+        if(matches&&snapshot.RemotePosition?.Epoch==intent.Epoch) {
             if(intent.Kind=="file") {
                 var original=snapshot.Originals.Single(e=>e.Id==intent.Id);
                 using var resolver=new CloudOriginalResolver(key,snapshot.Remote,keys);using var resolved=resolver.Resolve(remote);
                 await PutAsync(original with {Revision=remote.Revision,RelativePath=intent.RelativePath,ContentVersion=Version(remote),LocalState=null,LocalFileId=intent.LocalFileId,RemoteName=resolved.Metadata?.Name},token);
             }else await catalog.UpdateAsync(s=>s with {Folders=(s.Folders??[]).Select(f=>f.Id==intent.Id?f with {Revision=remote.Revision,RelativePath=intent.RelativePath}:f).ToArray()},token);
-            File.Delete(metadataPath);return false;
+            await RecordMetadataAsync(intent,WindowsActivityState.Confirmed,token);File.Delete(metadataPath);return false;
         }
         if(remote.Revision!=intent.ExpectedRevision||snapshot.RemotePosition?.Epoch!=intent.Epoch) {
             if(intent.Kind=="file") {
-                var path=LocalPaths.ResolveUnderRoot(root.Root,intent.RelativePath);if(File.Exists(path))PreserveConflict(path,intent.RelativePath);
+                var path=LocalPaths.ResolveUnderRoot(root.Root,intent.RelativePath);
+                var preserved=File.Exists(path)?PreserveConflict(path,intent.RelativePath):null;
                 var original=snapshot.Originals.Single(e=>e.Id==intent.Id);await PutAsync(original with {LocalFileId=0,LocalState=null,Complete=false},token);
+                if(activity is not null)await activity.RecordAsync(MetadataItem(intent,WindowsActivityState.Preserved,
+                    "オンライン側の変更と競合しました。HDDで保全した編集を確認してください。") with {PreservedPath=preserved},token);
             }
+            await RecordMetadataAsync(intent,WindowsActivityState.Preserved,token,"オンライン側の変更と競合しました。HDDで保全した編集を確認してください。");
             File.Delete(metadataPath);progress?.Report(new("オンラインの名前変更との競合を保全し、最新状態を反映します。",0,0));return false;
         }
         if(intent.Acknowledged)return true;
@@ -479,18 +569,31 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
         if(response.StatusCode==HttpStatusCode.Conflict)return true;
         response.EnsureSuccessStatusCode();await WindowsAtomicState.SaveAsync(metadataPath,intent with {Acknowledged=true},token);return true;
     }
-    private sealed record Tree((string Path,WindowsFileState State)[] Files,(string Path,WindowsFileState State)[] Folders);
+    private sealed record Tree((string Path,WindowsFileState State)[] Files,(string Path,WindowsFileState State)[] Folders,WindowsActivityItem[] Excluded);
     private Tree ScanTree()
     {
-        var files=new List<(string,WindowsFileState)>();var dirs=new List<(string,WindowsFileState)>();
+        var files=new List<(string,WindowsFileState)>();var dirs=new List<(string,WindowsFileState)>();var excluded=new List<WindowsActivityItem>();
         void Walk(string path) {
             foreach(var item in Directory.EnumerateFileSystemEntries(path)) {
                 var relative=Path.GetRelativePath(root.Root,item);_=LocalPaths.ResolveUnderRoot(root.Root,relative);
-                var attrs=File.GetAttributes(item);if((attrs&FileAttributes.Directory)!=0){dirs.Add((relative,WindowsFileState.Read(item)));Walk(item);}
-                else if(!Ignored(Path.GetFileName(item)))files.Add((relative,WindowsFileState.Read(item)));
+                var name=Path.GetFileName(item);
+                try {
+                    var attrs=File.GetAttributes(item);var directory=(attrs&FileAttributes.Directory)!=0;
+                    if((attrs&FileAttributes.ReparsePoint)!=0&&(directory?(FileSystemInfo)new DirectoryInfo(item):new FileInfo(item)).LinkTarget is not null)
+                        throw new IOException("リンク先は同期対象外です。元のファイルやフォルダを同期先へコピーしてください。");
+                    if(directory){dirs.Add((relative,WindowsFileState.Read(item)));Walk(item);}
+                    else if(!Ignored(name))files.Add((relative,WindowsFileState.Read(item)));
+                    else if(activity is not null&&!name.Equals("desktop.ini",StringComparison.OrdinalIgnoreCase)
+                        &&!name.StartsWith("~$",StringComparison.Ordinal)&&!name.StartsWith("~WR",StringComparison.OrdinalIgnoreCase))
+                        excluded.Add(LocalItem(relative,null,WindowsActivityOperation.Added,WindowsActivityState.Attention,
+                            "一時ファイルと同じ名前のため、送信対象外です。保存済みの原本は名前を確認してください。"));
+                }catch(Exception error)when(activity is not null&&(error is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)){
+                    if(error is not (FileNotFoundException or DirectoryNotFoundException))excluded.Add(LocalItem(relative,null,WindowsActivityOperation.Added,WindowsActivityState.Attention,
+                        error is IOException?error.Message:"このファイルまたはフォルダを開けません。権限や保存中のアプリを確認してください。"));
+                }
             }
         }
-        Walk(root.Root);return new(files.ToArray(),dirs.ToArray());
+        Walk(root.Root);return new(files.ToArray(),dirs.ToArray(),excluded.ToArray());
     }
     private static bool Ignored(string name)=>name.Equals("desktop.ini",StringComparison.OrdinalIgnoreCase)||name.StartsWith("~$",StringComparison.Ordinal)
         ||System.Text.RegularExpressions.Regex.IsMatch(name,"^[0-9a-fA-F]{8}$")
@@ -536,7 +639,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                     progress?.Report(new("移動先には既存のT-Cloudフォルダを選択してください。原本はHDDに保持されています。",0,0));return true;
                 }else body=JsonSerializer.SerializeToElement(new {name=Path.GetFileName(actual),windowsEpoch=snapshot.RemotePosition!.Epoch,windowsExpectedRevision=folder.Revision});
                 await WindowsAtomicState.SaveAsync(metadataPath,new WindowsMetadataIntent(registration.ScopeHash,registration.RootFileId!.Value,"folder",folder.Id,folder.Revision,
-                    snapshot.RemotePosition!.Epoch,baselinePath,old.FileId,body),token);
+                    snapshot.RemotePosition!.Epoch,baselinePath,old.FileId,body,DetectedAt:DateTimeOffset.UtcNow),token);
                 await ResumeMetadataAsync(snapshot,token);return true;
             }
             var relative=actual??old?.RelativePath??desired;
@@ -567,7 +670,7 @@ public sealed class WindowsSyncEngine:IAsyncDisposable
                 var body=JsonSerializer.SerializeToElement(new{operationId=Guid.NewGuid().ToString("N"),epoch=snapshot.RemotePosition!.Epoch,parentId=parent.Id,
                     name=Path.GetFileName(local.Path),cryptoVersion=1,encryptedName=name.Ciphertext,nameIv=name.Iv,adminWrappedKey=admin,parentWrappedKey=wrap.Ciphertext,parentWrapIv=wrap.Iv});
                 await WindowsAtomicState.SaveAsync(metadataPath,new WindowsMetadataIntent(registration.ScopeHash,registration.RootFileId!.Value,"create-folder",parent.Id,0,
-                    snapshot.RemotePosition.Epoch,local.Path,local.State.Id,body),token);
+                    snapshot.RemotePosition.Epoch,local.Path,local.State.Id,body,DetectedAt:DateTimeOffset.UtcNow),token);
                 await ResumeMetadataAsync(snapshot,token);return true;
             }finally{CryptographicOperations.ZeroMemory(parentKey);CryptographicOperations.ZeroMemory(child);}
         }

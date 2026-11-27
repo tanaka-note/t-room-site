@@ -38,7 +38,7 @@ internal static class WindowsEngineTests
             var pending=new Dictionary<string,(JsonElement Body,List<byte[]> Parts,object? Result)>();int committed=0,deleteCalls=0;long nextFile=18;bool loseCompletion=true,retryPart=true;
             var createdFolders=new Dictionary<string,long>();var publicKey=rsa.ExportParameters(false);
             object Ack(string op,long target)=>new{operationId=op,uploadId=100,fileId=target,state="committed",revision,archiveId=(long?)100,contentVersion};
-            var gate=new object();bool backlogBlocked=false;int deferredReads=0;
+            var gate=new object();bool backlogBlocked=false,mismatchReceipt=false;int deferredReads=0;
             using var handler=new DeviceClientTests.DeviceHandler(registration){Data=request=>{
                 lock(gate) {
                     var route=request.RequestUri!.AbsoluteUri[WindowsDeviceClient.BaseUrl.Length..];
@@ -79,6 +79,14 @@ internal static class WindowsEngineTests
                         var target=active.Body.GetProperty("fileId").ValueKind==JsonValueKind.Null?nextFile++:active.Body.GetProperty("fileId").GetInt64();
                         bodies[target]=active.Parts.Single();revision++;committed++;contentVersion=Convert.ToHexString(SHA256.HashData(bodies[target])).ToLowerInvariant();
                         remote[target]=FileEntry(target,active.Body,revision,contentVersion);var ack=Ack(op,target);pending[op]=(active.Body,active.Parts,ack);
+                        if(mismatchReceipt){
+                            var properties=remote[target].Value!.Value.Deserialize<Dictionary<string,JsonElement>>()!;
+                            var different=CloudFileCrypto.EncryptMetadata(fileKey,new("renamed.txt","text/plain","document",1)
+                                {Extra=new Dictionary<string,JsonElement>{{"sha256",JsonSerializer.SerializeToElement(new string('f',64))}}});
+                            properties["encryptedMetadata"]=JsonSerializer.SerializeToElement(different.Ciphertext);
+                            properties["metadataIv"]=JsonSerializer.SerializeToElement(different.Iv);
+                            remote[target]=remote[target] with {Value=JsonSerializer.SerializeToElement(properties)};
+                        }
                         if(loseCompletion){loseCompletion=false;throw new HttpRequestException("synthetic lost completion reply");}
                         return Json(ack);
                     }
@@ -116,7 +124,9 @@ internal static class WindowsEngineTests
                 throw new TimeoutException(message+"; errors="+string.Join(";",engine!.Errors.Select(e=>e.GetType().Name+":"+e.Message))+"; originals="+JsonSerializer.Serialize(state.Originals)+"; remote="+revision);
             }
             await Publish();
-            engine=new(device,registration,root,catalog,Path.Combine(outer,"pc"));
+            var pc=Path.Combine(outer,"pc");
+            var activity=new WindowsSyncActivity(pc,registration);
+            engine=new(device,registration,root,catalog,pc,activity:activity);
             try {
                 var path=Path.Combine(directory,"saved","fixture.txt");
                 await Wait(()=>File.Exists(path)&&(CloudFilesLocalStorage.PlaceholderState(path)&0x30)==0,"initial retained download");
@@ -132,11 +142,28 @@ internal static class WindowsEngineTests
                     remote[17]=current;
                 }
                 await Wait(()=>File.Exists(backlogPath)&&Volatile.Read(ref deferredReads)>0,"initial mirror has an unavailable original ahead of existing files");
+                engine.TestAvailableSpace=()=>40L*1024*1024;
+                File.WriteAllText(Path.Combine(directory,"outside.txt"),"not in a cloud folder");
+                Directory.CreateDirectory(Path.Combine(directory,"unsupported-folder"));
+                File.WriteAllText(Path.Combine(directory,"saved","empty.txt"),"");
                 await File.WriteAllTextAsync(path,"saved revision");
                 await Wait(()=>committed==1,"saved edit upload");
                 await Wait(()=>!Directory.EnumerateFiles(Path.Combine(outer,"pc","uploads"),"*.json").Any(),"lost completion reply recovers and acknowledges");
                 Check(Encoding.UTF8.GetString(EncryptedChunks.Decrypt(fileKey,bodies[17],0))=="saved revision","stable file key and current Web chunk format");
                 Check(committed==1,"lost reply never creates a second content revision");
+                var receipt=activity.Snapshot()!.Uploads.Single(row=>row.State==WindowsActivityState.Confirmed&&row.FileId==17
+                    &&row.Operation==WindowsActivityOperation.Updated);
+                Check(receipt.ConfirmedAt is not null&&receipt.Sha256?.Length==64,"one precise receipt survives a lost completion reply");
+                await engine.VerifyReadbackAsync(receipt.Key,null,CancellationToken.None);
+                var reloaded=new WindowsSyncActivity(pc,registration);await reloaded.LoadAsync(CancellationToken.None);
+                Check(reloaded.Snapshot()!.Uploads.Single().ReadbackAt is not null&&!reloaded.Snapshot()!.Current,"readback history survives restart without claiming a fresh check");
+                var isolated=new WindowsSyncActivity(pc,registration with{DeviceId=Guid.NewGuid().ToString("N")});await isolated.LoadAsync(CancellationToken.None);
+                Check(isolated.Snapshot()!.Uploads.Length==0,"history stays bound to the registered device and disk");
+                await Wait(()=>activity.Snapshot()!.Uploads.Any(row=>row.RelativePath=="outside.txt"&&row.State==WindowsActivityState.Attention)
+                    &&activity.Snapshot()!.Uploads.Any(row=>row.RelativePath=="unsupported-folder"&&row.State==WindowsActivityState.Attention)
+                    &&activity.Snapshot()!.Uploads.Any(row=>row.RelativePath.EndsWith("empty.txt",StringComparison.Ordinal)&&row.State==WindowsActivityState.Waiting)
+                    &&activity.Snapshot()!.Downloads.Any(row=>row.RelativePath.EndsWith("backlog.txt",StringComparison.Ordinal)&&row.State==WindowsActivityState.Attention),
+                    "blocked files stay visible while an eligible upload succeeds despite insufficient mirror capacity");
                 Console.WriteLine("ENGINE fixture: overwrite acknowledged");
                 var unchanged=Path.Combine(directory,"saved","unchanged.tmp");await File.WriteAllTextAsync(unchanged,"saved revision");
                 File.Replace(unchanged,path,null);
@@ -162,6 +189,7 @@ internal static class WindowsEngineTests
                     File.WriteAllText(full,"saved as hydration completed");
                 };
                 lock(gate){backlogBlocked=false;}
+                engine.TestAvailableSpace=null;engine.RequestCheck();
                 await Wait(()=>(CloudFilesLocalStorage.PlaceholderState(backlogPath)&0x30)==0,"background originals resume after local uploads");
                 await Wait(()=>committed==4,"a save during hydration validation is uploaded rather than suppressed as a provider notification");
                 Check(await File.ReadAllTextAsync(backlogPath)=="saved as hydration completed","the immediate save remains intact");
@@ -187,9 +215,18 @@ internal static class WindowsEngineTests
                 await engine.DisposeAsync();engine=null;
                 Check(await File.ReadAllTextAsync(renamed)=="saved revision","provider shutdown retains ordinary plaintext");
                 await File.WriteAllTextAsync(renamed,"offline edit");
-                engine=new(device,registration,root,catalog,Path.Combine(outer,"pc"));
+                activity=new WindowsSyncActivity(pc,registration);await activity.LoadAsync(CancellationToken.None);
+                engine=new(device,registration,root,catalog,pc,activity:activity);
+                var observedOffline=DateTime.UtcNow.AddSeconds(10);
+                while(DateTime.UtcNow<observedOffline&&!activity.Snapshot()!.Uploads.Any(row=>row.RelativePath.EndsWith("renamed.txt",StringComparison.Ordinal)
+                    &&row.State is WindowsActivityState.Retry or WindowsActivityState.Unverified))await Task.Delay(100);
+                Check(activity.Snapshot()!.Uploads.Any(row=>row.RelativePath.EndsWith("renamed.txt",StringComparison.Ordinal)
+                    &&row.State is WindowsActivityState.Retry or WindowsActivityState.Unverified),"an offline edit is visible before the first successful catalog poll");
+                lock(gate)mismatchReceipt=true;
                 await Wait(()=>committed==5,"restart uploads a save made offline without a passkey");
                 await Wait(()=>!Directory.EnumerateFiles(Path.Combine(outer,"pc","uploads"),"*.json").Any(),"offline edit baseline checkpoint");
+                Check(activity.Snapshot()!.Uploads.Any(row=>row.FileId==17&&row.State==WindowsActivityState.Unverified
+                    &&row.Operation==WindowsActivityOperation.Updated),"the same online file/version with mismatched metadata SHA-256 cannot receive a confirmed receipt");
                 var replacement=Encoding.UTF8.GetBytes("updated online original");
                 var replacementMetadata=CloudFileCrypto.EncryptMetadata(fileKey,new("renamed.txt","text/plain","document",2));
                 lock(gate) {
@@ -200,6 +237,10 @@ internal static class WindowsEngineTests
                     bodies[17]=EncryptedChunks.Encrypt(fileKey,replacement,0);remote[17]=remote[17] with {Revision=++revision,Value=JsonSerializer.SerializeToElement(previous)};
                 }
                 await Wait(()=>File.Exists(renamed)&&File.ReadAllText(renamed)=="updated online original","atomic remote body replacement");
+                var rejectedReadback=false;
+                try {await engine.VerifyReadbackAsync(receipt.Key,null,CancellationToken.None);}catch(IOException){rejectedReadback=true;}
+                Check(rejectedReadback&&activity.Snapshot()!.Uploads.Single(row=>row.Key==receipt.Key) is {ReadbackAt:not null,ReadbackFailedAt:not null},
+                    "readback never silently verifies a newer body and keeps the failed attempt in history");
                 await engine.DisposeAsync();engine=null;
                 using var lateWriter=new FileStream(renamed,FileMode.Open,FileAccess.ReadWrite,FileShare.ReadWrite|FileShare.Delete);
                 lock(gate){remote[17]=new("file",17,++revision,"trashed",null,DateTimeOffset.UtcNow.ToString("O"),Guid.NewGuid().ToString());}
