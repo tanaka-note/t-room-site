@@ -173,8 +173,8 @@ try {
   // journal across an attachment receipt failure, reload and publication loss.
   const migration=await context.newPage();
   const photoId=crypto.randomUUID(),digest=Buffer.from(await crypto.subtle.digest('SHA-256',png)).toString('hex');
-  const migrationDate='2022-12-31';
-  const manifest={version:1,id:'c'.repeat(64),year:2022,timezone:'Asia/Tokyo',days:[{date:migrationDate,title:migrationDate,requestId:crypto.randomUUID(),photos:[{id:photoId,date:migrationDate,timestamp:Date.parse(migrationDate+'T12:00:00+09:00')/1000,fileName:'SYNTHETIC_TAKEOUT.png',mimeType:'image/png',width:1,height:1,...Object.fromEntries(['original','display','thumbnail'].map(kind=>[kind,{path:`photos/${photoId}/${kind}.bin`,bytes:png.length,sha256:digest}]))}]}]};
+  const migrationYear=2021,migrationDate=`${migrationYear}-12-31`;
+  const manifest={version:1,id:'c'.repeat(64),year:migrationYear,timezone:'Asia/Tokyo',days:[{date:migrationDate,title:migrationDate,requestId:crypto.randomUUID(),photos:[{id:photoId,date:migrationDate,timestamp:Date.parse(migrationDate+'T12:00:00+09:00')/1000,fileName:'SYNTHETIC_TAKEOUT.png',mimeType:'image/png',width:1,height:1,...Object.fromEntries(['original','display','thumbnail'].map(kind=>[kind,{path:`photos/${photoId}/${kind}.bin`,bytes:png.length,sha256:digest}]))}]}]};
   await migration.addInitScript(({manifest,bytes})=>{
     const values=new Map([['manifest.json',JSON.stringify(manifest)]]);window.syntheticMigrationFiles=values;
     function directory(prefix=''){return {getDirectoryHandle:async name=>directory(prefix+name+'/'),getFileHandle:async(name,options={})=>{
@@ -183,7 +183,7 @@ try {
     }};}
     window.showDirectoryPicker=async()=>directory();
   },{manifest,bytes:[...png]});
-  await migration.goto(origin+'/diary/?takeout-migration=2022');await migration.locator('#migration-folder').waitFor({state:'visible'});
+  await migration.goto(`${origin}/diary/?takeout-migration=${migrationYear}`);await migration.locator('#migration-folder').waitFor({state:'visible'});
   assert.equal(await migration.locator('#migration-through').inputValue(),migrationDate);
   await migration.click('#migration-folder');await migration.getByText('準備完了',{exact:true}).waitFor();
   failCommit=true;await migration.click('#migration-test');await migration.waitForFunction(()=>document.querySelector('#migration-state').textContent.startsWith('停止：'),{},{timeout:30000});
