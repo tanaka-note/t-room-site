@@ -2,9 +2,9 @@ const coreUrl = new URL(`photo-migration-core.js${new URL(import.meta.url).searc
 const { PhotoMigration, validateManifest } = await import(coreUrl.href);
 
 export async function mountMigration(initialSession, year = 2025, encryptionRuntime = null) {
-  if (![2022, 2023, 2024, 2025].includes(year)) throw new Error('移行対象の年が不正です。');
-  if (year === 2022 && !encryptionRuntime) {
-    throw new Error('2022年分の移行には、パスキーで日記の暗号化データを開く必要があります。');
+  if (![2021, 2022, 2023, 2024, 2025].includes(year)) throw new Error('移行対象の年が不正です。');
+  if (year <= 2022 && !encryptionRuntime) {
+    throw new Error(`${year}年分の移行には、パスキーで日記の暗号化データを開く必要があります。`);
   }
   const stylesheet = document.createElement('link');
   stylesheet.rel = 'stylesheet';

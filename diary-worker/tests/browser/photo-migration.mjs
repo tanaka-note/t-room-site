@@ -51,13 +51,15 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const browser = await chromium.launch({ headless: true });
 const temporary = await mkdtemp(join(tmpdir(), 'diary-migration-folder-'));
 try {
-  const lockedPage = await browser.newPage();
-  const blocked = lockedPage.waitForEvent('pageerror');
-  await lockedPage.goto(`http://127.0.0.1:${server.address().port}/?takeout-migration=2022`);
-  assert.match((await blocked).message, /パスキーで日記の暗号化データを開く/);
-  assert.equal(await lockedPage.locator('#migration-folder').count(), 0);
-  assert.equal(requests, 0);
-  await lockedPage.close();
+  for (const year of [2021, 2022]) {
+    const lockedPage = await browser.newPage();
+    const blocked = lockedPage.waitForEvent('pageerror');
+    await lockedPage.goto(`http://127.0.0.1:${server.address().port}/?takeout-migration=${year}`);
+    assert.match((await blocked).message, new RegExp(`${year}年分の移行には、パスキーで日記の暗号化データを開く`));
+    assert.equal(await lockedPage.locator('#migration-folder').count(), 0);
+    assert.equal(requests, 0);
+    await lockedPage.close();
+  }
 
   for (const [year, date, manifestKey] of [[2025, '2025-01-01', 'a'], [2024, '2024-02-29', 'b'], [2023, '2023-12-31', 'c']]) {
   const manifest = structuredClone(manifest2025);
