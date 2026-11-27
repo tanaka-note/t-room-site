@@ -16,11 +16,22 @@ try {
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     let status = 200, listingStatus = 200, delayed = null, delayNext = false;
     const calls = [];
+    const usageFolders = [
+      { id: 2850, name: 'Backup-data', sizeBytes: 1250, fileCount: 1 },
+      { id: 7, name: 'ordinary folder', sizeBytes: 10, fileCount: 3 }
+    ];
+    const availableBackup = {
+      folderId: 2850, available: true, diaryAvailable: true, backupBytes: 1200,
+      daily: { bytes: 1000 }, monthly: { bytes: 200 }, observedAt: snapshot.observedAt
+    };
+    let usageBackup = availableBackup;
     await page.route('**/cloud/api/**', async route => {
       const url = new URL(route.request().url()); calls.push(url.pathname + url.search);
       if (url.pathname.endsWith('/diary-backups')) {
         if (delayNext) { delayNext = false; await new Promise(resolve => { delayed = resolve; }); }
         await route.fulfill({ status, json: status === 200 ? snapshot : { error: 'fixture failure' } });
+      } else if (url.pathname.endsWith('/usage-details')) {
+        await route.fulfill({ json: { folders: usageFolders, backup: usageBackup } });
       } else if (url.pathname.endsWith('/items')) {
         const id = Number(url.searchParams.get('folderId'));
         await route.fulfill({ status: listingStatus, json: listingStatus === 200 ? {
@@ -31,6 +42,24 @@ try {
       } else await route.fulfill({ json: {} });
     });
     await preparePage(page, fixture.origin, 0);
+    const usageDialog = page.locator('#usage-details-dialog');
+    const usageRows = usageDialog.locator('.usage-details-row');
+    const checkUsageDetails = async expectedBackup => {
+      const button = viewport.width < 500 ? '#mobile-usage-details-button' : '#usage-details-button';
+      await page.locator(button).evaluate(element => element.click());
+      await usageDialog.waitFor();
+      await usageDialog.getByText('集計しています…').waitFor({ state: 'hidden' });
+      assert.equal(await usageRows.count(), 2, await usageDialog.textContent());
+      assert.match(await usageRows.nth(0).textContent(), expectedBackup);
+      assert.match(await usageRows.nth(1).textContent(), /ordinary folder10 B3ファイル/);
+      assert.doesNotMatch(await usageRows.nth(0).textContent(), /写真/);
+      await usageDialog.getByRole('button', { name: '閉じる' }).click();
+    };
+    await checkUsageDetails(/日記の日次 1000 B \/ 月次 200 B/);
+    usageBackup = { ...availableBackup, diaryAvailable: false, daily: { bytes: 0 }, monthly: { bytes: 0 } };
+    await checkUsageDetails(/日記のバックアップ情報を取得できませんでした/);
+    usageBackup = { folderId: 2850, available: false };
+    await checkUsageDetails(/通常ファイル容量のみ表示/);
     const panel = page.locator('#diary-backup-mount');
     const open = async (role = 'member', folderId = 2850) => page.evaluate(async ({ role, folderId }) => {
       __test.state.session = { role, serviceAccountId: role === 'member' ? 'folder-member' : 'admin', sessionCacheId: 'fixture-' + role, rootFolderId: 2850, serviceLinkId: 'ordinary-member' };
