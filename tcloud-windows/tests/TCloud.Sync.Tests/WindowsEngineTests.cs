@@ -126,12 +126,65 @@ internal static class WindowsEngineTests
             await Publish();
             var pc=Path.Combine(outer,"pc");
             var activity=new WindowsSyncActivity(pc,registration);
-            engine=new(device,registration,root,catalog,pc,activity:activity);
+            var folderInterrupted=0;
+            engine=new(device,registration,root,catalog,pc,protectFolder:full=>{
+                if(Path.GetFileName(full)!="web-photos")return;
+                Interlocked.Exchange(ref folderInterrupted,1);
+                throw new IOException("synthetic interruption after publishing a downloaded folder");
+            },activity:activity);
             try {
                 var path=Path.Combine(directory,"saved","fixture.txt");
                 await Wait(()=>File.Exists(path)&&(CloudFilesLocalStorage.PlaceholderState(path)&0x30)==0,"initial retained download");
                 Check(await File.ReadAllTextAsync(path)=="initial original","download retains the original");
                 Console.WriteLine("ENGINE fixture: initial retained");
+                WindowsCatalogEntry WebFolder(long id,long parent,string name) {
+                    var wrapped=CloudFileCrypto.WrapChildFolder(folderKey,folderKey);
+                    var cipher=CloudFileCrypto.EncryptFolderName(folderKey,name);
+                    return new("folder",id,++revision,"present",JsonSerializer.SerializeToElement(new{id,parentId=parent,name,cryptoVersion=1,
+                        encryptedName=cipher.Ciphertext,nameIv=cipher.Iv,parentWrappedKey=wrapped.Ciphertext,parentWrapIv=wrapped.Iv}),null,null);
+                }
+                string? FolderMapping(long id)=>catalog.LoadAsync().GetAwaiter().GetResult().Folders?.SingleOrDefault(item=>item.Id==id)?.RelativePath;
+                var photos=Path.Combine(directory,"saved","web-photos");
+                var photoRelative=Path.GetRelativePath(directory,photos);
+                lock(gate)remoteFolders[42]=WebFolder(42,7,"web-photos");
+                await Wait(()=>Volatile.Read(ref folderInterrupted)==1,"interrupt after the new folder is visible but before its mapping is saved");
+                var downloadedId=WindowsFileState.Read(photos).Id;
+                Check(FolderMapping(42) is null&&File.Exists(Path.Combine(pc,"folder-placement.json")),"visible folder identity was recorded in the restart intent");
+                await engine.DisposeAsync();engine=null;
+                engine=new(device,registration,root,catalog,pc,activity:activity);
+                await Wait(()=>FolderMapping(42)==photoRelative,"restart completes the existing download rather than creating an alias or sending it back");
+                Check(WindowsFileState.Read(photos).Id==downloadedId&&!Directory.Exists(photos+" (T-Cloud 42)")&&createdFolders.Count==0,
+                    "the original downloaded directory remains the only copy");
+
+                lock(gate){
+                    remoteFolders[43]=WebFolder(43,7,"web-photos");
+                    remoteFolders[44]=WebFolder(44,43,"nested");
+                    var nested=CloudFileCrypto.EncryptMetadata(fileKey,new("proof.txt","text/plain","document",1));
+                    bodies[78]=EncryptedChunks.Encrypt(fileKey,initial,0);
+                    remote[78]=FileEntry(78,JsonSerializer.SerializeToElement(new{folderId=44,sizeBytes=initial.Length,chunkSizeBytes=8*1024*1024,
+                        chunkCount=1,encryptedSizeBytes=initial.Length+32,encryptedMetadata=nested.Ciphertext,metadataIv=nested.Iv,
+                        wrappedFileKey=wrap.Ciphertext,fileKeyIv=wrap.Iv}),++revision,new string('c',64));
+                }
+                var alias=photos+" (T-Cloud 43)";
+                var aliasProof=Path.Combine(alias,"nested","proof.txt");
+                await Wait(()=>File.Exists(aliasProof)&&(CloudFilesLocalStorage.PlaceholderState(aliasProof)&0x30)==0,"two live online folders with identical names use separate local paths");
+                var aliasId=WindowsFileState.Read(alias).Id;
+                var tombstoneTime=DateTimeOffset.UtcNow.ToString("O");var tombstoneOp=Guid.NewGuid().ToString();
+                lock(gate)remoteFolders[42]=new("folder",42,++revision,"trashed",null,tombstoneTime,tombstoneOp);
+                var proof=Path.Combine(photos,"nested","proof.txt");
+                await Wait(()=>FolderMapping(43)==photoRelative&&File.Exists(proof)&&!Directory.Exists(alias),"free the deleted folder's path and normalize the surviving folder");
+                Check(FolderMapping(42) is null&&WindowsFileState.Read(photos).Id==aliasId&&await File.ReadAllTextAsync(proof)=="initial original"
+                    &&FolderMapping(44)==Path.Combine(photoRelative,"nested")&&createdFolders.Count==0,
+                    "automatic name correction keeps the surviving directory, nested mappings and retained file without an upload");
+                lock(gate){
+                    remote[78]=new("file",78,++revision,"trashed",null,tombstoneTime,tombstoneOp);
+                    remoteFolders[44]=new("folder",44,++revision,"trashed",null,tombstoneTime,tombstoneOp);
+                    remoteFolders[43]=new("folder",43,++revision,"trashed",null,tombstoneTime,tombstoneOp);
+                    remoteFolders[45]=WebFolder(45,7,"web-photos");
+                }
+                await Wait(()=>FolderMapping(45)==photoRelative&&FolderMapping(43) is null,"delete and recreate the same name in a single online update");
+                Check(Directory.Exists(photos)&&!Directory.Exists(photos+" (T-Cloud 45)")&&createdFolders.Count==0,
+                    "the newly re-created online folder has the normal name and remains present");
                 var backlogPath=Path.Combine(directory,"saved","backlog.txt");
                 var backlogMetadata=CloudFileCrypto.EncryptMetadata(fileKey,new("backlog.txt","text/plain","document",1));
                 lock(gate) {
