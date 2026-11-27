@@ -27,8 +27,10 @@ const active=JSON.parse(readFileSync(join(distribution,'active.json'),'utf8'));
 if(!/^[0-9a-f-]{36}$/.test(active.packageId))throw new Error('Invalid package build path.');
 const executable=join(distribution,active.packageId,'payload/TCloud.Sync.Host.exe');
 const ui=join(cwd,'tcloud-windows/artifacts/ui');mkdirSync(ui,{recursive:true});
-const screenshot=join(ui,'login-'+randomUUID()+'.png');
-const smoke=spawnSync(executable,['--render-login',screenshot],{cwd,stdio:'inherit',shell:false});
-if(smoke.error)throw smoke.error;
-if(smoke.status!==0||!existsSync(screenshot)||statSync(screenshot).size<1000)throw new Error('Self-contained login UI smoke failed.');
-console.log('PASS self-contained package and visible login card bounds');
+for (const view of ['login', 'sync-status']) {
+  const screenshot = join(ui, view + '-' + randomUUID() + '.png');
+  const smoke = spawnSync(executable, ['--render-' + view, screenshot], { cwd, stdio: 'inherit', shell: false });
+  if (smoke.error) throw smoke.error;
+  if (smoke.status !== 0 || !existsSync(screenshot) || statSync(screenshot).size < 1000) throw new Error('Self-contained UI smoke failed: ' + view);
+  console.log('PASS self-contained UI smoke: ' + view);
+}

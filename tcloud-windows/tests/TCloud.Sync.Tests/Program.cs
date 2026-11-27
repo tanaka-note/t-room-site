@@ -102,6 +102,7 @@ var tests = new List<(string Name, Func<Task> Run)>
     ("catalog checkpoints preserve originals across interruption, scope changes and remote reset", CatalogTests.Restart),
     ("catalog catch-up publishes only complete views and retains parallel original checkpoints", SyncLoopTests.CompleteViews),
     ("background synchronization resumes after missing disks and temporary transport failures", SyncLoopTests.ResumeAfterFailure),
+    ("a manual check immediately wakes the existing catalog loop", SyncLoopTests.RequestedCheck),
     ("revoked devices, incomplete enrollment and corrupt restart state stop without touching originals", SyncLoopTests.RevocationStops),
     ("paths cannot escape sync root or address alternate streams", Paths),
     ("catalog path batches reject links and recheck directories before later I/O", CatalogTests.PathBatches),

@@ -18,7 +18,7 @@ public sealed class WindowsFileUploader(WindowsDeviceClient device,WindowsDevice
 {
     private static readonly JsonSerializerOptions Json=new(JsonSerializerDefaults.Web);
     public async Task<PreparedWindowsUpload> PrepareAsync(CloudOriginalResolver resolver,WindowsCatalogEntry? previous,long folderId,
-        string relativePath,string epoch,CloudFileMetadata metadata,CancellationToken token=default)
+        string relativePath,string epoch,CloudFileMetadata metadata,CancellationToken token=default,DateTimeOffset? detectedAt=null)
     {
         root.VerifyPresent();var source=LocalPaths.ResolveUnderRoot(root.Root,relativePath);
         if(!VolumeInspector.Inspect(staging).Matches(registration.Volume))throw new IOException("送信用の保存先が登録したHDDと一致しません。");
@@ -59,7 +59,8 @@ public sealed class WindowsFileUploader(WindowsDeviceClient device,WindowsDevice
                 encryptedMetadata=encrypted.Ciphertext,metadataIv=encrypted.Iv,wrappedFileKey=wrapped.Ciphertext,fileKeyIv=wrapped.Iv,
                 archiveRestore=restore,fastDisplay=await FastDisplayAsync(snapshot.Body,metadata,token)},Json);
             var record=new PendingWindowsUpload(1,registration.ScopeHash,registration.Volume,registration.RootFileId!.Value,id,relativePath,
-                Path.GetFileName(snapshot.PersistedPath!),size,snapshot.Sha256,snapshot.SourceFileId,snapshot.SourceUsn,body,[],MetadataName:metadata.Name);
+                Path.GetFileName(snapshot.PersistedPath!),size,snapshot.Sha256,snapshot.SourceFileId,snapshot.SourceUsn,body,[],MetadataName:metadata.Name,
+                DetectedAt:detectedAt??DateTimeOffset.UtcNow);
             await journal.SaveAsync(record,token);return new(record,snapshot);
         }catch{await snapshot.DisposeAsync();root.VerifyPresent();if(snapshot.PersistedPath is not null)File.Delete(snapshot.PersistedPath);throw;}
         finally{if(folderKey is not null)CryptographicOperations.ZeroMemory(folderKey);if(fileKey is not null)CryptographicOperations.ZeroMemory(fileKey);}

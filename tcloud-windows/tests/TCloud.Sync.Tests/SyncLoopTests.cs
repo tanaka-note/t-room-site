@@ -120,6 +120,21 @@ internal static class SyncLoopTests
         }
     }
 
+    public static async Task RequestedCheck()
+    {
+        using var fixture=new CatalogFixture();using var cancel=new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var first=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls=0;
+        var source=new Source(()=>new(Epoch,0),(start,after,snapshot,token)=>Task.FromResult(new WindowsCatalogPage(Epoch,0,0,true,[])));
+        var loop=new WindowsSyncLoop(new(source,fixture.Store),()=>{},(_,_)=>Task.CompletedTask,new InlineProgress(status=>{
+            if(status.State!=WindowsSyncState.Current)return;
+            if(++calls==1)first.TrySetResult();else cancel.Cancel();
+        }),pollInterval:TimeSpan.FromMinutes(1));
+        var run=loop.RunAsync(cancel.Token);await first.Task.WaitAsync(cancel.Token);
+        loop.RequestCheck();
+        Check(await run==WindowsSyncState.Stopped&&calls==2,"manual check wakes the existing poll loop before its next interval");
+    }
+
     private sealed class Source(Func<WindowsCatalogStart> start,
         Func<WindowsCatalogStart,long,bool,CancellationToken,Task<WindowsCatalogPage>> page):IWindowsCatalogSource
     {

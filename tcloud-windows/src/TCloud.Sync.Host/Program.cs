@@ -8,12 +8,15 @@ internal static class Program
 {
     [STAThread] private static int Main(string[] args)
     {
-        if(args.Length==2&&args[0]=="--render-login") {
+        if(args.Length==2&&args[0] is "--render-login" or "--render-sync-status") {
             ApplicationConfiguration.Initialize();using var preview=new MainForm(false,preview:true);
+            var dashboard=args[0]=="--render-sync-status"?preview.ShowDashboardForPreview():null;
             preview.Show();Application.DoEvents();preview.PerformLayout();
-            foreach(Control panel in preview.Controls)foreach(Control control in panel.Controls)
-                if(control.Visible&&(control.Bottom>panel.ClientSize.Height-panel.Padding.Bottom||control.Right>panel.ClientSize.Width-panel.Padding.Right))
-                    throw new InvalidOperationException("ログインカードの内容が表示領域からはみ出しています。");
+            if(dashboard is null){
+                foreach(Control panel in preview.Controls)foreach(Control control in panel.Controls)
+                    if(control.Visible&&(control.Bottom>panel.ClientSize.Height-panel.Padding.Bottom||control.Right>panel.ClientSize.Width-panel.Padding.Right))
+                        throw new InvalidOperationException("ログインカードの内容が表示領域からはみ出しています。");
+            }else PopulateDashboardPreview(dashboard);
             using var bitmap=new Bitmap(preview.Width,preview.Height);preview.DrawToBitmap(bitmap,new Rectangle(Point.Empty,preview.Size));
             using var output=new FileStream(Path.GetFullPath(args[1]),FileMode.CreateNew,FileAccess.Write,FileShare.None);
             bitmap.Save(output,System.Drawing.Imaging.ImageFormat.Png);return 0;
@@ -42,5 +45,27 @@ internal static class Program
             try{Application.Run(form);}finally{wait.Unregister(null);}return 0;
         }
         finally{mutex.ReleaseMutex();}
+    }
+
+    private static void PopulateDashboardPreview(SyncDashboard dashboard)
+    {
+        var now=new DateTimeOffset(2026,11,27,14,38,0,TimeSpan.FromHours(9));
+        WindowsActivityItem Item(string id,string path,WindowsActivityOperation operation,WindowsActivityState state,long? size=null,long bytes=0,string? reason=null)
+            =>new(id,path,operation,state,now.AddMinutes(-2),size,bytes,reason,
+                state is WindowsActivityState.Confirmed or WindowsActivityState.Retained?now.AddMinutes(-1):null);
+        dashboard.SetConnection(true,@"E:\T-Cloud",true,null);
+        dashboard.Apply(new(1,
+            [Item("memo","会議メモ.txt",WindowsActivityOperation.Added,WindowsActivityState.Attention,
+                reason:"HDD内にある既存のT-Cloudフォルダへ移動すると自動送信されます。"),
+             Item("video",@"写真・動画\旅行\旅行動画.mp4",WindowsActivityOperation.Added,WindowsActivityState.Sending,2576980377,859832320),
+             Item("bill",@"仕事\経理\領収書_11月.pdf",WindowsActivityOperation.Updated,WindowsActivityState.Checking,348160),
+             Item("quote",@"仕事\B社\見積書.pdf",WindowsActivityOperation.Updated,WindowsActivityState.Confirmed,493568)],
+            [Item("copy",@"写真・動画\旅行\旅行写真.jpg",WindowsActivityOperation.Downloaded,WindowsActivityState.Retained,6081740)],
+            now,true,null));
+        if(dashboard.VisibleCount!=4)throw new InvalidOperationException("送信履歴が表示されません。");
+        dashboard.SelectDirection(1);
+        if(dashboard.VisibleCount!=1)throw new InvalidOperationException("原本取得の一覧に切り替えられません。");
+        dashboard.SelectDirection(0);
+        Application.DoEvents();
     }
 }
