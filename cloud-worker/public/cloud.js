@@ -1,5 +1,5 @@
 const API = "/cloud/api";
-const APP_BUILD_ID = "cloud-ffaaf1ae8e88";
+const APP_BUILD_ID = "cloud-38db66074fe9";
 const DOUBLE_TAP_SEEK_SECONDS = 10;
 const DOUBLE_TAP_SEEK_CONTROLS_HOLD_MS = 900;
 const FLOATING_TOOLBAR_DIRECTION_THRESHOLD = 12;
@@ -9851,10 +9851,9 @@ async function openUsageDetails() {
   list.innerHTML = '<p class="usage-details-empty">集計しています…</p>';
   if (!dialog.open) dialog.showModal();
   try {
-    const data = await api("/usage-details");
-    const folders = data.folders || [];
+    const { backup, folders } = await api("/usage-details");
     list.innerHTML = "";
-    if (!folders.length) {
+    if (!folders?.length) {
       list.innerHTML = '<p class="usage-details-empty">最上位フォルダがありません。</p>';
       return;
     }
@@ -9862,11 +9861,16 @@ async function openUsageDetails() {
       const row = document.createElement("article");
       row.className = "usage-details-row";
       row.innerHTML = `<strong>${escapeHtml(folder.name || "名称なし")}</strong><span>${formatBytes(folder.sizeBytes)}</span><small>${Number(folder.fileCount || 0).toLocaleString("ja-JP")}ファイル</small>`;
-      if (Number(folder.id) === data.backup?.folderId) {
+      if (Number(folder.id) === backup?.folderId) {
         const detail = document.createElement("small");
-        detail.textContent = data.backup.available
-          ? `バックアップ保管 ${formatBytes(data.backup.backupBytes)}（日記の日次 ${formatBytes(data.backup.daily.bytes)} / 月次 ${formatBytes(data.backup.monthly.bytes)} / 写真 ${formatBytes(data.backup.photo.bytes)}）・集計 ${backupJapanTime(data.backup.observedAt)}`
-          : "バックアップ情報を取得できませんでした（通常ファイル容量のみ表示）";
+        if (backup.available) {
+          const diaryDetails = backup.diaryAvailable === false
+            ? "日記のバックアップ情報を取得できませんでした"
+            : `日記の日次 ${formatBytes(backup.daily.bytes)} / 月次 ${formatBytes(backup.monthly.bytes)}`;
+          detail.textContent = `バックアップ保管 ${formatBytes(backup.backupBytes)}（${diaryDetails}）・集計 ${backupJapanTime(backup.observedAt)}`;
+        } else {
+          detail.textContent = "バックアップ情報を取得できませんでした（通常ファイル容量のみ表示）";
+        }
         row.append(detail);
       }
       list.append(row);
