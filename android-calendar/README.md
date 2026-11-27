@@ -46,7 +46,7 @@ JDK 17以上とAndroid SDK 36を使用する。`local.properties`に`sdk.dir`を
 
 配布前に`apksigner verify --print-certs`で署名を確認する。署名鍵をAPK・Git・GitHubへ添付しない。同じpackage・同じ署名鍵と増加したversionCodeで更新し、将来のGoogle Play登録を妨げない構成を維持する。ソース・テストは既存GitHubリポジトリで管理する。
 
-内閣府の[国民の祝日CSV](https://www8.cao.go.jp/chosei/shukujitsu/syukujitsu.csv)を2026-10-29に取得した。公表済みの2027年までを収録する。更新は`node tools/update-calendar-holidays.mjs`で公表済みデータを取得し、差分を確認してAPKへ取り込む。未公表の春分・秋分などを推測して追加しない。
+日本の祝日は、ログインの有無にかかわらず、オンラインでアプリを開いたときに内閣府の[国民の祝日CSV](https://www8.cao.go.jp/chosei/shukujitsu/syukujitsu.csv)を自動確認する。成功後は24時間、失敗後は同じ起動中に1時間空けて次の表示時に確認する。公開CSVの取得に予定や認証情報は使わない。形式と収録年を検証してから端末に保存し、圏外や失敗時は保存済みデータを表示する。初回やキャッシュが使えない場合はアプリ同梱分（2026-10-29取得、2027年まで）を表示する。設定には表示中データの終了年を示す。バンドル用の初期データは`node tools/update-calendar-holidays.mjs`で更新できる。未公表の祝日は推測で追加しない。
 
 ## 検証の区分
 

@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit
 
 class CalendarApplication : Application() {
     lateinit var repository: CalendarRepository
+    internal val holidays by lazy { CalendarHolidays.create(this) }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     lateinit var ready: Deferred<Unit>
     override fun onCreate() {

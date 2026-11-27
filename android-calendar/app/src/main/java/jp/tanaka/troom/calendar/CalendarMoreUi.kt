@@ -70,7 +70,7 @@ import java.util.Locale
     AlertDialog(onDismissRequest = onDismiss, title = { Text("${label}を統合") }, text = { Column { Text("「${source.name}」を選択した項目へ統合します。同じ予定の関連は1つにまとまります。"); all.filter { it.id != source.id && it.mergedInto == null && !it.archived }.forEach { item -> Row(Modifier.fillMaxWidth().clickable { selected = item }, verticalAlignment = Alignment.CenterVertically) { RadioButton(selected?.id == item.id, onClick = { selected = item }); Text(item.name) } } } }, confirmButton = { TextButton(enabled = selected != null, onClick = { selected?.let(onMerge) }) { Text("統合") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("戻る") } })
 }
 
-@Composable fun SettingsScreen(state: CalendarState, model: MainViewModel, activity: MainActivity, view: String, onLogout: () -> Unit, onView: (String) -> Unit) {
+@Composable fun SettingsScreen(state: CalendarState, model: MainViewModel, activity: MainActivity, view: String, holidayThroughYear: Int, onLogout: () -> Unit, onView: (String) -> Unit) {
     var editItem by remember { mutableStateOf<Pair<String, NamedItem>?>(null) }; var mergeItem by remember { mutableStateOf<Pair<String, NamedItem>?>(null) }
     var permanentlyDeleting by remember { mutableStateOf<TrashEntry?>(null) }
     val scope = rememberCoroutineScope(); val settings = state.settings
@@ -93,7 +93,14 @@ import java.util.Locale
             item { Text("通知の許可：有効", color = MaterialTheme.colorScheme.primary) }
             item { HorizontalDivider(); Text(if (state.account?.localOnly == true) "この端末で利用中" else "オフライン保存", Modifier.padding(top = 12.dp), style = MaterialTheme.typography.titleSmall); ChoiceField("上限 ${settings.cacheMiB}MiB", listOf(50, 100, 200, 500).map { it.toString() to "${it}MiB" }) { model.settings(settings.copy(cacheMiB = it.toInt())) }; Text(if (state.account?.localOnly == true) "予定はこの端末内に保存されます。端末間の同期とサーバーへのバックアップは行いません。" else "取得済みの予定を圏外でも利用できます。通知に必要な情報と未同期の変更は保護します。", style = MaterialTheme.typography.bodySmall); Text("保存上限は、端末内の予定とサーバーから取得済みのデータの合計です。", style = MaterialTheme.typography.bodySmall); if (state.account?.localOnly != true) { Text("未同期：${state.pending.size}件", style = MaterialTheme.typography.bodySmall); TextButton(onClick = { model.sync() }) { Text("今すぐ同期") } } }
             item { HorizontalDivider(); TextButton(onClick = { onView("archives") }) { Text("アーカイブした追跡") }; TextButton(onClick = { onView("tags") }) { Text("タグを管理") }; TextButton(onClick = { onView("trash") }) { Text("ゴミ箱（30日）") } }
-            item { HorizontalDivider(); Text("バージョン ${BuildConfig.VERSION_NAME}／Android 14以上", style = MaterialTheme.typography.bodySmall); TextButton(onClick = { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www8.cao.go.jp/chosei/shukujitsu/gaiyou.html"))) }) { Text("祝日データ：内閣府（2027年まで）") } }
+            item {
+                HorizontalDivider()
+                Text("バージョン ${BuildConfig.VERSION_NAME}／Android 14以上", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = { activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www8.cao.go.jp/chosei/shukujitsu/gaiyou.html"))) }) {
+                    Text("祝日データ：内閣府（${holidayThroughYear}年まで）")
+                }
+                Text("オンラインでアプリを開くと祝日を自動更新します。", style = MaterialTheme.typography.bodySmall)
+            }
         } else {
             item { TextButton(onClick = { onView("settings") }) { Text("← 設定へ戻る") }; Text(when (view) { "archives" -> "アーカイブした追跡"; "tags" -> "タグ管理"; else -> "ゴミ箱" }, style = MaterialTheme.typography.titleLarge) }
             if (view == "trash") {

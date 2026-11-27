@@ -135,6 +135,7 @@ private fun ReminderPermissionDialog(permission: ReminderPermission, activity: M
 }
 
 @Composable private fun CalendarShell(state: CalendarState, model: MainViewModel, activity: MainActivity) {
+    val holidays by model.holidays.collectAsStateWithLifecycle()
     val drawer = rememberDrawerState(DrawerValue.Closed); val scope = rememberCoroutineScope()
     var page by remember { mutableStateOf(CalendarPage.MONTH) }; var initialPageApplied by remember { mutableStateOf(false) }
     val startupPage = CalendarPage.entries.firstOrNull { it.name == state.settings.startPage } ?: CalendarPage.MONTH
@@ -239,15 +240,15 @@ private fun ReminderPermissionDialog(permission: ReminderPermission, activity: M
                 Box(Modifier.weight(1f)) {
                     savedScreens.SaveableStateProvider(if (page == CalendarPage.TRACKS && trackDetail != null) "TRACK-${trackDetail!!.id}" else page.name) {
                     when (page) {
-                        CalendarPage.MONTH -> MonthScreen(month, selected, visible, model.holidays, onDay = { selectDay(it) }, onEvent = { detail = it }, onMonth = { month = it }, matches = matches)
-                        CalendarPage.WEEK -> WeekScreen(selected, visible, model.holidays, onEvent = { detail = it }, matches = matches)
-                        CalendarPage.AGENDA -> AgendaScreen(month, visible, model.holidays, onEvent = { detail = it }, matches = matches)
+                        CalendarPage.MONTH -> MonthScreen(month, selected, visible, holidays.dates, onDay = { selectDay(it) }, onEvent = { detail = it }, onMonth = { month = it }, matches = matches)
+                        CalendarPage.WEEK -> WeekScreen(selected, visible, holidays.dates, onEvent = { detail = it }, matches = matches)
+                        CalendarPage.AGENDA -> AgendaScreen(month, visible, holidays.dates, onEvent = { detail = it }, matches = matches)
                         CalendarPage.TRACKS -> if (trackDetail == null) TrackingScreen(state, events, onSelect = { trackDetail = it }, onSettings = { model.settings(it) }, onNew = { name -> model.named("track", NamedItem(name = name)) }) else TrackingDetail(trackDetail!!, state, events, onBack = { trackDetail = null }, onAdd = { editing = null; editingOccurrence = null; prefillTrack = trackDetail?.id; editMode = "ALL"; editorOpen = true }, onCalendar = {
                             val trackId = trackDetail?.id
                             navigateToPage(CalendarPage.MONTH)
                             trackFilter = trackId
                         }, onEvent = { detail = it }, onEdit = { model.named("track", it); trackDetail = it }, onMerge = { source, target -> scope.launch { model.merge("track", source, target); trackDetail = null; } })
-                        CalendarPage.SETTINGS -> SettingsScreen(state, model, activity, settingsView, onLogout = { logoutDialog = true }) { settingsView = it }
+                        CalendarPage.SETTINGS -> SettingsScreen(state, model, activity, settingsView, holidays.throughYear, onLogout = { logoutDialog = true }) { settingsView = it }
                     }
                     }
                 }

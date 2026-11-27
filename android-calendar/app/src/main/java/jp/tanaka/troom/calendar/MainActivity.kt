@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
         val permissionsRestored = refreshReminderPermission()
         CalendarActivityWindow.foreground = true
         CalendarActivityWindow.touch()
+        model.refreshHolidays()
         model.sync(retryRemindersFirst = permissionsRestored)
     }
 

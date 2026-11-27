@@ -12,11 +12,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as CalendarApplication
     val repository = app.repository
     val state = repository.state
-    val holidays: Map<LocalDate, String> = application.assets.open("holidays.json").bufferedReader().use { reader ->
-        val values = JSONObject(reader.readText()).getJSONObject("holidays")
-        values.keys().asSequence().associate { LocalDate.parse(it) to values.getString(it) }
-    }
+    internal val holidays = app.holidays.state
     init { viewModelScope.launch { app.ready.await(); repository.sync() } }
+
+    fun refreshHolidays() = viewModelScope.launch { app.holidays.refreshIfDue() }
+
     fun sync(active: Boolean = true, retryRemindersFirst: Boolean = false) = viewModelScope.launch {
         if (active) CalendarActivityWindow.touch()
         app.ready.await()
