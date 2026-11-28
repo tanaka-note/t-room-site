@@ -52,7 +52,8 @@ test('lost or mismatched links do not receive a key bundle',async()=>{
 test('photo staging keeps filename/dimensions encrypted, attaches atomically, and retires only unreferenced media',async()=>{
   const a=await client(),scope=preferencesScope(a.household,a.actor.accountId),epoch=a.directory.epochs[scope];
   const session=await (await call('/encryption/uploads',{method:'POST',body:{targetEntryId:null}})).json();
-  const sid=session.uploadSession.id,id=crypto.randomUUID(),photo={id,fileName:'PHOTO_PRIVATE_CANARY.jpg',contentType:'image/jpeg',originalSize:3,width:123,height:456,createdAt:'2026-11-11T00:00:00Z',thumbnailUrl:`/diary/api/photos/${id}/thumbnail`,displayUrl:`/diary/api/photos/${id}/display`,originalUrl:`/diary/api/photos/${id}/original`};
+  // Imported photos use a deterministic UUIDv5 and follow the same read and retention path.
+  const sid=session.uploadSession.id,id='20000000-0000-5000-8000-000000000001',photo={id,fileName:'PHOTO_PRIVATE_CANARY.jpg',contentType:'image/jpeg',originalSize:3,width:123,height:456,createdAt:'2026-11-11T00:00:00Z',thumbnailUrl:`/diary/api/photos/${id}/thumbnail`,displayUrl:`/diary/api/photos/${id}/display`,originalUrl:`/diary/api/photos/${id}/original`};
   const encrypted=await encryptPhotoParts(Object.fromEntries(['original','display','thumbnail'].map(kind=>[kind,new Blob([new Uint8Array([1,2,3])],{type:'image/jpeg'})])),a.household,id);photo.crypto=encrypted.descriptor;
   const metadata=await seal(a.keys.get(scope),photo,{household:a.household,scope,id,revision:1,epoch,kind:'photo-staging',sourceId:sid});
   const form=()=>{const value=new FormData();value.set('id',id);value.set('epoch',String(epoch));value.set('metadata',JSON.stringify(metadata));for(const kind of ['original','display','thumbnail'])value.set(kind,encrypted.parts[kind],`${kind}.bin`);return value;};
@@ -89,11 +90,39 @@ test('opt-in compressed snapshots retain identical ciphertext, permission filter
  assert.deepEqual(JSON.parse(decoded),JSON.parse(original));assert.ok(wire.length<Buffer.byteLength(original));assert.equal(compressed.headers.get('Cache-Control'),'no-store');
 });
 
-test('legacy Takeout bookmarks preserve only the public supported migration year on redirect',async()=>{
- for(const year of ['2021','2022','2023','2024','2025','2026','2027']){
-  const response=await f.worker.fetch(new Request(`https://tanaka-note.com/diary/?takeout-migration=${year}&q=SYNTHETIC_PRIVATE_QUERY`),f.env,f.ctx);
-  assert.equal(response.status,308);const target=new URL(response.headers.get('Location'));
-  assert.equal(target.origin,f.env.DIARY_ENCRYPTION_ORIGIN);assert.equal(target.searchParams.has('q'),false);
-  assert.equal(target.searchParams.get('takeout-migration'),year==='2027'?null:year);
+test('all retired Takeout bookmarks open the ordinary diary on the dedicated origin',async()=>{
+ const diary = f.env.DIARY_ENCRYPTION_ORIGIN+'/diary/';
+ const env = {...f.env, ASSETS: {async fetch(request) {
+  assert.equal(new URL(request.url).pathname,'/');
+  return new Response('Diary shell');
+ }}};
+ for (const origin of ['https://tanaka-note.com', f.env.DIARY_ENCRYPTION_ORIGIN]) {
+  for (const year of ['2021','2022','2023','2024','2025','2026','2027']) {
+   const response = await f.worker.fetch(new Request(origin+'/diary/?takeout-migration='+year+'&q=SYNTHETIC_PRIVATE_QUERY'),env,f.ctx);
+   assert.equal(response.status,308);
+   assert.equal(response.headers.get('Location'),diary);
+  }
  }
+ const normal=await f.worker.fetch(new Request(diary),env,f.ctx);
+ assert.equal(normal.status,200);
+ assert.equal(await normal.text(),'Diary shell');
+});
+
+test('retired Takeout assets return 404 and photo encryption assets remain available',async()=>{
+ const diary = f.env.DIARY_ENCRYPTION_ORIGIN+'/diary/';
+ const calls = [];
+ const env = {...f.env, ASSETS: {async fetch(request) {
+  calls.push(new URL(request.url).pathname);
+  return new Response('Asset');
+ }}};
+ for (const file of ['photo-migration.js','photo-migration-core.js','photo-migration.css']) {
+  const response=await f.worker.fetch(new Request(diary+file+'?v=diary-0cd349d6bd94'),env,f.ctx);
+  assert.equal(response.status,404);
+ }
+ assert.deepEqual(calls,[]);
+ for (const file of ['diary.js','diary-photo-upload.js','diary-existing-photo-migration.js']) {
+  const response=await f.worker.fetch(new Request(diary+file),env,f.ctx);
+  assert.equal(response.status,200);
+ }
+ assert.deepEqual(calls,['/diary.js','/diary-photo-upload.js','/diary-existing-photo-migration.js']);
 });
