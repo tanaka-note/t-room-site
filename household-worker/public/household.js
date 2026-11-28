@@ -4,7 +4,18 @@
   const currency = new Intl.NumberFormat('ja-JP', {style:'currency',currency:'JPY',maximumFractionDigits:0});
   const money = n => currency.format(n);
   const today = () => new Date(Date.now()+9*3600000).toISOString().slice(0,10);
-  const previousMonth = () => {const d=new Date(`${today()}T00:00:00Z`);d.setUTCDate(0);return d.toISOString().slice(0,7);};
+  const integers = new Intl.NumberFormat('ja-JP');
+  const yen = amount => `${integers.format(amount)}円`;
+  function balanceDifference(current, comparison) {
+    if (comparison === null) return 'ー';
+    const difference = current - comparison;
+    return (difference > 0 ? '+' : '') + yen(difference);
+  }
+  function previousMonth(month) {
+    const date = new Date(`${month}-01T00:00:00Z`);
+    date.setUTCDate(0);
+    return date.toISOString().slice(0,7);
+  }
   const nav = TroomDialogNavigation.create({key:'troomHouseholdDialogs'});
   let data={accounts:[],transactions:[],categories:[],snapshots:[],historical:[]}, revision=0, session=null, busy=false, activity=Date.now(), confirmation=null, restoreFile=null, categoryEditMode=false;
   const editors=new Map(), channel=typeof BroadcastChannel==='function'?new BroadcastChannel('household-ledger'):null;
@@ -203,11 +214,44 @@
     }
   }
   function renderTransactions(){
-    const period=$('period').value,year=$('period-mode').value==='year',prefix=year?period.slice(0,4):period,query=$('search').value.normalize('NFKC').toLocaleLowerCase();
-    const rows=data.transactions.filter(t=>{const c=categoryFor(t);return t.date.startsWith(prefix)&&(!$('category-filter').value||c?.parent===$('category-filter').value)&&      (!query||(t.description+' '+t.notes+' '+(c?.parent||'')+' '+(c?.name||'')).normalize('NFKC').toLocaleLowerCase().includes(query));}).sort((a,b)=>a.date.localeCompare(b.date)||(a.registrationOrder??0)-(b.registrationOrder??0)||a.id.localeCompare(b.id));
+    const period = $('period').value;
+    const yearMode = $('period-mode').value === 'year';
+    const selectedYear = period.slice(0,4);
+    const prefix = yearMode ? selectedYear : period;
+    const priorMonth = yearMode ? null : previousMonth(period);
+    const priorYear = String(Number(selectedYear) - 1).padStart(4,'0');
+    const priorYearPrefix = yearMode ? priorYear : priorYear + period.slice(4);
+    const parentFilter = $('category-filter').value;
+    const query = $('search').value.normalize('NFKC').toLocaleLowerCase();
+    const rows = [];
+    let priorMonthNet = null, priorYearNet = null, earlierMonthsNet = 0;
+
+    for (const transaction of data.transactions) {
+      const month = transaction.date.slice(0,7);
+      const selected = month.startsWith(prefix);
+      const inPriorMonth = month === priorMonth;
+      const inPriorYear = month.startsWith(priorYearPrefix);
+      const earlierThisYear = !yearMode && month.startsWith(selectedYear) && month < period;
+      if (!(selected || inPriorMonth || inPriorYear || earlierThisYear)) continue;
+
+      const category = categoryFor(transaction);
+      const matches = (!parentFilter || category?.parent === parentFilter) &&
+        (!query || `${transaction.description} ${transaction.notes} ${category?.parent || ''} ${category?.name || ''}`
+          .normalize('NFKC').toLocaleLowerCase().includes(query));
+      if (selected && matches) rows.push(transaction);
+      if (transaction.type === 'transfer') continue;
+
+      // A period with a ledger entry can have a filtered balance of zero.
+      const amount = transaction.type === 'income' ? transaction.amount : -transaction.amount;
+      const filteredAmount = matches ? amount : 0;
+      if (inPriorMonth) priorMonthNet = (priorMonthNet ?? 0) + filteredAmount;
+      if (inPriorYear) priorYearNet = (priorYearNet ?? 0) + filteredAmount;
+      if (earlierThisYear) earlierMonthsNet += filteredAmount;
+    }
+    rows.sort((a,b)=>a.date.localeCompare(b.date)||(a.registrationOrder??0)-(b.registrationOrder??0)||a.id.localeCompare(b.id));
     const entryCount=rows.filter(t=>t.type===entryType).length;
     for(const b of document.querySelectorAll('[data-entry-type]'))b.setAttribute('aria-pressed',String(b.dataset.entryType===entryType));
-    const criteria=JSON.stringify([prefix,query,$('category-filter').value,entryType]);if(criteria!==entryCriteria){visibleEntries=200;entryCriteria=criteria;}
+    const criteria=JSON.stringify([prefix,query,parentFilter,entryType]);if(criteria!==entryCriteria){visibleEntries=200;entryCriteria=criteria;}
     let index=0,income=0,expense=0;const groups=new Map(),root=$('entries'),fragment=document.createDocumentFragment();
     for(const t of rows){const c=categoryFor(t),legacy=t.type==='transfer';if(!legacy){
         if(t.type==='income')income+=t.amount;else expense+=t.amount;
@@ -222,7 +266,15 @@
       if(session?.role==='owner'){const actions=cell(tr,undefined,'row-actions');if(!legacy)actions.append(button('編集',()=>openEntry(t)));actions.append(button('削除',()=>{const expected=revision,id=crypto.randomUUID();ask('この明細を削除しますか？',t.date+'\n'+t.description+'\n'+money(t.amount),()=>mutate('transaction.delete',{id:t.id},expected,id));},'danger'));}
       ['日付','利用先・相手先','分類','金額','支払方法・摘要','操作'].forEach((label,i)=>{if(tr.cells[i])tr.cells[i].dataset.label=label;});fragment.append(tr);
     }
-    root.replaceChildren(fragment);$('more-entries').hidden=entryCount<=visibleEntries;$('entry-display').textContent=entryCount?`${Math.min(entryCount,visibleEntries)} / ${entryCount}件を表示`:'';$('income').textContent=money(income);$('expense').textContent=money(expense);$('net').textContent=money(income-expense);$('empty-entries').hidden=entryCount>0;$('entry-count').textContent=rows.length+'件';renderCategorySummary(groups,income,expense);
+    root.replaceChildren(fragment);$('more-entries').hidden=entryCount<=visibleEntries;$('entry-display').textContent=entryCount?`${Math.min(entryCount,visibleEntries)} / ${entryCount}件を表示`:'';
+    const net = income - expense;
+    $('income').textContent = money(income);
+    $('expense').textContent = money(expense);
+    $('net').textContent = money(net);
+    $('net-month-over-month').textContent = balanceDifference(net, priorMonthNet);
+    $('net-year-over-year').textContent = balanceDifference(net, priorYearNet);
+    $('net-year-to-date').textContent = yen(net + earlierMonthsNet);
+    $('empty-entries').hidden=entryCount>0;$('entry-count').textContent=rows.length+'件';renderCategorySummary(groups,income,expense);
   }
   function renderAccounts(){const root=$('accounts');root.replaceChildren();let total=0;for(const a of [...data.accounts].sort((a,b)=>totals(b)-totals(a))){total+=totals(a);const card=el('article',undefined,'panel account-card'),header=el('header'),title=el('div');title.append(el('h3',a.name),el('span',a.type,'muted small'));header.append(title);if(session?.role==='owner')header.append(button('編集',()=>openAccount(a)));card.append(header,el('p',money(totals(a)),'total'),el('p',a.balances?.length?`${a.balances.at(-1).date} 時点`:'基準日未入力','muted small'));for(const i of a.items){const row=el('div',undefined,'item');row.append(el('span',i.name),el('strong',money(i.amount)));card.append(row);}root.append(card);}$('current-assets').textContent=money(total);$('empty-accounts').hidden=data.accounts.length>0;}
   function points(){return assetPoints;}
