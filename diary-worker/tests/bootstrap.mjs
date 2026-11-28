@@ -99,14 +99,25 @@ try {
     (5,'2026-09-03','順序確認','本文','published','tanaka-household','2026-09-03T08:00:00Z'),
     (6,'2026-09-01','順序確認','本文','published','tanaka-household','2026-09-01T10:00:00Z'),
     (7,'2026-09-01','順序確認','本文','published','tanaka-household','2026-09-01T08:00:00Z'),
-    (8,'2026-09-02','別の日記','本文','published','tanaka-household','2026-09-02T08:00:00Z');`);
-  for (const [order, ids] of [["oldest", [7, 6, 5]], ["newest", [5, 6, 7]]]) {
-    const params = new URLSearchParams({ q: "順序確認", dateFrom: "2026-09-01", dateTo: "2026-09-03", order, limit: "2" });
+    (8,'2026-09-02','別の日記','本文','published','tanaka-household','2026-09-02T08:00:00Z'),
+    (9,'2026-11-27','順序確認','本文','published','tanaka-household','2026-11-27T08:00:00Z');`);
+  for (const [order, ids] of [["oldest", [7, 6, 5, 9]], ["newest", [9, 5, 6, 7]]]) {
+    const params = new URLSearchParams({ q: "順序確認", dateFrom: "2026-09-01", dateTo: "2026-11-27", order, limit: "2" });
     const first = (await request(`/bootstrap?${params}`, reader)).data.entries;
     const next = (await request(`/entries?${params}&offset=2`, reader)).data;
     assert.equal(first.hasMore, true);
     assert.equal(next.hasMore, false);
     assert.deepEqual([...first.entries, ...next.entries].map(entry => entry.id), ids);
+  }
+  for (const [filters, ids] of [
+    ["dateFrom=2026-09-03&openEnded=1&order=oldest", [5, 9]],
+    ["dateTo=2026-09-03&openEnded=1", [5, 6, 7]],
+    ["dateFrom=2026-09-03", [5]],
+    ["dateFrom=2026-09-03&dateTo=2026-09-03", [5]]
+  ]) {
+    const result = await request(`/entries?q=${encodeURIComponent("順序確認")}&limit=20&${filters}`, reader);
+    assert.equal(result.response.status, 200);
+    assert.deepEqual(result.data.entries.map(entry => entry.id), ids, filters);
   }
   checks.length = 0;
   const foreground = await request("/bootstrap", reader, { active: true });

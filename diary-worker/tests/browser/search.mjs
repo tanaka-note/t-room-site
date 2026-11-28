@@ -44,6 +44,10 @@ for (let day = 1; day <= 24; day += 1) {
     title: day === 23 ? "日付検索だけで一致" : "並び順の確認", content: "検索順の確認用本文",
     tags: day === 1 ? ["並び順テストタグ"] : [] });
 }
+entries.push(
+  { ...entries[44], id: 70, entryDate: "2026-11-27", title: "11月の日記", tags: [] },
+  { ...entries[44], id: 71, entryDate: "2026-09-28", title: "9月28日の日記", tags: [] }
+);
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, "http://127.0.0.1");
   if (url.pathname.startsWith("/diary/api/")) {
@@ -304,6 +308,12 @@ async function run(browserType, name, options = {}) {
       assert.equal(requests.at(-1).order, order);
       assert.equal(await sortButton.getAttribute("aria-pressed"), String(order === "oldest"));
     }
+    async function setDate(boundary, value) {
+      await page.locator(`#diary-date-${boundary}`).evaluate((input, date) => {
+        input.value = date;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }, value);
+    }
 
     await search("並び順の確認");
     await expectOrder("newest", 69);
@@ -315,34 +325,50 @@ async function run(browserType, name, options = {}) {
     await page.locator("#diary-search-clear").click();
     await sortButton.waitFor({ state: "hidden" });
 
-    await page.locator("#diary-date-to").evaluate(to => {
-      document.querySelector("#diary-date-from").value = "2026-09-01";
-      to.value = "2026-09-23";
-      to.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    await expectOrder("oldest", 46);
+    await setDate("from", "2026-09-28");
+    await expectOrder("oldest", 71, 2);
+    assert.equal(requests.at(-1).openEnded, "1");
+    assert.match(await page.locator("#diary-search-status").textContent(), /以降/);
     await sortButton.click();
-    await expectOrder("newest", 68);
+    await expectOrder("newest", 70, 2);
+    await setDate("from", "2026-09-01");
+    await expectOrder("oldest", 46);
+    await page.locator("#load-more-button").click();
+    await expectOrder("oldest", 46, 26);
+    assert.equal(await cards.last().getAttribute("data-entry-id"), "70");
+    await setDate("to", "2026-08-31");
+    assert.match(await page.locator("#diary-search-status").textContent(), /開始日は終了日以前/);
+    await setDate("to", "2026-11-27");
+    await expectOrder("oldest", 46);
+    assert.equal(requests.at(-1).dateTo, "2026-11-27");
+    assert.equal(requests.at(-1).openEnded, undefined);
+    await sortButton.click();
+    await expectOrder("newest", 70);
     await search("並び順の確認");
     await expectOrder("oldest", 46);
     await sortButton.click();
-    await expectOrder("newest", 67);
+    await expectOrder("newest", 69);
     await page.locator("#load-more-button").click();
-    await expectOrder("newest", 67, 22);
+    await expectOrder("newest", 69, 23);
+    assert.equal(requests.at(-1).limit, "20");
     assert.deepEqual(await cards.evaluateAll(nodes => nodes.map(node => Number(node.dataset.entryId))),
-      Array.from({ length: 22 }, (_, index) => 67 - index));
+      [69, ...Array.from({ length: 22 }, (_, index) => 67 - index)]);
     await cards.last().click();
     await page.waitForSelector("#entry-dialog[open]");
     await page.goBack();
     await page.locator("#entry-dialog").waitFor({ state: "hidden" });
-    await expectOrder("newest", 67, 22);
+    await expectOrder("newest", 69, 23);
     await page.locator('#entry-list .diary-tag[data-tag="並び順テストタグ"]').click();
     await page.waitForURL("**/diary/tag/**");
     await page.waitForFunction(() => document.querySelectorAll("#entry-list [data-entry-id]").length === 1);
     await page.goBack();
-    await expectOrder("newest", 67, 22);
+    await expectOrder("newest", 69, 23);
     await page.locator("#diary-date-reset").click();
     await expectOrder("newest", 69);
+    await setDate("to", "2026-09-10");
+    await expectOrder("newest", 55, 10);
+    assert.equal(requests.at(-1).openEnded, "1");
+    assert.match(await page.locator("#diary-search-status").textContent(), /以前/);
     await page.locator("#clear-filters-button").click();
     await sortButton.waitFor({ state: "hidden" });
 

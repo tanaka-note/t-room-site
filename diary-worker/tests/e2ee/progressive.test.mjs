@@ -127,8 +127,9 @@ test("date search hydrates and pages in the selected order", async () => {
     const previous = x.writer.records.get("4").row;
     await x.writer.commit(entry({ entryDate: "2026-01-02", title: "Synthetic same day", lastPublishedAt: "2026-01-02T00:00:00Z" }),
       { id: "4", current: previous }, { refresh: false });
+    await x.writer.commit(entry({ entryDate: "2026-11-27", title: "Synthetic autumn" }), { id: "5" }, { refresh: false });
     await x.reader.sync();
-    const params = new URLSearchParams({ dateFrom: "2026-01-01", dateTo: "2026-01-03", limit: "2", order: "oldest" });
+    const params = new URLSearchParams({ dateFrom: "2026-01-01", dateTo: "2026-11-27", limit: "2", order: "oldest" });
     await x.reader.ensureList(params);
     assert.deepEqual([...x.reader.records.values()].filter(record => record.entry).map(record => record.row.id).sort(), ["1", "2", "4"]);
     const first = x.reader.list(params);
@@ -139,10 +140,14 @@ test("date search hydrates and pages in the selected order", async () => {
     await x.reader.ensureList(params);
     assert.deepEqual(x.reader.list(params).entries.map(e => e.id), [2, 3]);
     params.delete("offset");
+    params.delete("dateTo");
+    params.set("dateFrom", "2026-01-02");
+    await x.reader.ensureList(params);
+    assert.deepEqual(x.reader.list(params).entries.map(e => e.id), [4, 2]);
     params.set("q", "Synthetic");
     params.set("order", "newest");
     await x.reader.ensureList(params);
-    assert.deepEqual(x.reader.list(params).entries.map(e => e.id), [3, 2]);
+    assert.deepEqual(x.reader.list(params).entries.map(e => e.id), [5, 3]);
   } finally {
     x.close();
   }
