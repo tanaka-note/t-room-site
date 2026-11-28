@@ -303,7 +303,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function cancelEditorPhotoUploadSession() { return photoUploadManager?.cancelEditorPhotoUploadSession(); }
   function commitStagedPhotos(...args) { return photoUploadManager.commitStagedPhotos(...args); }
   function deleteStagedPhotoUpload(...args) { return photoUploadManager?.deleteStagedPhotoUpload(...args); }
-  function ensurePhotosUploaded(photos) { return photos.length ? photoUploadManager.ensurePhotosUploaded(photos) : Promise.resolve(); }
+  function ensurePhotosUploaded(...args) { return photoUploadManager.ensurePhotosUploaded(...args); }
   function queueBackgroundPhotoUpload(...args) { return photoUploadManager.queueBackgroundPhotoUpload(...args); }
   function releaseUploadedPhotoPayload(...args) { return photoUploadManager.releaseUploadedPhotoPayload(...args); }
 
@@ -2907,6 +2907,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   async function persistEditor(targetStatus, { closeAfter = false } = {}) {
+    const generation = sessionGeneration;
     const timing = { started: Date.now(), stages: {}, requests: [], photos: [], outcome: "failed" };
     editorSaveTiming = timing;
     const measure = async (stage, operation) => {
@@ -2915,7 +2916,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       finally { timing.stages[stage] = Date.now() - started; }
     };
     elements.editorMessage.textContent = "";
-    setEditorSaveBusy(true, targetStatus === "draft" ? "下書き保存中..." : "投稿中...");
+    setEditorSaveBusy(true, state.photoPreparationPromise ? "写真を準備中..." : "");
     try {
       await measure("prepare", () => waitForPhotoPreparation());
       if (state.pendingPhotoSave) {
@@ -2940,10 +2941,14 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       const pendingPhotos = state.editorPhotos.filter((photo) => !photo.existing && body.content.includes(photoMarker(photo.id)));
       timing.photos = pendingPhotos;
       if (pendingPhotos.length) {
-        setEditorSaveBusy(true, "写真の保存完了を待っています...");
-        await measure("uploadWait", () => ensurePhotosUploaded(pendingPhotos));
+        await measure("uploadWait", () => ensurePhotosUploaded(pendingPhotos, (sent, total) => {
+          if (generation === sessionGeneration && sent < total) {
+            elements.editorMessage.textContent = `写真を送信中 ${sent}/${total}枚...`;
+          }
+        }));
       }
       timing.uploadSession = state.photoUploadSessionTiming;
+      setEditorSaveBusy(true, editorSaveConfirmationMessage(targetStatus));
 
       const sourceEntry = state.editorSourceEntry;
       const provisionalDocument = pendingPhotos.length
@@ -3045,10 +3050,15 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     if (!pending || pending.generation !== sessionGeneration || pending.sessionId !== state.photoUploadSessionId) {
       throw new Error("写真の保存状態を確認できませんでした。編集内容を確認してください。");
     }
+    setEditorSaveBusy(true, editorSaveConfirmationMessage(pending.body.status));
     if (!state.photoUploadCommitted) {
-      setEditorSaveBusy(true, "写真を日記へ反映しています...");
-      const committed = await measure("photoCommit", () => commitStagedPhotos(pending.entry.id, pending.photos));
-      const committedById = new Map(committed.map(photo => [photo.id, photo]));
+      const { photos, entryRevision } = await measure("photoCommit", () => commitStagedPhotos(pending.entry.id, pending.photos));
+      // Encrypted attachment advances the provisional revision once. An
+      // unexpected revision still needs the existing content reconciliation.
+      if (pending.photos.length && Number.isSafeInteger(entryRevision) && entryRevision === pending.entry.revision + 1) {
+        pending.attachedRevision = entryRevision;
+      }
+      const committedById = new Map(photos.map(photo => [photo.id, photo]));
       for (const photo of pending.photos) {
         photo.existing = true;
         Object.assign(photo, committedById.get(photo.id) || {});
@@ -3061,8 +3071,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     }
     let saved = { entry: pending.entry };
     if (pending.photos.length) {
-      setEditorSaveBusy(true, "写真を本文へ反映しています...");
-      saved = await measure("finalize", () => finalizeCommittedPhotoEntry(pending.entry.id, pending.body, pending.entry));
+      saved = await measure("finalize", () => finalizeCommittedPhotoEntry(
+        pending.entry.id, pending.body, pending.entry, pending.attachedRevision
+      ));
     }
     elements.entryId.value = String(saved.entry.id);
     elements.entryRevision.value = String(saved.entry.revision);
@@ -3081,11 +3092,11 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     }
   }
 
-  async function finalizeCommittedPhotoEntry(entryId, finalBody, provisionalEntry) {
+  async function finalizeCommittedPhotoEntry(entryId, finalBody, provisionalEntry, revision = provisionalEntry.revision) {
     try {
       return await api(`/entries/${entryId}`, {
         method: "PUT",
-        body: { ...finalBody, revision: provisionalEntry.revision }
+        body: { ...finalBody, revision }
       });
     } catch (error) {
       if (!error?.transportOutcomeUnknown && error?.status !== 409) throw error;
@@ -3144,6 +3155,10 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     return JSON.stringify(value);
   }
 
+  function editorSaveConfirmationMessage(status) {
+    return status === "draft" ? "下書きを保存中..." : "投稿を確定中...";
+  }
+
   function setEditorSaveBusy(busy, label = "") {
     state.editorSaving = busy;
     elements.weatherButton.disabled = busy;
@@ -3153,9 +3168,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.cancelEntryButton.disabled = busy;
     elements.deleteDraftButton.disabled = busy;
     elements.editorLeaveSaveDraft.disabled = busy;
-    if (busy) {
-      if (label) elements.editorMessage.textContent = label;
-    }
+    if (busy && label && elements.editorMessage.textContent !== label) elements.editorMessage.textContent = label;
     elements.saveEntryButton.textContent = "投稿";
     elements.saveDraftButton.textContent = "下書き保存";
   }

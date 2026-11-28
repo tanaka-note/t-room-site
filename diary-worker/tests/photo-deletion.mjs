@@ -22,6 +22,7 @@ function fixture({ status = "published", draftOfEntryId = null, pending = false,
     Date, Map, Set, JSON, Number, String, Boolean, structuredClone, sessionGeneration: 0,
     waitForPhotoPreparation: async () => {}, serializeRichEditor: () => ({ content: "本文", contentFormat: null }),
     parseTags: value => [value], photoMarker: id => `[[写真:${id}]]`, setEditorSaveBusy() {},
+    editorSaveConfirmationMessage: () => "",
     api: async (path, { body }) => {
       writes.push(structuredClone(body));
       const promoted = state.editorSourceEntry.draftOfEntryId && body.status === "published";
@@ -34,7 +35,7 @@ function fixture({ status = "published", draftOfEntryId = null, pending = false,
       if (!pending) throw new Error("削除する画像が見つかりません。");
       if (deleteFails) { deleteFails = false; throw new Error("一時的な削除失敗"); }
     },
-    commitStagedPhotos: async () => { if (commitFails) { commitFails = false; throw new Error("一時的な写真確定失敗"); } return []; },
+    commitStagedPhotos: async () => { if (commitFails) { commitFails = false; throw new Error("一時的な写真確定失敗"); } return { photos: [] }; },
     renderEditorPhotos() {}, showToast() {}, updateFilterControls() {}, loadMeta: async () => {}, loadEntries: async () => {},
     closeEditorDialog: async () => { closes++; }
   };

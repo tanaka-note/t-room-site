@@ -52,7 +52,7 @@ assert.match(photoUpload, /PHOTO_UPLOAD_CONCURRENCY = 4/);
 assert.match(script, /queueBackgroundPhotoUpload\(photo\)/,
   "each prepared photo must be queued before posting");
 assert.match(photoUpload, /\/api\/photo-upload-sessions/);
-assert.match(script, /await measure\("uploadWait", \(\) => ensurePhotosUploaded\(pendingPhotos\)\)/,
+assert.match(script, /await measure\("uploadWait", \(\) => ensurePhotosUploaded\(pendingPhotos,/,
   "posting must wait for any remaining staged uploads");
 assert.match(script, /commitStagedPhotos\(pending\.entry\.id, pending\.photos\)/,
   "posting must promote staged photos without uploading them again");

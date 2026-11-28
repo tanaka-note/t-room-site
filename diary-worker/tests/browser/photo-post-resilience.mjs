@@ -589,7 +589,6 @@ async function verifyDiscardCleanup(browser, name, contextOptions) {
   try {
     await choosePhoto(page, "discard.png");
     await page.waitForFunction(() => window.document.querySelector("#editor-photo-list .editor-photo-card") && window.document.querySelector("#photo-preparation-status")?.textContent.includes("本文へ追加"));
-    await page.waitForFunction(() => window.document.querySelector("#editor-message")?.textContent !== "写真の保存完了を待っています...");
     await page.waitForTimeout(100);
     await page.click("#cancel-entry-button");
     await page.waitForSelector("#editor-leave-dialog[open]");
