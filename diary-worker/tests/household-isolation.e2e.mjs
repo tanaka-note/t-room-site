@@ -93,8 +93,9 @@ try {
   assert.ok(oneDay.result.entries.some((entry) => entry.id === id));
   const thirtyDays = await request("/entries?dateFrom=2026-08-01&dateTo=2026-08-30", { cookie: chiharuCookie });
   assert.equal(thirtyDays.response.status, 200);
-  const tooLong = await request("/entries?dateFrom=2026-08-01&dateTo=2026-08-31", { cookie: chiharuCookie });
-  assert.equal(tooLong.response.status, 400);
+  const longRange = await request(`/entries?dateFrom=2026-01-01&dateTo=2026-12-31&q=${title}`, { cookie: chiharuCookie });
+  assert.equal(longRange.response.status, 200);
+  assert.deepEqual(longRange.result.entries.map(entry => entry.id), [id]);
 
   for (const otherCookie of [main.cookie, wife.cookie]) {
     const direct = await request(`/entries/${id}`, { cookie: otherCookie });

@@ -970,6 +970,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         if (monthlyView) parameters.set("month", state.month);
         if (state.dateFrom) parameters.set("dateFrom", state.dateFrom);
         if (state.dateTo) parameters.set("dateTo", state.dateTo);
+        if (Boolean(state.dateFrom) !== Boolean(state.dateTo)) parameters.set("openEnded", "1");
         if (searchOrder) parameters.set("order", searchOrder);
         if (state.tag) parameters.set("tag", state.tag);
         if (state.trash) parameters.set("trash", "1");
@@ -4034,10 +4035,13 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     const conditions = [];
     if (state.query) conditions.push(`「${state.query}」`);
     if (isMonthlyView()) conditions.push(formatMonth(state.month));
-    if (state.dateFrom || state.dateTo) {
-      const from = state.dateFrom || state.dateTo;
-      const to = state.dateTo || state.dateFrom;
+    const { dateFrom: from, dateTo: to } = state;
+    if (from && to) {
       conditions.push(from === to ? formatDate(from) : `${formatDate(from)}から${formatDate(to)}`);
+    } else if (from) {
+      conditions.push(`${formatDate(from)}以降`);
+    } else if (to) {
+      conditions.push(`${formatDate(to)}以前`);
     }
     if (state.tag) conditions.push(`#${state.tag}`);
     if (state.favoritePage) {
@@ -4056,17 +4060,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function handleDateSearchChange() {
     const from = elements.dateFrom.value;
     const to = elements.dateTo.value;
-    if (from && to) {
-      const fromTime = Date.parse(`${from}T00:00:00Z`);
-      const toTime = Date.parse(`${to}T00:00:00Z`);
-      if (fromTime > toTime) {
-        elements.searchStatus.textContent = "開始日は終了日以前の日付を選択してください。";
-        return;
-      }
-      if ((toTime - fromTime) / 86400000 > 29) {
-        elements.searchStatus.textContent = "検索期間が長すぎます。期間を短くしてください。";
-        return;
-      }
+    if (from && to && from > to) {
+      elements.searchStatus.textContent = "開始日は終了日以前の日付を選択してください。";
+      return;
     }
     if (from !== state.dateFrom || to !== state.dateTo) state.entrySearchOrder = "";
     state.dateFrom = from;
@@ -4088,7 +4084,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function entrySearchOrder() {
-    return state.entrySearchOrder || (state.dateFrom && state.dateTo ? "oldest" : "newest");
+    return state.entrySearchOrder || (state.dateFrom ? "oldest" : "newest");
   }
 
   function changeBrowseMonth(offset) {

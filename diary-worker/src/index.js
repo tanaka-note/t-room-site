@@ -768,7 +768,7 @@ async function readEntries(url, env, session) {
     : "";
   const dateFrom = normalizeFilterDate(url.searchParams.get("dateFrom"));
   const dateTo = normalizeFilterDate(url.searchParams.get("dateTo"));
-  const dateRange = validateDateRange(dateFrom, dateTo);
+  const dateRange = validateDateRange(dateFrom, dateTo, url.searchParams.get("openEnded") === "1");
   const tag = normalizeTag(url.searchParams.get("tag") || "");
   const trashRequested = url.searchParams.get("trash") === "1";
   const draftRequested = url.searchParams.get("draft") === "1";
@@ -2800,15 +2800,10 @@ function normalizeFilterDate(value) {
   return normalized;
 }
 
-function validateDateRange(dateFrom, dateTo) {
-  const from = dateFrom || dateTo;
-  const to = dateTo || dateFrom;
-  if (!from && !to) return { from: "", to: "" };
-  const fromTime = Date.parse(`${from}T00:00:00Z`);
-  const toTime = Date.parse(`${to}T00:00:00Z`);
-  if (fromTime > toTime) throw new HttpError(400, "開始日は終了日以前の日付を選択してください。");
-  if ((toTime - fromTime) / 86400000 > 29) throw new HttpError(400, "検索期間が長すぎます。期間を短くしてください。");
-  return { from, to };
+function validateDateRange(from, to, openEnded) {
+  if (from && to && from > to) throw new HttpError(400, "開始日は終了日以前の日付を選択してください。");
+  // Keep the single-date API lookup for clients that omit openEnded.
+  return openEnded ? { from, to } : { from: from || to, to: to || from };
 }
 
 function normalizeFileName(value) {
