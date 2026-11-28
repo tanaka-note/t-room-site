@@ -18,7 +18,7 @@ export async function mountMigration(initialSession, year = 2025, encryptionRunt
   view.hidden = false;
   view.innerHTML = `<main class="migration-panel"><h1>${year}年 写真移行</h1>
     <p id="migration-account"></p><p>指定したフォルダの画像を撮影日ごとにまとめ、日付をタイトルにして保存します。元のZIPは変更しません。</p>
-    ${fixedPeriod ? '<p>取り込み対象期間は2026年1月1日〜7月31日（日本時間）です。</p>' : ''}
+    ${fixedPeriod ? '<p>取り込み対象期間は2026年1月1日〜7月31日（日本時間）です。既存の日記を残し、同じ日付に写真用の日記を作ります。</p>' : ''}
     <button id="migration-folder">移行フォルダを選択</button>
     <label>標準のフォルダー選択 <input id="migration-files" type="file" webkitdirectory multiple></label>
     <p id="migration-storage">選択方法に応じて、フォルダーまたはこのブラウザーに進捗を保存します。</p>

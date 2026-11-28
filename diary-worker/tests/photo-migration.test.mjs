@@ -281,6 +281,80 @@ test('existing diaries are never overwritten', async () => {
   const f = fixture(); f.unrelated = [{ id: 9, entryDate: day.date }];
   await assert.rejects(f.engine().run(), /既存の日記/); assert.equal(f.creates, 0);
 });
+test('2026 resumes 56 completed days, keeping same-day diaries and adding only the new photo diary', async () => {
+  const value = datedManifest('2026-03-04');
+  const f = fixture(value);
+  const completed = Array.from({ length: 56 }, (_, index) => {
+    const date = index === 55 ? '2026-03-03' : new Date(Date.UTC(2026, 0, 1 + index)).toISOString().slice(0, 10);
+    const day = datedManifest(date).days[0];
+    day.requestId = crypto.randomUUID();
+    day.photos.forEach(photo => {
+      const previousId = photo.id;
+      photo.id = crypto.randomUUID();
+      for (const kind of ['original', 'display', 'thumbnail']) photo[kind].path = photo[kind].path.replace(previousId, photo.id);
+    });
+    return day;
+  });
+  const manifest = { ...value, days: [...completed, ...value.days] };
+  const saved = new Map(completed.map((day, index) => [index + 100, {
+    entryDate: day.date, title: day.title, status: 'published', content: photoContent(day), photos: day.photos,
+  }]));
+  const savedDays = Object.fromEntries(completed.map((day, index) => [day.date, {
+    entryId: index + 100, status: 'complete', requestId: day.requestId, uploaded: day.photos.map(photo => photo.id),
+  }]));
+  const journal = { version: 1, manifestId: manifest.id, destination, days: structuredClone(savedDays) };
+  const unrelated = [{ id: 9, entryDate: '2026-03-04', title: '2026-03-04', content: 'existing text', photos: [] },
+    { id: 10, entryDate: '2026-03-04', status: 'draft', photos: [{ id: crypto.randomUUID() }] }];
+  const unchanged = structuredClone(unrelated);
+  f.unrelated = unrelated;
+  const api = (path, options) => {
+    const id = Number(path.split('/').at(-1));
+    if (saved.has(id)) {
+      assert.ok(!options?.method || options.method === 'GET');
+      return { entry: saved.get(id) };
+    }
+    assert.notEqual(id, 9);
+    assert.notEqual(id, 10);
+    return f.api(path, options);
+  };
+  await f.engine({ manifest, journal, api }).run();
+  assert.equal(f.creates, 1);
+  assert.equal(f.uploads, value.days[0].photos.length);
+  assert.equal(f.entry.entryDate, '2026-03-04');
+  assert.deepEqual(unrelated, unchanged);
+  for (const [date, record] of Object.entries(savedDays)) assert.deepEqual(f.journal.days[date], record);
+  assert.equal(f.journal.days['2026-03-04'].status, 'complete');
+  await f.engine({ manifest, api }).run();
+  assert.equal(f.creates, 1);
+  assert.equal(f.uploads, value.days[0].photos.length);
+});
+
+test('2026 rejects a photo ID used by another same-day diary before creating a draft', async () => {
+  const value = datedManifest('2026-03-04');
+  const f = fixture(value);
+  f.unrelated = [{ id: 9, entryDate: '2026-03-04', photos: [{ id: value.days[0].photos[0].id }],
+    creation: { requestId: value.days[0].requestId, accountId: 'another-account', household: destination.householdId } }];
+  await assert.rejects(f.engine().run(), /別の日記で同じ写真ID/);
+  assert.equal(f.creates, 0);
+  assert.equal(f.uploads, 0);
+});
+
+test('2026 reuses a verified photo diary with the same request after loss of the journal', async () => {
+  const value = datedManifest('2026-03-04');
+  const day = value.days[0];
+  const f = fixture(value);
+  await f.engine().run();
+  const knownEntry = { ...f.entry, creation: { requestId: day.requestId, accountId: 'owner', household: destination.householdId } };
+  f.unrelated = [knownEntry];
+  f.session = { authenticated: true, canManageEntries: true, activeHouseholdId: destination.householdId,
+    loginId: destination.loginId, role: destination.role, encryption: { accountId: 'owner' } };
+  await f.engine({ journal: null }).run();
+  assert.equal(f.creates, 1);
+  assert.equal(f.uploads, day.photos.length);
+  assert.equal(f.journal.days[day.date].status, 'complete');
+  assert.deepEqual(f.journal.days[day.date].uploaded, day.photos.map(photo => photo.id));
+});
+
 test('unrelated drafts outside the requested date do not block migration', async () => {
   const f = fixture(); f.unrelated = [{ id: 9, entryDate: '2026-01-01' }];
   await f.engine().run(); assert.equal(f.creates, 1);
