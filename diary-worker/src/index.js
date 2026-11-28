@@ -441,6 +441,19 @@ async function handleApi(request, env, url, path, context, getSession, timing) {
     return listEntries(url, env, session);
   }
 
+  if (path === "/api/entries/trash-targets" && request.method === "GET") {
+    requireTrashAccess(session);
+    requirePermanentDeleteAccess(session);
+    const access = trashScopeAccess(session, "ts");
+    const result = await env.DB.prepare(`
+      SELECT e.id, e.revision FROM diary_entries e
+      WHERE e.household_id = ? AND e.status = 'published' AND e.deleted_at IS NOT NULL
+        AND EXISTS (SELECT 1 FROM diary_trash_scopes ts WHERE ts.entry_id = e.id AND ${access.clause})
+      ORDER BY e.id
+    `).bind(session.activeHouseholdId, ...access.bindings).all();
+    return json({ targets: result.results || [] });
+  }
+
   if (path === "/api/entries" && request.method === "POST") {
     requireEntryManagementAccess(session);
     return createEntry(request, env, session);

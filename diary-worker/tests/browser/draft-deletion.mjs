@@ -24,6 +24,9 @@ const contentTypes = {
 let draft = null;
 let deleteBodies = [];
 let photoDeletes = [];
+let trash = new Map();
+let trashDeletes = [];
+let firstTrashDelete;
 
 function resetData() {
   draft = {
@@ -43,6 +46,9 @@ function resetData() {
   };
   deleteBodies = [];
   photoDeletes = [];
+  trash = new Map();
+  trashDeletes = [];
+  firstTrashDelete = null;
 }
 
 async function jsonBody(request) {
@@ -86,9 +92,35 @@ const server = createServer(async (request, response) => {
       tags: []
     });
     if (apiPath === "/entries" && request.method === "GET") {
+      if (url.searchParams.get("trash") === "1") {
+        const query = url.searchParams.get("q") || "";
+        const matches = [...trash.values()].filter(entry => entry.title.includes(query));
+        const offset = Number(url.searchParams.get("offset") || 0);
+        const limit = Number(url.searchParams.get("limit") || 20);
+        return sendJson(response, { entries: matches.slice(offset, offset + limit), hasMore: offset + limit < matches.length });
+      }
       const wantsDraft = url.searchParams.get("draft") === "1";
       const entries = draft && (draft.status === "draft") === wantsDraft ? [draft] : [];
       return sendJson(response, { entries, hasMore: false });
+    }
+    if (apiPath === "/entries/trash-targets" && request.method === "GET") {
+      return sendJson(response, { targets: [...trash.values()].map(({ id, revision }) => ({ id, revision })) });
+    }
+    const permanent = apiPath.match(/^\/entries\/(\d+)\/permanent$/);
+    if (permanent && request.method === "DELETE") {
+      const id = Number(permanent[1]);
+      const { revision } = await jsonBody(request);
+      trashDeletes.push({ id, revision });
+      if (firstTrashDelete) {
+        const { started, released } = firstTrashDelete;
+        firstTrashDelete = null;
+        started.resolve();
+        await released.promise;
+      }
+      const entry = trash.get(id);
+      if (!entry || entry.revision !== revision) return sendJson(response, { error: "revision conflict" }, 409);
+      trash.delete(id);
+      return sendJson(response, { ok: true });
     }
     if (apiPath === "/entries/42" && request.method === "GET") {
       return draft ? sendJson(response, { entry: draft }) : sendJson(response, { error: "not found" }, 404);
@@ -206,6 +238,77 @@ async function verifyTitleOnlyEdit(browser, label, contextOptions, status) {
   } finally { await context.close(); }
 }
 
+async function verifyEmptyTrash(browser, label, contextOptions) {
+  resetData();
+  const fixture = id => ({ ...draft, id, title: `ゴミ箱の日記 ${id}`, status: "published", deletedAt: "2026-11-27T10:00:00Z" });
+  const ids = Array.from({ length: 22 }, (_, index) => 101 + index);
+  for (const id of ids) trash.set(id, fixture(id));
+  const context = await browser.newContext({ serviceWorkers: "block", ...contextOptions });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  const released = Promise.withResolvers();
+  try {
+    await page.goto(`${origin}/diary/`);
+    const emptyTrash = page.locator("#empty-trash-button");
+    await page.locator("#trash-button").waitFor();
+    assert.ok(await emptyTrash.isHidden());
+    await page.locator("#trash-button").click();
+    await emptyTrash.waitFor();
+    const header = await page.locator(".diary-list-heading").boundingBox();
+    const button = await emptyTrash.boundingBox();
+    assert.ok(button.x > header.x && Math.abs(button.x + button.width - header.x - header.width) <= 1, `${label}: trash heading top right`);
+    assert.equal(await page.locator("#entry-list [data-entry-id]").count(), 20);
+    await page.locator("#diary-search-input").fill("122");
+    await page.waitForFunction(() => document.querySelectorAll("#entry-list [data-entry-id]").length === 1);
+    assert.equal(await page.locator("#entry-list [data-entry-id]").getAttribute("data-entry-id"), "122");
+
+    const dialog = page.locator("#delete-confirm-dialog");
+    const message = page.locator("#delete-confirm-message");
+    const confirm = page.locator("#delete-confirm-yes");
+    const cancel = page.locator("#delete-confirm-no");
+    await emptyTrash.click();
+    await page.waitForFunction(() => document.querySelector("#delete-confirm-message").textContent.includes("22件"));
+    assert.match(await message.textContent(), /復元できません/);
+    assert.equal(await cancel.textContent(), "キャンセル");
+    await page.goBack();
+    await dialog.waitFor({ state: "hidden" });
+    assert.deepEqual(trashDeletes, []);
+
+    await page.locator("#diary-search-clear").click();
+    await emptyTrash.click();
+    await page.waitForFunction(() => document.querySelector("#delete-confirm-message").textContent.includes("22件"));
+    trash.set(123, fixture(123));
+    trash.get(102).revision += 1;
+    const started = Promise.withResolvers();
+    firstTrashDelete = { started, released };
+    await confirm.click();
+    await started.promise;
+    assert.equal(await confirm.isDisabled(), true);
+    assert.equal(await cancel.isDisabled(), true);
+    await page.keyboard.press("Escape");
+    assert.equal(await dialog.isVisible(), true);
+    released.resolve();
+    await dialog.waitFor({ state: "hidden" });
+    await page.waitForFunction(() => document.querySelectorAll("#entry-list [data-entry-id]").length === 2);
+    assert.deepEqual(trashDeletes, ids.map(id => ({ id, revision: 3 })));
+    assert.deepEqual([...trash.keys()], [102, 123]);
+    assert.match(await page.locator("#toast").textContent(), /21件.*状態が変わった/);
+
+    await emptyTrash.click();
+    await page.waitForFunction(() => document.querySelector("#delete-confirm-message").textContent.includes("2件"));
+    await confirm.click();
+    await page.getByText("ゴミ箱は空です。", { exact: true }).waitFor();
+    assert.ok(await emptyTrash.isHidden());
+    assert.deepEqual(trashDeletes.slice(22), [{ id: 102, revision: 4 }, { id: 123, revision: 3 }]);
+    assert.deepEqual(errors, []);
+    console.log(`${label}: Empty Trash placement, complete count, cancellation, concurrent revisions, and empty state passed.`);
+  } finally {
+    released.resolve();
+    await context.close();
+  }
+}
+
 await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
 const origin = `http://127.0.0.1:${server.address().port}`;
 
@@ -216,6 +319,8 @@ try {
   try {
     await run(browser, "Desktop", { viewport: { width: 1280, height: 800 } });
     await run(browser, "Mobile", { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    await verifyEmptyTrash(browser, "Desktop", { viewport: { width: 1280, height: 800 } });
+    await verifyEmptyTrash(browser, "Mobile", { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
     for (const status of ["published", "draft"]) {
       await verifyTitleOnlyEdit(browser, "Desktop", { viewport: { width: 1280, height: 800 } }, status);
       await verifyTitleOnlyEdit(browser, "Mobile", { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }, status);

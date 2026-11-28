@@ -174,6 +174,27 @@ test('favorites, edit-draft publishing and trash/restore hydrate targets without
     await x.reader.ensureAll();assert.equal(x.reader.entry('1').photos.length,1);assert.equal(x.reader.entry('2').isFavorite,true);
   }finally{x.close();}
 });
+test("empty-trash confirmation uses the verified current IDs and revisions without hydrating the trash", async () => {
+  const x = await setup(3);
+  try {
+    await x.writer.transition("2", "trash", 1);
+    await x.writer.transition("3", "trash", 1);
+    const session = { authenticated: true, canViewTrash: true, canPermanentlyDelete: false };
+    const api = createEncryptedDiaryApi(x.reader, { session });
+    await assert.rejects(api("/entries/trash-targets"), { status: 403 });
+    session.canPermanentlyDelete = true;
+    const { targets } = await api("/entries/trash-targets");
+    assert.deepEqual(targets, [{ id: 2, revision: 2 }, { id: 3, revision: 2 }]);
+    assert.equal([...x.reader.records.values()].some(record => record.entry), false);
+    await x.writer.transition("2", "restore");
+    await assert.rejects(api("/entries/2/permanent", { method: "DELETE", body: { revision: 2 } }), { status: 409 });
+    await api("/entries/3/permanent", { method: "DELETE", body: { revision: 2 } });
+    assert.deepEqual((await api("/entries/trash-targets")).targets, []);
+    assert.equal(x.reader.records.get("2").row.state, "published");
+  } finally {
+    x.close();
+  }
+});
 test('invalid signatures reject the index; deferred document corruption rejects search instead of returning no matches',async()=>{
   const x=await setup(3);try {
     const snapshot=await x.reader.transport.snapshot('A',-1),native=x.reader.transport.snapshot;

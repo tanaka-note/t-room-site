@@ -118,6 +118,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     initialEntriesAbortController: null,
     requestId: 0,
     deleteMode: null,
+    trashPurge: null,
     photoDeleteTarget: null,
     photoDeleteBusy: false,
     deletedPhotoIds: new Set(),
@@ -228,6 +229,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     deleteDraftButton: document.querySelector("#delete-draft-button"),
     restoreEntryButton: document.querySelector("#restore-entry-button"),
     permanentlyDeleteEntryButton: document.querySelector("#permanently-delete-entry-button"),
+    emptyTrashButton: document.querySelector("#empty-trash-button"),
     deleteConfirmDialog: document.querySelector("#delete-confirm-dialog"),
     deleteConfirmTitle: document.querySelector("#delete-confirm-title"),
     deleteConfirmMessage: document.querySelector("#delete-confirm-message"),
@@ -526,6 +528,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.deleteDraftButton.addEventListener("click", requestDraftDeletion);
     elements.restoreEntryButton.addEventListener("click", restoreActiveEntry);
     elements.permanentlyDeleteEntryButton.addEventListener("click", requestPermanentDeletion);
+    elements.emptyTrashButton.addEventListener("click", requestEmptyTrash);
     elements.deleteConfirmNo.addEventListener("click", closeDeleteConfirmation);
     elements.deleteConfirmYes.addEventListener("click", confirmEntryDeletion);
 
@@ -1346,11 +1349,12 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function renderEntries(appendFrom = 0) {
+    updateEmptyTrashButton();
     if (!state.entries.length) {
       const message = state.drafts
         ? "下書きはありません。"
         : state.trash
-        ? "ゴミ箱は空です。"
+        ? (state.query ? "条件に合う日記はありません。" : "ゴミ箱は空です。")
         : state.favoritePage
           ? "お気に入りの日記はまだありません。"
         : isMonthlyView()
@@ -1793,8 +1797,8 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     });
     dialogs.register("editor-leave-dialog", { guard: () => !state.editorSaving });
     dialogs.register("delete-confirm-dialog", {
-      guard: () => !state.photoDeleteBusy,
-      onClose: () => { state.deleteMode = null; state.photoDeleteTarget = null; }
+      guard: () => !state.photoDeleteBusy && !state.trashPurge?.running,
+      onClose: finishDeleteConfirmation
     });
     dialogs.register("date-wheel-dialog", { backdrop: applyDateWheel, onClose: () => {
       for (const timer of Object.values(state.dateWheelTimers)) window.clearTimeout(timer);
@@ -3815,6 +3819,61 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     dialogs.open("delete-confirm-dialog");
   }
 
+  function canEmptyTrash() {
+    return state.trash && state.canViewTrash && state.canPermanentlyDelete;
+  }
+
+  function updateEmptyTrashButton() {
+    elements.emptyTrashButton.hidden = !canEmptyTrash() || !state.entries.length;
+  }
+
+  async function requestEmptyTrash() {
+    if (!canEmptyTrash() || elements.emptyTrashButton.hidden || state.deleteMode) return;
+    const plan = { generation: sessionGeneration, controller: new AbortController(), targets: [], running: false };
+    state.trashPurge = plan;
+    state.deleteMode = "empty-trash";
+    elements.deleteConfirmTitle.textContent = "ゴミ箱を空にしますか？";
+    elements.deleteConfirmMessage.textContent = "削除対象を確認しています…";
+    elements.deleteConfirmNo.textContent = "キャンセル";
+    setBusy(elements.deleteConfirmYes, true, "すべて完全に削除");
+    if (!dialogs.open("delete-confirm-dialog")) {
+      finishDeleteConfirmation();
+      return;
+    }
+    try {
+      const { targets } = await api("/entries/trash-targets", { signal: plan.controller.signal });
+      if (state.trashPurge !== plan || sessionGeneration !== plan.generation) return;
+      if (!Array.isArray(targets) || targets.some(({ id, revision }) =>
+        !Number.isSafeInteger(id) || id < 1 || !Number.isSafeInteger(revision) || revision < 1)) {
+        throw new Error("削除対象を確認できませんでした。");
+      }
+      if (!targets.length) {
+        elements.deleteConfirmMessage.textContent = "ゴミ箱は空です。";
+        await loadEntries(true);
+        return;
+      }
+      plan.targets = targets;
+      elements.deleteConfirmMessage.textContent = `ゴミ箱内の${targets.length.toLocaleString("ja-JP")}件の日記を完全に削除します。削除した日記は復元できません。`;
+      elements.deleteConfirmYes.disabled = false;
+    } catch (error) {
+      if (state.trashPurge === plan && sessionGeneration === plan.generation) {
+        elements.deleteConfirmMessage.textContent = error.message;
+      }
+    }
+  }
+
+  function finishDeleteConfirmation() {
+    if (state.trashPurge) {
+      state.trashPurge.controller.abort();
+      state.trashPurge = null;
+      elements.deleteConfirmNo.disabled = false;
+      elements.deleteConfirmNo.textContent = "いいえ";
+      elements.deleteConfirmYes.disabled = false;
+    }
+    state.deleteMode = null;
+    state.photoDeleteTarget = null;
+  }
+
   function closeDeleteConfirmation() {
     return dialogs.close("delete-confirm-dialog");
   }
@@ -3822,10 +3881,52 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   async function confirmEntryDeletion() {
     const mode = state.deleteMode;
     if (mode === "photo") return confirmPhotoDeletion();
+    if (mode === "empty-trash") return permanentlyDeleteTrash();
     if (!await closeDeleteConfirmation()) return;
     if (mode === "draft") await deleteActiveDraft();
     else if (mode === "permanent") await permanentlyDeleteActiveEntry();
     else if (mode === "trash") await moveActiveEntryToTrash();
+  }
+
+  function permanentlyDeleteTrashEntry({ id, revision }) {
+    return api(`/entries/${id}/permanent`, { method: "DELETE", body: { revision } });
+  }
+
+  async function permanentlyDeleteTrash() {
+    const plan = state.trashPurge;
+    if (!canEmptyTrash() || !plan?.targets.length || plan.running || sessionGeneration !== plan.generation) return;
+    const targets = plan.targets;
+    plan.targets = [];
+    plan.running = true;
+    elements.deleteConfirmNo.disabled = true;
+    setBusy(elements.deleteConfirmYes, true, "完全削除中…");
+    let deleted = 0;
+    let failure = null;
+    for (const target of targets) {
+      if (state.trashPurge !== plan || sessionGeneration !== plan.generation) return;
+      try {
+        await permanentlyDeleteTrashEntry(target);
+        deleted += 1;
+      } catch (error) {
+        if (error.status === 404 || error.status === 409) continue;
+        failure = error;
+        break;
+      }
+    }
+    if (state.trashPurge !== plan || sessionGeneration !== plan.generation) return;
+    plan.running = false;
+    elements.deleteConfirmNo.disabled = false;
+    const result = `${deleted.toLocaleString("ja-JP")}件の日記を完全に削除しました。`;
+    const message = failure ? `${result} 残りの処理を中断しました。${failure.message}`
+      : deleted < targets.length ? `${result} 状態が変わった日記は削除を見送りました。` : result;
+    elements.deleteConfirmMessage.textContent = message;
+    await closeDeleteConfirmation();
+    if (sessionGeneration !== plan.generation) return;
+    showToast(message);
+    await loadEntries(true);
+    if (sessionGeneration === plan.generation && state.trash && elements.emptyTrashButton.hidden) {
+      elements.trashButton.focus({ preventScroll: true });
+    }
   }
 
   async function deleteActiveDraft() {
@@ -3876,10 +3977,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     if (!entry || !state.canPermanentlyDelete || !entry.deletedAt) return;
     setBusy(elements.permanentlyDeleteEntryButton, true, "完全削除中...");
     try {
-      await api(`/entries/${entry.id}/permanent`, {
-        method: "DELETE",
-        body: { revision: entry.revision }
-      });
+      await permanentlyDeleteTrashEntry(entry);
       closeEntryDialog();
       showToast("日記を完全に削除しました。");
       await Promise.all([loadMeta(), loadEntries(true)]);
@@ -4029,6 +4127,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     }
     elements.monthNavigation.hidden = !isMonthlyView();
     updateSortButton(elements.entrySearchSort, entrySearchOrder(), searching);
+    updateEmptyTrashButton();
   }
 
   function updateSearchStatus() {
@@ -4535,8 +4634,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.drafts = false;
     state.draftCount = 0;
     state.activeEntry = null;
-    state.deleteMode = null;
-    state.photoDeleteTarget = null;
+    finishDeleteConfirmation();
     state.photoDeleteBusy = false;
     state.deletedPhotoIds.clear();
     state.photoDeletionUpdates.clear();
