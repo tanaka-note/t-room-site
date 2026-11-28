@@ -17,7 +17,7 @@
     "@simplewebauthn/server": "13.3.2"
   },
   "devDependencies": {
-    "sql.js": "1.16.0",
-    "wrangler": "^4.121.0"
+    "sql.js": "1.17.0",
+    "wrangler": "^4.168.0"
   }
 }
