@@ -114,6 +114,17 @@ export function createEncryptedDiaryApi(client,{session,nativeApi,media,onHouseh
         return {session,households,meta:client.meta(),entries};
       })(), signal);
     }
+    if (url.pathname === '/entries/trash-targets' && method === 'GET') {
+      if (!session.canViewTrash || !session.canPermanentlyDelete) fail(403, 'AccessDenied');
+      const { signal } = options;
+      signal?.throwIfAborted();
+      await waitForDiaryRead(synchronize(), signal);
+      const targets = [];
+      for (const { row } of client.records.values()) {
+        if (row.state === 'trash') targets.push({ id: Number(row.id), revision: row.revision });
+      }
+      return { targets };
+    }
     // Foreground reads must observe other devices. Concurrent metadata/list
     // reads share one synchronization, but no authorization result is cached.
     if(!initialized||method==='GET')await synchronize();

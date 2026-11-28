@@ -128,10 +128,20 @@ try {
   for (const key of ["sessionId", "startedAt", "accountVersion", "version", "serviceLinkId", "passkeySessionEpoch"]) assert.equal(renewed[key], original[key]);
   assert.equal((await request("/bootstrap", reader, { userAgent: "Mozilla/5.0 Line/15.0.0" })).response.status, 403);
   const owner = await login("main-admin");
+  local.db.exec(`UPDATE diary_entries SET deleted_at = CURRENT_TIMESTAMP WHERE id = 8;
+    INSERT INTO diary_entries(id,entry_date,title,content,status,household_id,deleted_at,revision) VALUES
+    (10,'2026-10-01','別世帯ゴミ箱','本文','published','chiharu-household',CURRENT_TIMESTAMP,3);
+    INSERT INTO diary_trash_scopes(entry_id,owner_account_id,household_id,scope_type,entry_revision) VALUES
+    (4,'main-admin','tanaka-household','admin-retention',1),
+    (8,'wife-admin','tanaka-household','personal',1),
+    (10,'chiharu-admin','chiharu-household','personal',3);`);
+  assert.equal((await request("/entries/trash-targets", reader)).response.status, 403);
+  assert.deepEqual((await request("/entries/trash-targets", owner)).data.targets, [{ id: 4, revision: 1 }]);
   const switched = await request("/households/select", owner, { body: { householdId: "chiharu-household" } });
   const other = await request("/bootstrap", switched.cookie);
   assert.equal(other.data.session.activeHouseholdId, "chiharu-household");
   assert.deepEqual(other.data.entries.entries.map(entry => entry.id), [2]);
+  assert.deepEqual((await request("/entries/trash-targets", switched.cookie)).data.targets, [{ id: 10, revision: 3 }]);
   assert.equal(other.data.households.households.length, 2);
   assert.equal((await request("/households/select", reader, { body: { householdId: "chiharu-household" } })).response.status, 403);
   for (const values of [{ exp: 1 }, { version: "2" }, { accountVersion: 2 }, { role: "admin" }, { passkeySessionEpoch: 2 }, { serviceLinkId: "other" }, { rollingSessionVersion: 2 }]) {

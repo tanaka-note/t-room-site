@@ -932,6 +932,12 @@ a.diary-tag:focus-visible,
   color: var(--rose);
 }
 
+.empty-trash-button {
+  flex-shrink: 0;
+  min-height: 44px;
+  white-space: nowrap;
+}
+
 .text-button {
   min-height: auto;
   border: 0;

@@ -61,8 +61,8 @@
   <meta name="robots" content="noindex,nofollow,noarchive">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#50647d">
-  <meta name="troom-app-build" content="diary-0cd349d6bd94">
-  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-0cd349d6bd94">
+  <meta name="troom-app-build" content="diary-f9f5ab4be2be">
+  <meta name="troom-service-worker" content="/diary/service-worker.js?v=diary-f9f5ab4be2be">
   <meta name="troom-auto-update" content="enabled">
   <meta name="application-name" content="日記">
   <meta name="mobile-web-app-capable" content="yes">
@@ -70,13 +70,13 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="日記">
   <title>日記</title>
-  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-0cd349d6bd94">
+  <link rel="manifest" href="/diary/manifest.webmanifest?v=diary-f9f5ab4be2be">
   <link rel="icon" type="image/png" sizes="64x64" href="/diary/icons/favicon-64-v4.png?v=5">
   <link rel="apple-touch-icon" sizes="180x180" href="/diary/icons/apple-touch-icon-v3.png?v=4">
-  <link rel="stylesheet" href="/diary/diary.css?v=diary-0cd349d6bd94">
-  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-0cd349d6bd94">
-  <link rel="stylesheet" href="/diary/tlain-login.css?v=diary-0cd349d6bd94">
-  <script src="/diary/tlain-login.js?v=diary-0cd349d6bd94" defer></script>
+  <link rel="stylesheet" href="/diary/diary.css?v=diary-f9f5ab4be2be">
+  <link rel="stylesheet" href="/diary/troom-date-picker.css?v=diary-f9f5ab4be2be">
+  <link rel="stylesheet" href="/diary/tlain-login.css?v=diary-f9f5ab4be2be">
+  <script src="/diary/tlain-login.js?v=diary-f9f5ab4be2be" defer></script>
 </head>
 <body>
   <main id="boot-view" class="login-shell tlain-login-view" aria-label="日記を準備中" aria-busy="true">
@@ -215,6 +215,7 @@
                 <button id="entry-search-sort" class="header-icon-button sort-order-button" type="button" aria-label="新しい順で表示中。古い順に並べ替え" title="新しい順で表示中。古い順に並べ替え" aria-pressed="false" hidden>
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16m-4-4 4 4 4-4M13 5h8M13 10h6M13 15h4"></path></svg>
                 </button>
+                <button id="empty-trash-button" class="danger-button empty-trash-button" type="button" hidden>すべて削除</button>
               </div>
               <nav id="month-navigation" class="month-navigation" aria-label="表示する月を切り替え">
                 <button id="current-month-button" class="quiet-button current-month-button" type="button">今月</button>
@@ -330,12 +331,12 @@
     </section>
   </dialog>
 
-  <dialog id="delete-confirm-dialog" class="entry-dialog">
+  <dialog id="delete-confirm-dialog" class="entry-dialog" aria-labelledby="delete-confirm-title" aria-describedby="delete-confirm-message">
     <section class="entry-detail">
       <div class="dialog-head">
         <h2 id="delete-confirm-title">本当に削除しますか？</h2>
       </div>
-      <p id="delete-confirm-message" class="field-help"></p>
+      <p id="delete-confirm-message" class="field-help" aria-live="polite"></p>
       <div class="dialog-actions">
         <button id="delete-confirm-no" class="quiet-button" type="button">いいえ</button>
         <button id="delete-confirm-yes" class="danger-button" type="button">はい</button>
@@ -581,8 +582,8 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="/assets/pwa-auto-update.js?v=diary-0cd349d6bd94" defer></script>
-  <script src="/security/passkey-client.js?v=diary-0cd349d6bd94" defer></script>
-  <script src="/diary/diary-bootstrap.js?v=diary-0cd349d6bd94" defer></script>
+  <script src="/assets/pwa-auto-update.js?v=diary-f9f5ab4be2be" defer></script>
+  <script src="/security/passkey-client.js?v=diary-f9f5ab4be2be" defer></script>
+  <script src="/diary/diary-bootstrap.js?v=diary-f9f5ab4be2be" defer></script>
 </body>
 </html>
