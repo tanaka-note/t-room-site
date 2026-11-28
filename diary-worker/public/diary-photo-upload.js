@@ -238,13 +238,18 @@ export function createPhotoUploadManager({ state, api, basePath, getTargetEntryI
     }
   }
 
-  async function ensurePhotosUploaded(photos) {
-    const alreadyFailed = new Set(photos.filter(photo => !photo.uploadPromise && photo.uploadState !== "uploaded"));
-    await Promise.all(photos.map((photo) => photo.uploadPromise || Promise.resolve()));
-    const failed = photos.filter((photo) => alreadyFailed.has(photo) && photo.uploadState !== "uploaded");
-    if (failed.length) {
-      await Promise.all(failed.map((photo) => queueBackgroundPhotoUpload(photo)));
-    }
+  async function ensurePhotosUploaded(photos, onProgress = () => {}) {
+    let sent = photos.filter(photo => photo.uploadState === "uploaded").length;
+    const waitForUpload = async (photo, task) => {
+      const wasUploaded = photo.uploadState === "uploaded";
+      await task;
+      if (!wasUploaded && photo.uploadState === "uploaded") onProgress(++sent, photos.length);
+    };
+    const alreadyFailed = photos.filter(photo => !photo.uploadPromise && photo.uploadState !== "uploaded");
+    onProgress(sent, photos.length);
+    await Promise.all(photos.filter(photo => photo.uploadPromise).map(photo => waitForUpload(photo, photo.uploadPromise)));
+    const failed = alreadyFailed.filter(photo => photo.uploadState !== "uploaded");
+    await Promise.all(failed.map(photo => waitForUpload(photo, queueBackgroundPhotoUpload(photo))));
     const remaining = photos.filter((photo) => photo.uploadState !== "uploaded");
     if (remaining.length) {
       throw new Error(remaining.map((photo) => `${photo.fileName}：${photo.uploadError?.message || "画像を保存できませんでした。"}`).join(" / "));
@@ -273,14 +278,14 @@ export function createPhotoUploadManager({ state, api, basePath, getTargetEntryI
   }
 
   async function commitStagedPhotos(entryId, photos) {
-    if (!state.photoUploadSessionId) return [];
+    if (!state.photoUploadSessionId) return { photos: [] };
     const result = await api(`/photo-upload-sessions/${state.photoUploadSessionId}/commit`, {
       method: "POST",
       body: { entryId, photoIds: photos.map((photo) => photo.id) },
       preserveEditor: true
     });
     state.photoUploadCommitted = true;
-    return result.photos || [];
+    return { photos: result.photos || [], entryRevision: result.entryRevision };
   }
 
   async function cancelEditorPhotoUploadSession() {

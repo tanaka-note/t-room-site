@@ -121,9 +121,44 @@ try {
     finally { writer.lock(); }
   }
 
-  // Match the reported operation: remove two saved photos, add 31 photos to
-  // an otherwise empty diary, then publish its draft through the real Worker.
-  const id = await createPhotoEntry(2, 'draft', 'initial');
+  // Hold the real requests to observe each stage of a two-photo save.
+  const staging = Array.from({length: 2}, () => Promise.withResolvers());
+  const provisionalSave = Promise.withResolvers();
+  let stagedRequests = 0;
+  const uploadRoute = '**/encryption/uploads/*/photos';
+  const mutationRoute = '**/encryption/mutation';
+  await page.route(uploadRoute, async route => {
+    const current = staging[stagedRequests++];
+    if (current) await current.promise;
+    await route.continue();
+  });
+  await page.route(mutationRoute, async route => {
+    await provisionalSave.promise;
+    await route.continue();
+  }, { times: 1 });
+  const saveTiming = page.waitForEvent('console', { predicate: message => message.text().startsWith('Diary save timing ') });
+  void saveTiming.catch(() => {});
+  const creating = createPhotoEntry(2, 'draft', 'initial');
+  void creating.catch(() => {});
+  try {
+    await page.locator('#editor-message', { hasText: '写真を送信中 0/2枚' }).waitFor();
+    staging[0].resolve();
+    await page.locator('#editor-message', { hasText: '写真を送信中 1/2枚' }).waitFor();
+    staging[1].resolve();
+    await page.locator('#editor-message', { hasText: '下書きを保存中' }).waitFor();
+  } finally {
+    for (const gate of staging) gate.resolve();
+    provisionalSave.resolve();
+    await page.unroute(uploadRoute);
+  }
+  const id = await creating;
+  const timing = JSON.parse((await saveTiming).text().slice('Diary save timing '.length));
+  const entryWrites = timing.requests.filter(({ stage, method }) => stage === 'entry' && method !== 'GET');
+  assert.deepEqual(entryWrites.map(({ method, status }) => [method, status]), [['POST', 200], ['PUT', 200]],
+    'ordinary encrypted photo saves must finalize on the first attempt');
+  assert.equal(timing.requests.filter(({ stage, method }) => stage === 'entry' && method === 'GET').length, 1,
+    'only the list refresh should read entries after an uncontested save');
+  // Replace the two saved photos with 31 photos and publish the draft.
   const oldIds = idsFor(id);
   await editEntry(id); await removePhotos(2); await addPhotos(31, 'replacement');
   assert.equal(await page.locator('#editor-photo-list .editor-photo-card').count(), 31);
