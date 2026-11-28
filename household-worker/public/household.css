@@ -118,6 +118,7 @@
 
 /* Keep the login action identical to the billing passkey button. */
 #view-transactions>.summary{grid-auto-rows:1fr}
+.summary .summary-label-suffix{display:inline;white-space:nowrap}
 /* Account totals occupy a full row; detail order is explicit and keyboard/touch accessible. */
 #view-accounts>.summary{grid-template-columns:minmax(0,1fr)}
 #view-accounts>.summary strong{font-size:clamp(24px,6vw,34px);white-space:nowrap}

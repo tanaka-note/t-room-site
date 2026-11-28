@@ -27,9 +27,9 @@ export async function verifyEntryType(browser,url,initial,chooseDate,screens){
     const values=await ids();assert.equal(values.length,count);assert.ok(values.every(id=>id.startsWith(type+'-')));
    }
    const cards=page.locator('#view-transactions>.summary>*');
-   const comparisons=()=>cards.locator('strong').allTextContents().then(values=>values.slice(3));
-   assert.deepEqual(await cards.locator('span').allTextContents(),['収入','支出','収支','対前月比','対前年比','年間累計収支']);
-   assert.deepEqual(await comparisons(),['+2,030円','+2,550円','2,120円']);
+   const comparisons=()=>cards.locator('strong').allTextContents().then(values=>values.slice(3).map(value=>value.normalize('NFKC')));
+   assert.deepEqual(await cards.locator(':scope > span').allTextContents(),['収入','支出','収支','対前月比（収支）','対前年比（収支）','年間累計収支']);
+   assert.deepEqual(await comparisons(),['+¥2,030','+¥2,550','¥2,120']);
    const totals=await cards.locator('strong').allTextContents(),summary=await page.locator('#category-summary').textContent();
    await selected('expense',200);assert.equal(await page.locator('#entry-display').textContent(),'200 / 205件を表示');
    assert.equal(await page.locator('#net').evaluate(n=>n.closest('button,[role=button]')),null);
@@ -43,21 +43,22 @@ export async function verifyEntryType(browser,url,initial,chooseDate,screens){
    assert.deepEqual(await page.locator('#view-transactions .summary strong').allTextContents(),totals);assert.equal(await page.locator('#category-summary').textContent(),summary);
    await page.locator('#refresh').click();await selected('income',200);
    await page.locator('#period-mode').selectOption('year');await selected('income',200);assert.equal(await page.locator('#entry-display').textContent(),'200 / 207件を表示');
-   assert.deepEqual(await comparisons(),['ー','+1,520円','2,020円']);
+   assert.deepEqual(await comparisons(),['ー','+¥1,520','¥2,020']);
    await expense.click();assert.equal(await page.locator('#period-mode').inputValue(),'year');await selected('expense',200);
    await page.locator('#period-mode').selectOption('month');await page.locator('#search').fill('Sample income 1');await selected('expense',0);assert.equal(await page.locator('#empty-entries').isVisible(),true);assert.equal(await page.locator('#more-entries').isVisible(),false);
    await income.click();assert.equal(await page.locator('#search').inputValue(),'Sample income 1');assert.equal(await page.locator('#period').inputValue(),'2026-09');assert.ok((await ids()).length>0);assert.equal(await page.locator('#empty-entries').isVisible(),false);
    await page.locator('#search').fill('');const parent=state.data.categories.find(c=>c.id===category('expense')).parent;
    await page.locator('#category-filter').selectOption(parent);await selected('income',0);await expense.click();assert.equal(await page.locator('#category-filter').inputValue(),parent);await selected('expense',200);
-   assert.deepEqual(await comparisons(),['-2,050円','-1,550円','-2,050円']);
+   assert.deepEqual(await comparisons(),['-¥2,050','-¥1,550','-¥2,050']);
    await page.locator('#search').fill('No matching sample');
-   assert.deepEqual(await comparisons(),['0円','0円','0円']);
+   assert.deepEqual(await comparisons(),['¥0','¥0','¥0']);
    await page.locator('#search').fill('');
    await page.locator('#category-filter').selectOption('');
    await chooseDate(page,'period','2026-01');
-   assert.deepEqual(await comparisons(),['-950円','ー','50円']);
+   assert.deepEqual(await comparisons(),['-¥950','ー','¥50']);
+   assert.equal(await page.locator('#net-year-to-date').textContent(),await page.locator('#net').textContent());
    await chooseDate(page,'period','2026-08');
-   assert.deepEqual(await comparisons(),['ー','ー','70円']);
+   assert.deepEqual(await comparisons(),['ー','ー','¥70']);
    await chooseDate(page,'period','2026-09');
    await page.locator('#category-filter').selectOption('');await income.click();await page.locator('[data-view=accounts]').click();await page.goBack();await selected('income',200);
    if(width<700){await page.setViewportSize({width:320,height:900});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));}
@@ -73,7 +74,7 @@ export async function verifyEntryType(browser,url,initial,chooseDate,screens){
    await page.locator('#view-transactions .summary').screenshot({path:resolve(screens,`entry-type-${role}-${width}.png`)});
    await page.reload();await page.locator('#app-view').waitFor({state:'visible'});await chooseDate(page,'period','2026-09');await selected('expense',200);
    await income.click();await page.evaluate(()=>dispatchEvent(new Event('troom-session-expired')));await page.locator('#login-view').waitFor({state:'visible'});await selected('expense',0);
-   assert.deepEqual(await comparisons(),['ー','ー','0円']);
+   assert.deepEqual(await comparisons(),['ー','ー','¥0']);
    assert.equal(writes,0);assert.deepEqual(errors,[]);
   }finally{await context.close();}
  }
