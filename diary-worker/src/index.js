@@ -834,6 +834,7 @@ async function readEntries(url, env, session) {
     bindings.push(tag);
   }
 
+  const direction = url.searchParams.get("order") === "oldest" ? "ASC" : "DESC";
   const statement = `
     SELECT
       e.id, e.entry_date, e.last_published_at, e.title, e.content, e.content_format, e.weather, e.author_id, e.author_name, e.created_at, e.updated_at,
@@ -851,7 +852,7 @@ async function readEntries(url, env, session) {
       ), '[]') AS tags
     FROM diary_entries e
     WHERE ${conditions.join(" AND ")}
-    ORDER BY ${draft ? "e.updated_at DESC, e.id DESC" : "e.entry_date DESC, e.last_published_at DESC, e.id DESC"}
+    ORDER BY ${draft ? "e.updated_at DESC, e.id DESC" : `e.entry_date ${direction}, e.last_published_at ${direction}, e.id ${direction}`}
     LIMIT ? OFFSET ?
   `;
   bindings.push(limit + 1, offset);

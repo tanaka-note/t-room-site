@@ -39,6 +39,11 @@ const photoRequests = [];
 entries.push({ ...entries[0], id: 44, title: "タイトル限定", content: "本文の先頭。".repeat(60), contentFormat: null, photos: [] });
 entries.push({ ...entries[0], id: 45, title: "タグ一致日記", content: "海辺で過ごした。", contentFormat: null, photos: [],
   tags: ["家族旅行", "旅の記録", "境界前", "境界後", "A+B%_<b>😀", "abc"] });
+for (let day = 1; day <= 24; day += 1) {
+  entries.push({ ...entries[44], id: 45 + day, entryDate: `2026-09-${String(day).padStart(2, "0")}`,
+    title: day === 23 ? "日付検索だけで一致" : "並び順の確認", content: "検索順の確認用本文",
+    tags: day === 1 ? ["並び順テストタグ"] : [] });
+}
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, "http://127.0.0.1");
   if (url.pathname.startsWith("/diary/api/")) {
@@ -53,8 +58,13 @@ const server = createServer(async (request, response) => {
       requests.push(Object.fromEntries(url.searchParams));
       const words = (url.searchParams.get("q") || "").trim().split(/\s+/).filter(Boolean);
       const tag = url.searchParams.get("tag");
-      const source = entries.filter((entry) => (!tag || entry.tags.includes(tag)) && words.every((word) =>
+      const from = url.searchParams.get("dateFrom");
+      const to = url.searchParams.get("dateTo");
+      const source = entries.filter((entry) => (!tag || entry.tags.includes(tag)) &&
+        (!from || entry.entryDate >= from) && (!to || entry.entryDate <= to) && words.every((word) =>
         entry.title.includes(word) || entry.content.includes(word) || entry.tags.some((value) => value.includes(word))));
+      const order = url.searchParams.get("order");
+      if (order) source.sort((a, b) => order === "oldest" ? a.entryDate.localeCompare(b.entryDate) : b.entryDate.localeCompare(a.entryDate));
       const offset = Number(url.searchParams.get("offset") || 0);
       const limit = Number(url.searchParams.get("limit") || 20);
       return sendJson(response, { entries: source.slice(offset, offset + limit), hasMore: offset + limit < source.length });
@@ -282,6 +292,60 @@ async function run(browserType, name, options = {}) {
     assert.equal(requests.at(-1).q, undefined);
     assert.equal(await page.locator("#entry-list mark").count(), 0);
     assert.equal(await page.locator("#entry-list .diary-entry-button > p").first().textContent(), normalSummary);
+
+    const sortButton = page.locator("#entry-search-sort");
+    assert.equal(await sortButton.isVisible(), false);
+    const cards = page.locator("#entry-list [data-entry-id]");
+    async function expectOrder(order, firstId, count = 20) {
+      await page.waitForFunction(({ firstId, count }) => {
+        const cards = document.querySelectorAll("#entry-list [data-entry-id]");
+        return cards.length === count && cards[0].dataset.entryId === String(firstId);
+      }, { firstId, count });
+      assert.equal(requests.at(-1).order, order);
+      assert.equal(await sortButton.getAttribute("aria-pressed"), String(order === "oldest"));
+    }
+
+    await search("並び順の確認");
+    await expectOrder("newest", 69);
+    const box = await sortButton.boundingBox();
+    const heading = await page.locator(".diary-list-heading").boundingBox();
+    assert.ok(box.x > heading.x && Math.abs(box.x + box.width - heading.x - heading.width) <= 1, `${name}: sort button at the right of the heading`);
+    await sortButton.click();
+    await expectOrder("oldest", 46);
+    await page.locator("#diary-search-clear").click();
+    await sortButton.waitFor({ state: "hidden" });
+
+    await page.locator("#diary-date-to").evaluate(to => {
+      document.querySelector("#diary-date-from").value = "2026-09-01";
+      to.value = "2026-09-23";
+      to.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await expectOrder("oldest", 46);
+    await sortButton.click();
+    await expectOrder("newest", 68);
+    await search("並び順の確認");
+    await expectOrder("oldest", 46);
+    await sortButton.click();
+    await expectOrder("newest", 67);
+    await page.locator("#load-more-button").click();
+    await expectOrder("newest", 67, 22);
+    assert.deepEqual(await cards.evaluateAll(nodes => nodes.map(node => Number(node.dataset.entryId))),
+      Array.from({ length: 22 }, (_, index) => 67 - index));
+    await cards.last().click();
+    await page.waitForSelector("#entry-dialog[open]");
+    await page.goBack();
+    await page.locator("#entry-dialog").waitFor({ state: "hidden" });
+    await expectOrder("newest", 67, 22);
+    await page.locator('#entry-list .diary-tag[data-tag="並び順テストタグ"]').click();
+    await page.waitForURL("**/diary/tag/**");
+    await page.waitForFunction(() => document.querySelectorAll("#entry-list [data-entry-id]").length === 1);
+    await page.goBack();
+    await expectOrder("newest", 67, 22);
+    await page.locator("#diary-date-reset").click();
+    await expectOrder("newest", 69);
+    await page.locator("#clear-filters-button").click();
+    await sortButton.waitFor({ state: "hidden" });
+
     await search("旅行", 1);
     await page.locator('#entry-list .diary-tag[data-tag="家族旅行"] mark').click();
     await page.waitForURL("**/diary/tag/**");
@@ -291,7 +355,7 @@ async function run(browserType, name, options = {}) {
     assert.equal(await page.locator("#entry-list .diary-tag mark").count(), 0);
     assert.deepEqual(errors, []);
     await context.close();
-    console.log(`${name}: search excerpts, highlight formatting/links/photos, 20-item paging and Back passed.`);
+    console.log(`${name}: search ordering, excerpts, highlighting, paging and Back passed.`);
   } finally {
     await browser.close();
   }
