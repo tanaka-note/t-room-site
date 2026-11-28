@@ -227,13 +227,15 @@ export default {
           // the dedicated origin or forward POST bodies across that boundary.
           const path=url.pathname.startsWith('/diary/tag/')?'/diary/':url.pathname;
           const destination=new URL(path,diaryEncryptionOrigin(env));
-          const migrationYear=url.searchParams.get('takeout-migration');
-          if(path==='/diary/'&&['2021','2022','2023','2024','2025','2026'].includes(migrationYear))destination.searchParams.set('takeout-migration',migrationYear);
           return secureResponse(Response.redirect(destination,308));
         }
       }
       if (request.method !== "GET" && request.method !== "HEAD") {
         return secureResponse(json({ error: "Method not allowed" }, 405));
+      }
+
+      if (path === "/" && url.searchParams.has("takeout-migration")) {
+        return secureResponse(Response.redirect(new URL(`${BASE_PATH}/`, url.origin), 308));
       }
 
       return secureResponse(await serveAsset(request, env, url, path));
@@ -648,9 +650,6 @@ async function serveAsset(request, env, url, path) {
     ["/diary.css", "/diary.css"],
     ["/diary.js", "/diary.js"],
     ["/diary-encryption.js","/diary-encryption.js"],
-    ["/photo-migration.js", "/photo-migration.js"],
-    ["/photo-migration-core.js", "/photo-migration-core.js"],
-    ["/photo-migration.css", "/photo-migration.css"],
     ["/diary-bootstrap.js", "/diary-bootstrap.js"],
     ["/diary-existing-photo-migration.js", "/diary-existing-photo-migration.js"],
     ["/password-login-audit.js", "/password-login-audit.js"],

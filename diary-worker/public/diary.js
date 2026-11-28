@@ -4,15 +4,6 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   let encryptedNavigationType=null,encryptedReferrer='',lastEncryptedSession=initialSession;
   let encryptedRoute=location.pathname;
   let remoteRefreshPending=false,remoteRefreshRunning=false;
-  const migrationYear = new URL(location.href).searchParams.get("takeout-migration");
-  if (["2021", "2022", "2023", "2024", "2025", "2026"].includes(migrationYear)) {
-    if (!initialSession?.authenticated || !initialSession.canManageEntries) throw new Error("日記を作成できるアカウントでログインしてください。");
-    const migrationUrl = new URL(`photo-migration.js${new URL(import.meta.url).search}`, import.meta.url);
-    await (await import(migrationUrl.href)).mountMigration(initialSession, Number(migrationYear), encryptionRuntime);
-    encryptionRuntime?.presented?.();
-    onReady();
-    return;
-  }
   // Keep the shared module on the same build URL as this app shell, including offline fallback.
   const scriptUrl = new URL(import.meta.url);
   const photoImages = (await import(new URL(`diary-photo-images.js${scriptUrl.search}`, scriptUrl).href)).createPhotoImages(encryptionRuntime);
