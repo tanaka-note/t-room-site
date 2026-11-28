@@ -69,6 +69,7 @@ export class PhotoMigration {
     const session = await this.api('/session');
     if (!session.authenticated || !session.canManageEntries || session.activeHouseholdId !== this.destination.householdId
       || (session.loginId || null) !== (this.destination.loginId || null) || session.role !== this.destination.role) throw new Error('ログイン先が変更されています。同じアカウントでログインし直してください。');
+    return session;
   }
 
   async run({ through = migrationEndDate(this.manifest.year), maxDays = Infinity, verifyOnly = false } = {}) {
@@ -81,7 +82,7 @@ export class PhotoMigration {
     let completed = 0;
     for (const day of this.manifest.days) {
       if (day.date > through || completed >= maxDays || this.shouldStop()) break;
-      await this.verifySession();
+      const session = await this.verifySession();
       let record = this.journal.days[day.date];
       if (verifyOnly) {
         if (!record?.entryId || record.status !== 'complete') throw new Error(`${day.date}: 完了記録がありません。`);
@@ -102,9 +103,18 @@ export class PhotoMigration {
             offset += result.entries.length;
           }
         }
-        // If a day already exists, create's requestId replay identifies whether it is ours.
-        // Never create a new entry on an occupied date without a saved intent.
-        if (found.length) throw new Error(`${day.date}: 既存の日記があります。上書きせず停止しました。`);
+        if (found.length) {
+          if (this.manifest.year !== 2026) throw new Error(`${day.date}: 既存の日記があります。上書きせず停止しました。`);
+          const photoIds = new Set(day.photos.map(photo => photo.id));
+          const conflict = found.some(entry => {
+            const creation = entry.creation;
+            const sameImport = creation?.requestId === day.requestId
+              && creation.accountId === session.encryption?.accountId
+              && creation.household === this.destination.householdId;
+            return !sameImport && entry.photos?.some(photo => photoIds.has(photo.id));
+          });
+          if (conflict) throw new Error(`${day.date}: 別の日記で同じ写真IDが使われています。`);
+        }
         record = this.journal.days[day.date] = { status: 'creating', requestId: day.requestId, uploaded: [] };
         await this.checkpoint();
       }
@@ -132,6 +142,7 @@ export class PhotoMigration {
       if (entry.status === 'published') {
         if (!entryMatches(entry, day)) throw new Error(`${day.date}: 投稿済みの日記が移行内容と一致しません。`);
         record.status = 'complete';
+        record.uploaded = day.photos.map(photo => photo.id);
         await this.checkpoint();
         this.onProgress({ date: day.date, stage: 'complete', photos: day.photos.length });
         continue;

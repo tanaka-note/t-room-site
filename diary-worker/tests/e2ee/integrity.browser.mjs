@@ -167,6 +167,11 @@ try {
   assert.match(await page.locator(`#entry-list [data-entry-id="${external.id}"]`).textContent(),/削除者：/);
   await page.locator(`#entry-list [data-entry-id="${external.id}"]`).click();await page.locator('#entry-dialog').waitFor({state:'visible'});assert.match(await page.locator('#detail-deletion').textContent(),/削除者：/);
   await page.click('#restore-entry-button');await page.locator('#entry-dialog').waitFor({state:'hidden'});
+  const existingSameDay=(await other.saveEntry({
+    entryDate:'2026-07-31',title:'2026-07-31',content:'SYNTHETIC_EXISTING_SAME_DAY',tags:[],status:'published',
+  })).entry;
+  const readExisting=()=>f.db.sqlite.prepare('SELECT revision,state,envelope,photo_ids FROM diary_e2ee_records WHERE id=?').get(existingSameDay.id);
+  const existingBefore=readExisting();
   await page.close();other.lock();
 
   // The Takeout route must use the same encrypted API and preserve its durable
@@ -211,6 +216,10 @@ try {
     const rows=f.db.sqlite.prepare('SELECT state,id FROM diary_e2ee_records WHERE photo_ids LIKE ?').all(`%${photoId}%`);assert.equal(rows.length,1);assert.equal(rows[0].state,'published');
     const photo=f.db.sqlite.prepare('SELECT original_key, display_key, thumbnail_key FROM diary_e2ee_media WHERE id=?').get(photoId);
     for(const key of Object.values(photo))assert.ok(photoHeader(f.r2.get(key).bytes));
+    if(migrationYear===2026){
+      assert.notEqual(String(rows[0].id),String(existingSameDay.id));
+      assert.deepEqual(readExisting(),existingBefore,'the existing same-day diary retains its ciphertext, revision and photo IDs');
+    }
     assert.equal(requests.filter(r=>r.status===426).length,0,'encrypted migration must not call guarded legacy routes');
     assert.equal(requests.slice(requestsBefore).filter(r=>r.method==='POST'&&/\/uploads\/[^/]+\/photos$/.test(r.path)).length,1,'recovery does not upload the original again');
     await migration.close();
