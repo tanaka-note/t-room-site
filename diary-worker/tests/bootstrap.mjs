@@ -95,6 +95,19 @@ try {
   }
   for (const suffix of ["?draft=1", "?trash=1"]) assert.equal((await request(`/bootstrap${suffix}`, reader)).response.status, 403);
   assert.equal((await request("/bootstrap?dateFrom=2026-10-16&dateTo=2026-10-01", reader)).response.status, 400);
+  local.db.exec(`INSERT INTO diary_entries(id,entry_date,title,content,status,household_id,last_published_at) VALUES
+    (5,'2026-09-03','順序確認','本文','published','tanaka-household','2026-09-03T08:00:00Z'),
+    (6,'2026-09-01','順序確認','本文','published','tanaka-household','2026-09-01T10:00:00Z'),
+    (7,'2026-09-01','順序確認','本文','published','tanaka-household','2026-09-01T08:00:00Z'),
+    (8,'2026-09-02','別の日記','本文','published','tanaka-household','2026-09-02T08:00:00Z');`);
+  for (const [order, ids] of [["oldest", [7, 6, 5]], ["newest", [5, 6, 7]]]) {
+    const params = new URLSearchParams({ q: "順序確認", dateFrom: "2026-09-01", dateTo: "2026-09-03", order, limit: "2" });
+    const first = (await request(`/bootstrap?${params}`, reader)).data.entries;
+    const next = (await request(`/entries?${params}&offset=2`, reader)).data;
+    assert.equal(first.hasMore, true);
+    assert.equal(next.hasMore, false);
+    assert.deepEqual([...first.entries, ...next.entries].map(entry => entry.id), ids);
+  }
   checks.length = 0;
   const foreground = await request("/bootstrap", reader, { active: true });
   assert.deepEqual(checks, ["read", "touch"], "retain foreground renewal without caching validation");

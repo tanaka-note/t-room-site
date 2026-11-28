@@ -89,6 +89,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     archiveMonth: "",
     dateFrom: "",
     dateTo: "",
+    entrySearchOrder: "",
     tag: "",
     tagQuery: "",
     tagDirectory: false,
@@ -194,6 +195,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     clearFilters: document.querySelector("#clear-filters-button"),
     listKicker: document.querySelector("#list-kicker"),
     listTitle: document.querySelector("#diary-recent-title"),
+    entrySearchSort: document.querySelector("#entry-search-sort"),
     entryList: document.querySelector("#entry-list"),
     loadMore: document.querySelector("#load-more-button"),
     retryInitialLoad: document.querySelector("#retry-initial-load"),
@@ -399,7 +401,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   async function openEncryptedRoute() {
     encryptedRoute=location.pathname;
-    Object.assign(state,{query:'',month:japanDateString().slice(0,7),monthExpanded:false,archiveYear:'',archiveMonth:'',dateFrom:'',dateTo:'',tagQuery:'',trash:false,drafts:false,entries:[],offset:0,hasMore:false});
+    Object.assign(state,{query:'',month:japanDateString().slice(0,7),monthExpanded:false,archiveYear:'',archiveMonth:'',dateFrom:'',dateTo:'',entrySearchOrder:'',tagQuery:'',trash:false,drafts:false,entries:[],offset:0,hasMore:false});
     elements.searchInput.value='';elements.tagSearchInput.value='';
     applyRouteState();await enterDiary(lastEncryptedSession);
   }
@@ -455,10 +457,16 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     elements.nextMonth.addEventListener("click", () => changeBrowseMonth(1));
     elements.clearFilters.addEventListener("click", clearFilters);
     elements.dateReset.addEventListener("click", resetDateSearch);
+    elements.entrySearchSort.addEventListener("click", () => {
+      if (!isEntrySearch()) return;
+      state.entrySearchOrder = entrySearchOrder() === "oldest" ? "newest" : "oldest";
+      loadEntries(true);
+    });
     elements.searchClear.addEventListener("click", () => {
       cancelPendingEntrySearch();
       elements.searchInput.value = "";
       state.query = "";
+      state.entrySearchOrder = "";
       state.favoritePage = false;
       state.monthExpanded = false;
       updateFilterControls();
@@ -877,7 +885,9 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function scheduleEntrySearch(delay = 150) {
     cancelPendingEntrySearch();
-    state.query = splitSearchTerms(elements.searchInput.value).join(" ");
+    const query = splitSearchTerms(elements.searchInput.value).join(" ");
+    if (query !== state.query) state.entrySearchOrder = "";
+    state.query = query;
     state.favoritePage = false;
     state.monthExpanded = false;
     updateFilterControls();
@@ -932,6 +942,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.entriesAbortController = abortController;
     const requestId = ++state.requestId;
     const monthlyView = isMonthlyView();
+    const searchOrder = isEntrySearch() ? entrySearchOrder() : "";
     const targetCount = Math.max(0, Math.min(Number(returnEntryCount) || 0, 2000));
     const pageSize = targetCount ? Math.min(50, Math.max(monthlyView ? 5 : 20, targetCount))
       : monthlyView ? (state.monthExpanded ? 50 : 5) : 20;
@@ -959,6 +970,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         if (monthlyView) parameters.set("month", state.month);
         if (state.dateFrom) parameters.set("dateFrom", state.dateFrom);
         if (state.dateTo) parameters.set("dateTo", state.dateTo);
+        if (searchOrder) parameters.set("order", searchOrder);
         if (state.tag) parameters.set("tag", state.tag);
         if (state.trash) parameters.set("trash", "1");
         if (state.drafts) parameters.set("draft", "1");
@@ -1102,6 +1114,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
       archiveYear: state.archiveYear,
       dateFrom: state.dateFrom,
       dateTo: state.dateTo,
+      entrySearchOrder: state.entrySearchOrder,
       tagQuery: state.tagQuery,
       tagQueryInput: elements.tagSearchInput.value,
       trash: state.trash,
@@ -1201,6 +1214,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.archiveYear = /^\d{4}$/.test(returnView.archiveYear) ? returnView.archiveYear : "";
     state.dateFrom = /^\d{4}-\d{2}-\d{2}$/.test(returnView.dateFrom) ? returnView.dateFrom : "";
     state.dateTo = /^\d{4}-\d{2}-\d{2}$/.test(returnView.dateTo) ? returnView.dateTo : "";
+    state.entrySearchOrder = ["oldest", "newest"].includes(returnView.entrySearchOrder) ? returnView.entrySearchOrder : "";
     state.tagQuery = String(returnView.tagQuery || "").normalize("NFKC").trim().toLocaleLowerCase("ja-JP").slice(0, 100);
     state.trash = Boolean(returnView.trash && state.canViewTrash);
     state.drafts = Boolean(returnView.drafts && state.canManageEntries);
@@ -3237,12 +3251,16 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function updatePhotoSortButton() {
-    const oldest = state.photoOrder === "oldest";
-    elements.photoSortButton.hidden = !state.photoMonth;
-    elements.photoSortButton.setAttribute("aria-pressed", String(oldest));
+    updateSortButton(elements.photoSortButton, state.photoOrder, Boolean(state.photoMonth));
+  }
+
+  function updateSortButton(button, order, visible) {
+    const oldest = order === "oldest";
+    button.hidden = !visible;
+    button.setAttribute("aria-pressed", String(oldest));
     const label = oldest ? "古い順で表示中。新しい順に並べ替え" : "新しい順で表示中。古い順に並べ替え";
-    elements.photoSortButton.setAttribute("aria-label", label);
-    elements.photoSortButton.title = label;
+    button.setAttribute("aria-label", label);
+    button.title = label;
   }
 
   function shouldShowEntryAuthor() {
@@ -3943,6 +3961,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   function resetDateSearch() {
     state.dateFrom = "";
     state.dateTo = "";
+    state.entrySearchOrder = "";
     state.monthExpanded = false;
     elements.dateFrom.value = "";
     elements.dateTo.value = "";
@@ -3952,6 +3971,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function updateFilterControls() {
     if (state.archiveMonth && state.archiveMonth !== state.month) renderArchive(state.archiveMonths);
+    if (!isEntrySearch()) state.entrySearchOrder = "";
     const active = Boolean(state.query || state.dateFrom || state.dateTo || state.tag || state.trash || state.drafts || state.favoritePage);
     elements.searchClear.hidden = !state.query;
     elements.dateReset.hidden = !state.dateFrom && !state.dateTo;
@@ -3984,6 +4004,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
   }
 
   function updateListHeading() {
+    const searching = isEntrySearch();
     if (state.favoritePage) {
       elements.listKicker.textContent = "Favorites";
       elements.listTitle.textContent = "お気に入りの日記";
@@ -3996,7 +4017,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     } else if (state.tag) {
       elements.listKicker.textContent = "Hashtag";
       elements.listTitle.textContent = `#${state.tag}の日記一覧`;
-    } else if (state.query || state.dateFrom || state.dateTo) {
+    } else if (searching) {
       elements.listKicker.textContent = "Results";
       elements.listTitle.textContent = "検索結果";
     } else {
@@ -4006,6 +4027,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         : formatPostMonth(state.month);
     }
     elements.monthNavigation.hidden = !isMonthlyView();
+    updateSortButton(elements.entrySearchSort, entrySearchOrder(), searching);
   }
 
   function updateSearchStatus() {
@@ -4046,6 +4068,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
         return;
       }
     }
+    if (from !== state.dateFrom || to !== state.dateTo) state.entrySearchOrder = "";
     state.dateFrom = from;
     state.dateTo = to;
     state.monthExpanded = false;
@@ -4058,6 +4081,14 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
 
   function isMonthlyView() {
     return !state.trash && !state.drafts && !state.favoritePage && !state.query && !state.dateFrom && !state.dateTo && !state.tag;
+  }
+
+  function isEntrySearch() {
+    return !state.trash && !state.drafts && !state.favoritePage && !state.tag && Boolean(state.query || state.dateFrom || state.dateTo);
+  }
+
+  function entrySearchOrder() {
+    return state.entrySearchOrder || (state.dateFrom && state.dateTo ? "oldest" : "newest");
   }
 
   function changeBrowseMonth(offset) {
@@ -4500,6 +4531,7 @@ export async function startDiary(initialSession, deferredInstallPrompt = null, o
     state.monthExpanded = false;
     state.dateFrom = "";
     state.dateTo = "";
+    state.entrySearchOrder = "";
     state.tag = "";
     state.tagQuery = "";
     state.favoritePage = false;

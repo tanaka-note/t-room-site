@@ -487,12 +487,17 @@ export class EncryptedDiaryClient {
       // Search never silently omits a document that is still being prepared.
       await this.hydrateRecords([...this.records.values()].filter(r=>r.row.state===(trash?'trash':draft?'draft':'published')));return;
     }
-    const entries=this.matchingEntries(parameters),end=Math.max(0,Number(parameters.get('offset'))||0)+Math.min(50,Math.max(1,Number(parameters.get('limit'))||20));
-    const boundary=entries[Math.min(end,entries.length)-1]?.entryDate;
+    const entries = this.matchingEntries(parameters);
+    const end = Math.max(0, Number(parameters.get("offset")) || 0) + Math.min(50, Math.max(1, Number(parameters.get("limit")) || 20));
+    const boundary = entries[Math.min(end, entries.length) - 1]?.entryDate;
     // summary has no publication timestamp; hydrate every tie on the boundary
     // date before applying the existing stable full-document ordering.
-    const knownOrder=entries.filter(e=>e.entryDate===boundary).every(e=>{const r=this.records.get(String(e.id));return r.entry||r.order;});
-    await this.hydrateRecords((knownOrder?entries.slice(0,end):entries.filter(e=>!boundary||e.entryDate>=boundary)).map(e=>this.records.get(String(e.id))));
+    const knownOrder = entries.filter(entry => entry.entryDate === boundary).every(entry => {
+      const record = this.records.get(String(entry.id));
+      return record.entry || record.order;
+    });
+    const visible = knownOrder ? entries.slice(0, end) : entries.filter((entry, index) => index < end || entry.entryDate === boundary);
+    await this.hydrateRecords(visible.map(entry => this.records.get(String(entry.id))));
   }
   async ensureAll() {await this.hydrateRecords([...this.records.values()]);}
   startBackground() {
@@ -1029,13 +1034,16 @@ export class EncryptedDiaryClient {
               e.tags.some((tag) => tag.includes(t)),
           ),
       );
+    const direction = !draft && parameters.get("order") === "oldest" ? -1 : 1;
     entries.sort(
       (a, b) =>
-        (draft
-          ? String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""))
-          : b.entryDate.localeCompare(a.entryDate)) ||
-        String(b.lastPublishedAt).localeCompare(String(a.lastPublishedAt)) ||
-        b.id - a.id,
+        direction * (
+          (draft
+            ? String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""))
+            : b.entryDate.localeCompare(a.entryDate)) ||
+          String(b.lastPublishedAt).localeCompare(String(a.lastPublishedAt)) ||
+          b.id - a.id
+        ),
     );
     return entries;
   }

@@ -29,7 +29,7 @@ assert.match(script, /timeZone: "Asia\/Tokyo"[\s\S]*?hourCycle: "h23"/);
 assert.doesNotMatch(script, /elements\.entryTime|entryTime:\s*elements|formatEntryDateTime|japanTimeString/);
 assert.doesNotMatch(script, /entryMatchesEditorPayload[\s\S]*?entry\.entryTime/);
 
-assert.match(worker, /ORDER BY \$\{draft \? "e\.updated_at DESC, e\.id DESC" : "e\.entry_date DESC, e\.last_published_at DESC, e\.id DESC"\}/);
+assert.match(worker, /ORDER BY \$\{draft \? "e\.updated_at DESC, e\.id DESC" : `e\.entry_date \$\{direction\}, e\.last_published_at \$\{direction\}, e\.id \$\{direction\}`\}/);
 assert.match(worker, /last_published_at = CASE WHEN \? = 'published' THEN strftime\('%Y-%m-%dT%H:%M:%fZ', 'now'\)/);
 assert.match(worker, /last_published_at = strftime\('%Y-%m-%dT%H:%M:%fZ', 'now'\)/);
 assert.match(worker, /const accepted = new Set\(\[primary\]\);[\s\S]*?accepted\.add\(await entryRequestPayloadHash\(\{ \.\.\.payload, entryTime: legacyEntryTime \}\)\)/,

@@ -20,7 +20,7 @@ test('album month filter retains selection and the total/monthly photo counts', 
     };
     const api = async path => { assert.equal(path, '/photos/meta'); return { months }; };
     const load = new Function('state', 'elements', 'api', 'document', 'sessionGeneration',
-      ['loadPhotoMeta', 'renderPhotoMonthFilter', 'photoCountLabel', 'formatMonth', 'updatePhotoSortButton'].map(body).join('\n')
+      ['loadPhotoMeta', 'renderPhotoMonthFilter', 'photoCountLabel', 'formatMonth', 'updatePhotoSortButton', 'updateSortButton'].map(body).join('\n')
         + '\nreturn loadPhotoMeta;')(state, elements, api, { createElement: () => ({}) }, 0);
     await load();
     assert.equal(elements.photoMonthFilter.textContent, labels[months.length ? 1 : 0]);
@@ -308,6 +308,8 @@ function entriesFixture({ count = 120, monthly = false, expanded = false, hook =
     const resetState = () => {}, showLogin = () => {}, showToast = () => {};
     ${body('cancelInitialEntries')}
     ${body('readInitialEntries')}
+    ${body('isEntrySearch')}
+    ${body('entrySearchOrder')}
     ${body('loadEntries')}
     return { load: loadEntries, invalidateSession: () => { sessionGeneration++; } };`)(state, elements, api, renders);
   return { state, requests, renders, placeholders, ...load };

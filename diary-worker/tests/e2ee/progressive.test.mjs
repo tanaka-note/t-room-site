@@ -121,6 +121,32 @@ test('full-text search waits for all relevant bodies and finds the oldest unprep
     assert.deepEqual(x.reader.list(p).entries.map(e=>e.id),[1]);
   }finally{x.close();}
 });
+test("date search hydrates and pages in the selected order", async () => {
+  const x = await setup(4);
+  try {
+    const previous = x.writer.records.get("4").row;
+    await x.writer.commit(entry({ entryDate: "2026-01-02", title: "Synthetic same day", lastPublishedAt: "2026-01-02T00:00:00Z" }),
+      { id: "4", current: previous }, { refresh: false });
+    await x.reader.sync();
+    const params = new URLSearchParams({ dateFrom: "2026-01-01", dateTo: "2026-01-03", limit: "2", order: "oldest" });
+    await x.reader.ensureList(params);
+    assert.deepEqual([...x.reader.records.values()].filter(record => record.entry).map(record => record.row.id).sort(), ["1", "2", "4"]);
+    const first = x.reader.list(params);
+    assert.deepEqual(first.entries.map(e => e.id), [1, 4]);
+    assert.equal(first.entries[0].content, "OLDEST_UNIQUE_CANARY");
+    assert.equal(first.hasMore, true);
+    params.set("offset", "2");
+    await x.reader.ensureList(params);
+    assert.deepEqual(x.reader.list(params).entries.map(e => e.id), [2, 3]);
+    params.delete("offset");
+    params.set("q", "Synthetic");
+    params.set("order", "newest");
+    await x.reader.ensureList(params);
+    assert.deepEqual(x.reader.list(params).entries.map(e => e.id), [3, 2]);
+  } finally {
+    x.close();
+  }
+});
 test('same-day ordering, unloaded edits, author and photo metadata survive lazy loading',async()=>{
   const x=await setup(3);try {
     const photos=x.writer.records.get('1').entry.photos;

@@ -349,6 +349,14 @@ button {
   margin-bottom: 20px;
 }
 
+.diary-list-heading {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .month-navigation {
   display: grid;
   grid-template-columns: repeat(2, minmax(76px, auto));
@@ -1707,7 +1715,7 @@ img[data-photo-state="ready"][src] ~ .diary-photo-placeholder {
   gap: 8px;
 }
 
-#photo-sort-button[aria-pressed="true"] svg {
+.sort-order-button[aria-pressed="true"] svg {
   transform: scaleY(-1);
 }
 
@@ -2189,6 +2197,10 @@ img[data-photo-state="ready"][src] ~ .diary-photo-placeholder {
   .diary-section-head {
     align-items: start;
     flex-direction: column;
+  }
+
+  .diary-list-heading {
+    align-self: stretch;
   }
 
   .month-navigation {
