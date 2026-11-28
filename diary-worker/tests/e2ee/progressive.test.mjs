@@ -184,7 +184,7 @@ test("empty-trash confirmation uses the verified current IDs and revisions witho
     await assert.rejects(api("/entries/trash-targets"), { status: 403 });
     session.canPermanentlyDelete = true;
     const { targets } = await api("/entries/trash-targets");
-    assert.deepEqual(targets, [{ id: 2, revision: 2 }, { id: 3, revision: 2 }]);
+    assert.deepEqual(targets.toSorted((a, b) => a.id - b.id), [{ id: 2, revision: 2 }, { id: 3, revision: 2 }]);
     assert.equal([...x.reader.records.values()].some(record => record.entry), false);
     await x.writer.transition("2", "restore");
     await assert.rejects(api("/entries/2/permanent", { method: "DELETE", body: { revision: 2 } }), { status: 409 });
