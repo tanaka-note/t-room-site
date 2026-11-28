@@ -228,7 +228,7 @@ export default {
           const path=url.pathname.startsWith('/diary/tag/')?'/diary/':url.pathname;
           const destination=new URL(path,diaryEncryptionOrigin(env));
           const migrationYear=url.searchParams.get('takeout-migration');
-          if(path==='/diary/'&&['2021','2022','2023','2024','2025'].includes(migrationYear))destination.searchParams.set('takeout-migration',migrationYear);
+          if(path==='/diary/'&&['2021','2022','2023','2024','2025','2026'].includes(migrationYear))destination.searchParams.set('takeout-migration',migrationYear);
           return secureResponse(Response.redirect(destination,308));
         }
       }
