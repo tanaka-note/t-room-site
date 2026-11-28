@@ -65,6 +65,17 @@ def thumbnail_bytes(image, edge, budget, quality):
     return data
 
 
+def capture_date(timestamp, year):
+    if timestamp is None:
+        raise ValueError('撮影日時がありません')
+    date = dt.datetime.fromtimestamp(timestamp, JST).date()
+    if date.year != year:
+        raise ValueError('指定年の範囲外')
+    if year == 2026 and date > dt.date(2026, 7, 31):
+        raise ValueError('2026年1月1日〜7月31日の範囲外')
+    return date.isoformat()
+
+
 def initialize_worker(archives, metadata, output, year):
     global _worker_state, Image, ImageOps
     from PIL import Image, ImageOps
@@ -78,20 +89,18 @@ def process_item(value):
     archive, entry = value
     path = pathlib.PurePosixPath(entry.filename)
     try:
+        timestamp = metadata_timestamp(metadata.get((str(path.parent), path.name), []))
+        date_source = 'google-json'
+        # With a known capture time, skip out-of-period image data before reading it.
+        date = capture_date(timestamp, year) if timestamp is not None else None
         # ZipFile.read checks the CRC as well as returning the original bytes.
         raw = handles[archive].read(entry)
         digest = hashlib.sha256(raw).hexdigest()
         with Image.open(io.BytesIO(raw)) as image:
-            timestamp = metadata_timestamp(metadata.get((str(path.parent), path.name), []))
-            date_source = 'google-json'
-            if timestamp is None:
+            if date is None:
                 timestamp = exif_timestamp(image)
                 date_source = 'exif'
-            if timestamp is None:
-                raise ValueError('撮影日時がありません')
-            date = dt.datetime.fromtimestamp(timestamp, JST).strftime('%Y-%m-%d')
-            if not date.startswith(str(year) + '-'):
-                raise ValueError('指定年の範囲外')
+                date = capture_date(timestamp, year)
             if not 0 < len(raw) <= 60 * 1024 * 1024:
                 raise ValueError('画像の容量が60MiBを超えています')
             photo_id = str(uuid.uuid5(NAMESPACE, f'{date}:{digest}'))

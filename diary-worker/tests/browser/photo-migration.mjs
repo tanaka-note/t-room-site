@@ -51,7 +51,7 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const browser = await chromium.launch({ headless: true });
 const temporary = await mkdtemp(join(tmpdir(), 'diary-migration-folder-'));
 try {
-  for (const year of [2021, 2022]) {
+  for (const year of [2021, 2022, 2026]) {
     const lockedPage = await browser.newPage();
     const blocked = lockedPage.waitForEvent('pageerror');
     await lockedPage.goto(`http://127.0.0.1:${server.address().port}/?takeout-migration=${year}`);

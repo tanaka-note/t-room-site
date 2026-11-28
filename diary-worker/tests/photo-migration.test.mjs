@@ -21,7 +21,7 @@ function parallelManifest(count = 3) {
 function datedManifest(date) {
   const value = structuredClone(manifest);
   value.year = Number(date.slice(0, 4));
-  value.id = ({ 2023: 'c', 2024: 'b', 2025: 'a' })[value.year].repeat(64);
+  value.id = ({ 2023: 'c', 2024: 'b', 2025: 'a', 2026: 'd' })[value.year].repeat(64);
   value.days[0].date = value.days[0].title = date;
   for (const [index, photo] of value.days[0].photos.entries()) {
     photo.date = date;
@@ -131,6 +131,24 @@ test('2024 cutoff applies and invalid or other-year end dates fail before checkp
   }
   await f.engine().run();
   assert.equal(f.journal.days['2024-12-31'].status, 'complete');
+});
+
+test('2026 accepts both JST boundary dates and rejects any out-of-period day or photo', async () => {
+  assert.doesNotThrow(() => validateManifest(datedManifest('2026-01-01'), 2026));
+  const july = datedManifest('2026-07-31');
+  july.days[0].photos.at(-1).timestamp = Date.parse('2026-08-01T00:00:00+09:00') / 1000 - 1;
+  const f = fixture(july);
+  await assert.rejects(f.engine({ api: () => assert.fail('must not call API'),
+    saveJournal: () => assert.fail('must not checkpoint') }).run({ through: '2026-08-01' }), /終了日/);
+  await f.engine().run();
+  assert.equal(f.journal.days['2026-07-31'].status, 'complete');
+  assert.throws(() => validateManifest(datedManifest('2026-08-01'), 2026), /対象期間/);
+  const mixed = structuredClone(july);
+  mixed.days.push(datedManifest('2026-08-01').days[0]);
+  assert.throws(() => validateManifest(mixed, 2026), /対象期間/);
+  mixed.days.pop();
+  mixed.days[0].photos.at(-1).timestamp++;
+  assert.throws(() => validateManifest(mixed, 2026), /画像の指定/);
 });
 
 test('resume after lost create response does not create a second diary', async () => {
